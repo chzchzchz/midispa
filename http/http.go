@@ -185,7 +185,7 @@ func (mh *midiHandler) getTrackDev(devId string) (*trackDev, error) {
 	if td, ok := mh.tracks[devId]; ok {
 		return td, nil
 	}
-	d, err := openDeviceById(devId)
+	d, err := sequencer.OpenDeviceById(devId)
 	if err != nil {
 		return nil, err
 	} else if d != nil {
@@ -205,22 +205,6 @@ func (mh *midiHandler) handlePattern(w http.ResponseWriter, r *http.Request) {
 	if err := enc.Encode(paths); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-func openDeviceById(id string) (d *amidi.Device, err error) {
-	devs, err := amidi.Devices()
-	if err != nil {
-		return nil, err
-	}
-	for _, dev := range devs {
-		if dev.ID == id {
-			if err = d.Open(); err != nil {
-				return nil, err
-			}
-			return d, nil
-		}
-	}
-	return nil, nil
 }
 
 func walk(dir string) (ret []string) {
