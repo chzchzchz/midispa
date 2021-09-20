@@ -6,5 +6,11 @@
   "F0 7F 74 06 01 F7" : "Insert",
   "F0 7F 74 06 05 F7" : "PgUp",
   "F0 7F 74 06 04 F7" : "PgDown"
-}
-}
+}}
+
+{
+"PortName" : "WORLDE easy control MIDI 1",
+"Map" : {
+  "B0 2C 00" : "Ctrl d",
+  "B0 2E 00" : "u"
+}}

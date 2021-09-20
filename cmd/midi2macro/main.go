@@ -18,24 +18,32 @@ type DeviceConfig struct {
 	keys map[string][]int
 }
 
-func mustLoadFile(path string) (cfg DeviceConfig) {
-	b, err := os.ReadFile(path)
+func mustLoadFile(path string) (cfgs []DeviceConfig) {
+	f, err := os.Open(path)
 	if err != nil {
 		panic(err)
 	}
-	cfg.Port = -1
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		panic(err)
-	}
-	cfg.keys = make(map[string][]int)
-	for k, v := range cfg.Map {
-		mk, err := MacroKeys(v)
-		if err != nil {
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		cfg := DeviceConfig{Device: Device{Port: -1}}
+		if err := dec.Decode(&cfg); err != nil {
 			panic(err)
 		}
-		cfg.keys[k] = mk
+		cfgs = append(cfgs, cfg)
 	}
-	return cfg
+	for i := range cfgs {
+		cfgs[i].keys = make(map[string][]int)
+		for k, v := range cfgs[i].Map {
+			mk, err := MacroKeys(v)
+			if err != nil {
+				panic(err)
+			}
+			cfgs[i].keys[k] = mk
+		}
+	}
+	return cfgs
 }
 
 // aseqdump -l | grep 'X6mini MIDI' | awk ' { print $1 } '
@@ -53,25 +61,29 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	cfg := mustLoadFile(os.Args[1])
 	aseq, err := OpenAlsaSeq("midi2macro")
 	if err != nil {
 		panic(err)
 	}
 	defer aseq.Close()
 
-	if cfg.PortName != "" {
-		log.Println("using port name", cfg.PortName)
-		if err := aseq.OpenPortName(cfg.PortName); err != nil {
-			panic(err)
+	cfgs := mustLoadFile(os.Args[1])
+	for i, cfg := range cfgs {
+		if cfg.PortName != "" {
+			log.Println("using port name", cfg.PortName)
+			cfgs[i].Client, cfgs[i].Port, err = aseq.PortAddress(cfg.PortName)
+			if err != nil {
+				panic(err)
+			}
 		}
-	} else if cfg.Port > -1 {
-		log.Println("using port", cfg.PortString())
-		if err := aseq.OpenPort(cfg.Client, cfg.Port); err != nil {
-			panic(err)
+		if cfgs[i].Port > -1 {
+			log.Println("using port", cfgs[i].PortString())
+			if err := aseq.OpenPort(cfgs[i].Client, cfgs[i].Port); err != nil {
+				panic(err)
+			}
+		} else {
+			panic("no port found")
 		}
-	} else {
-		panic("no device set in config")
 	}
 
 	kbd, err := newKeyboard()
@@ -81,22 +93,28 @@ func main() {
 	defer kbd.Close()
 
 	for {
-		b, err := aseq.Read()
+		ev, err := aseq.Read()
 		if err != nil {
 			panic(err)
 		}
 		s := ""
-		for _, b := range b {
+		for _, b := range ev.Data {
 			s += fmt.Sprintf("%02x ", b)
 		}
 		s = strings.ToUpper(strings.TrimSpace(s))
-		if v, ok := cfg.keys[s]; ok {
-			fmt.Println(s, "matched to", v)
-			if err := kbd.Play(v); err != nil {
-				panic(err)
+		for _, cfg := range cfgs {
+			if ev.Client != cfg.Client || ev.Port != cfg.Port {
+				continue
 			}
-		} else {
-			fmt.Println("got", s)
+			if v, ok := cfg.keys[s]; ok {
+				fmt.Println(s, "matched to", v)
+				if err := kbd.Play(v); err != nil {
+					panic(err)
+				}
+			} else {
+				fmt.Println("got", s)
+			}
+			break
 		}
 	}
 }

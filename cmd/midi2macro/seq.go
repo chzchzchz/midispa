@@ -20,6 +20,12 @@ type AlsaSeq struct {
 	seq *C.snd_seq_t
 }
 
+type AlsaSeqEvent struct {
+	Client int
+	Port   int
+	Data   []byte
+}
+
 func (a *AlsaSeq) Close() {
 	C.snd_seq_close(a.seq)
 }
@@ -66,32 +72,51 @@ func (a *AlsaSeq) OpenPort(client, port int) error {
 }
 
 func (a *AlsaSeq) OpenPortName(portName string) error {
-	devs, err := a.Devices()
+	c, p, err := a.PortAddress(portName)
 	if err != nil {
 		return err
 	}
-	for _, dev := range devs {
-		if dev.PortName == portName {
-			return a.OpenPort(dev.Client, dev.Port)
-		}
-	}
-	return io.EOF
+	return a.OpenPort(c, p)
 }
 
-func (a *AlsaSeq) Read() ([]byte, error) {
+func (a *AlsaSeq) PortAddress(portName string) (client, port int, err error) {
+	devs, err := a.Devices()
+	if err != nil {
+		return -1, -1, err
+	}
+	for _, dev := range devs {
+		if dev.PortName == portName {
+			return dev.Client, dev.Port, nil
+		}
+	}
+	return -1, -1, io.EOF
+}
+
+func (a *AlsaSeq) Read() (ret AlsaSeqEvent, err error) {
 	var event *C.snd_seq_event_t
 	for {
 		if err := C.snd_seq_event_input(a.seq, &event); err < 0 {
-			return nil, snderr2error(err)
+			return ret, snderr2error(err)
 		}
+		ret.Client, ret.Port = int(event.source.client), int(event.source.port)
 		switch event._type {
 		case C.SND_SEQ_EVENT_SYSEX:
 			ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
 			data := C.snd_seq_ev_ext_data(ext)
-			return C.GoBytes(unsafe.Pointer(data), C.int(ext.len)), nil
+			ret.Data = C.GoBytes(unsafe.Pointer(data), C.int(ext.len))
+		case C.SND_SEQ_EVENT_CONTROLLER:
+			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{
+				0xB0 | byte(ctrl.channel),
+				byte(ctrl.param),
+				byte(ctrl.value),
+			}
+		default:
+			continue
 		}
+		return ret, nil
 	}
-	return nil, nil
+	return ret, nil
 }
 
 type Device struct {
@@ -134,5 +159,5 @@ func (a *AlsaSeq) Devices() (ret []Device, err error) {
 }
 
 func (d *Device) PortString() string {
-	return fmt.Sprintf("%3d:%3d", d.Port, d.Client)
+	return fmt.Sprintf("%3d:%3d", d.Client, d.Port)
 }
