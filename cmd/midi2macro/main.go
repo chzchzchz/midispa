@@ -10,10 +10,12 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"github.com/chzchzchz/midispa/alsa"
 )
 
 type DeviceConfig struct {
-	Device
+	alsa.SeqDevice
 	Map  map[string]string
 	keys map[string][]int
 }
@@ -27,7 +29,7 @@ func mustLoadFile(path string) (cfgs []DeviceConfig) {
 
 	dec := json.NewDecoder(f)
 	for dec.More() {
-		cfg := DeviceConfig{Device: Device{Port: -1}}
+		cfg := DeviceConfig{SeqDevice: alsa.SeqDevice{Port: -1}}
 		if err := dec.Decode(&cfg); err != nil {
 			panic(err)
 		}
@@ -48,12 +50,13 @@ func mustLoadFile(path string) (cfgs []DeviceConfig) {
 
 // aseqdump -l | grep 'X6mini MIDI' | awk ' { print $1 } '
 func main() {
+	fmt.Println("usage: midi2macro config.json [port]")
+	aseq, err := alsa.OpenSeq("midi2macro")
+	if err != nil {
+		panic(err)
+	}
+	defer aseq.Close()
 	if len(os.Args) < 2 {
-		fmt.Println("usage: midi2macro config.json [port]")
-		aseq, err := OpenAlsaSeq("midi2macro")
-		if err != nil {
-			panic(err)
-		}
 		if devs, err := aseq.Devices(); err == nil {
 			for _, dev := range devs {
 				fmt.Printf("%+v\n", dev)
@@ -61,11 +64,6 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	aseq, err := OpenAlsaSeq("midi2macro")
-	if err != nil {
-		panic(err)
-	}
-	defer aseq.Close()
 
 	cfgs := mustLoadFile(os.Args[1])
 	for i, cfg := range cfgs {

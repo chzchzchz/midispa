@@ -1,4 +1,4 @@
-package main
+package alsa
 
 /*
 #cgo linux LDFLAGS: -lasound
@@ -16,17 +16,17 @@ import (
 	"unsafe"
 )
 
-type AlsaSeq struct {
+type Seq struct {
 	seq *C.snd_seq_t
 }
 
-type AlsaSeqEvent struct {
+type SeqEvent struct {
 	Client int
 	Port   int
 	Data   []byte
 }
 
-func (a *AlsaSeq) Close() {
+func (a *Seq) Close() {
 	C.snd_seq_close(a.seq)
 }
 
@@ -37,8 +37,8 @@ func snderr2error(err C.int) error {
 	return fmt.Errorf("%s", C.snd_strerror(err))
 }
 
-func OpenAlsaSeq(clientName string) (a *AlsaSeq, err error) {
-	a = &AlsaSeq{}
+func OpenSeq(clientName string) (a *Seq, err error) {
+	a = &Seq{}
 
 	seqname := C.CString("default")
 	defer C.free(unsafe.Pointer(seqname))
@@ -67,11 +67,11 @@ func OpenAlsaSeq(clientName string) (a *AlsaSeq, err error) {
 	return a, nil
 }
 
-func (a *AlsaSeq) OpenPort(client, port int) error {
+func (a *Seq) OpenPort(client, port int) error {
 	return snderr2error(C.snd_seq_connect_from(a.seq, 0, C.int(client), C.int(port)))
 }
 
-func (a *AlsaSeq) OpenPortName(portName string) error {
+func (a *Seq) OpenPortName(portName string) error {
 	c, p, err := a.PortAddress(portName)
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func (a *AlsaSeq) OpenPortName(portName string) error {
 	return a.OpenPort(c, p)
 }
 
-func (a *AlsaSeq) PortAddress(portName string) (client, port int, err error) {
+func (a *Seq) PortAddress(portName string) (client, port int, err error) {
 	devs, err := a.Devices()
 	if err != nil {
 		return -1, -1, err
@@ -92,7 +92,7 @@ func (a *AlsaSeq) PortAddress(portName string) (client, port int, err error) {
 	return -1, -1, io.EOF
 }
 
-func (a *AlsaSeq) Read() (ret AlsaSeqEvent, err error) {
+func (a *Seq) Read() (ret SeqEvent, err error) {
 	var event *C.snd_seq_event_t
 	for {
 		if err := C.snd_seq_event_input(a.seq, &event); err < 0 {
@@ -119,14 +119,14 @@ func (a *AlsaSeq) Read() (ret AlsaSeqEvent, err error) {
 	return ret, nil
 }
 
-type Device struct {
+type SeqDevice struct {
 	Client     int
 	Port       int
 	ClientName string
 	PortName   string
 }
 
-func (a *AlsaSeq) Devices() (ret []Device, err error) {
+func (a *Seq) Devices() (ret []SeqDevice, err error) {
 	var cinfo *C.snd_seq_client_info_t
 	var pinfo *C.snd_seq_port_info_t
 
@@ -146,7 +146,7 @@ func (a *AlsaSeq) Devices() (ret []Device, err error) {
 			if int(C.snd_seq_port_info_get_capability(pinfo))&mask != mask {
 				continue
 			}
-			dev := Device{
+			dev := SeqDevice{
 				Client:     int(C.snd_seq_port_info_get_client(pinfo)),
 				Port:       int(C.snd_seq_port_info_get_port(pinfo)),
 				ClientName: C.GoString(C.snd_seq_client_info_get_name(cinfo)),
@@ -158,6 +158,6 @@ func (a *AlsaSeq) Devices() (ret []Device, err error) {
 	return ret, nil
 }
 
-func (d *Device) PortString() string {
+func (d *SeqDevice) PortString() string {
 	return fmt.Sprintf("%3d:%3d", d.Client, d.Port)
 }
