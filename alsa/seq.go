@@ -18,12 +18,17 @@ import (
 
 type Seq struct {
 	seq *C.snd_seq_t
+	SeqAddr
+}
+
+type SeqAddr struct {
+	Client int
+	Port   int
 }
 
 type SeqEvent struct {
-	Client int
-	Port   int
-	Data   []byte
+	SeqAddr
+	Data []byte
 }
 
 func (a *Seq) Close() {
@@ -34,7 +39,7 @@ func snderr2error(err C.int) error {
 	if err >= 0 {
 		return nil
 	}
-	return fmt.Errorf("%s", C.snd_strerror(err))
+	return fmt.Errorf("%s", C.GoString(C.snd_strerror(err)))
 }
 
 func OpenSeq(clientName string) (a *Seq, err error) {
@@ -58,12 +63,20 @@ func OpenSeq(clientName string) (a *Seq, err error) {
 		return nil, snderr2error(err)
 	}
 	if err := C.snd_seq_create_simple_port(a.seq, cname,
-		C.SND_SEQ_PORT_CAP_WRITE|
+		C.SND_SEQ_PORT_CAP_READ|
+			C.SND_SEQ_PORT_CAP_SUBS_READ|
+			C.SND_SEQ_PORT_CAP_WRITE|
 			C.SND_SEQ_PORT_CAP_SUBS_WRITE,
 		C.SND_SEQ_PORT_TYPE_MIDI_GENERIC|
 			C.SND_SEQ_PORT_TYPE_APPLICATION); err < 0 {
 		return nil, snderr2error(err)
 	}
+	c, err := C.snd_seq_client_id(a.seq)
+	if err != nil {
+		fmt.Println("oops no seq addr " + clientName)
+		return nil, err
+	}
+	a.Client = int(c)
 	return a, nil
 }
 
@@ -71,25 +84,29 @@ func (a *Seq) OpenPort(client, port int) error {
 	return snderr2error(C.snd_seq_connect_from(a.seq, 0, C.int(client), C.int(port)))
 }
 
+func (a *Seq) OpenPortWrite(sa SeqAddr) error {
+	return snderr2error(C.snd_seq_connect_to(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+}
+
 func (a *Seq) OpenPortName(portName string) error {
-	c, p, err := a.PortAddress(portName)
+	sa, err := a.PortAddress(portName)
 	if err != nil {
 		return err
 	}
-	return a.OpenPort(c, p)
+	return a.OpenPort(sa.Client, sa.Port)
 }
 
-func (a *Seq) PortAddress(portName string) (client, port int, err error) {
+func (a *Seq) PortAddress(portName string) (SeqAddr, error) {
 	devs, err := a.Devices()
 	if err != nil {
-		return -1, -1, err
+		return SeqAddr{-1, -1}, err
 	}
 	for _, dev := range devs {
 		if dev.PortName == portName {
-			return dev.Client, dev.Port, nil
+			return dev.SeqAddr, nil
 		}
 	}
-	return -1, -1, io.EOF
+	return SeqAddr{-1, -1}, io.EOF
 }
 
 func (a *Seq) Read() (ret SeqEvent, err error) {
@@ -111,6 +128,11 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 				byte(ctrl.param),
 				byte(ctrl.value),
 			}
+		case C.SND_SEQ_EVENT_PGMCHANGE:
+			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{
+				0xC0 | byte(ctrl.channel),
+				byte(ctrl.value)}
 		default:
 			continue
 		}
@@ -119,9 +141,28 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 	return ret, nil
 }
 
+func (a *Seq) Write(ev SeqEvent) error {
+	if len(ev.Data) != 3 {
+		panic("bad length")
+	}
+	if ev.Data[0]&0xf0 != 0xb0 {
+		panic("not ctrl code")
+	}
+	var event C.snd_seq_event_t
+	event.source.client, event.source.port = a.CAddrValues()
+	event.dest.client, event.dest.port = ev.CAddrValues()
+	//	event.dest.client, event.dest.port = C.SND_SEQ_ADDRESS_SUBSCRIBERS, C.SND_SEQ_ADDRESS_UNKNOWN
+	event.queue = C.SND_SEQ_QUEUE_DIRECT
+	ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+	ctrl.channel = C.uchar(ev.Data[0] & 0xf)
+	ctrl.param = C.uint(ev.Data[1])
+	ctrl.value = C.int(ev.Data[2])
+	event._type = C.SND_SEQ_EVENT_CONTROLLER
+	return snderr2error(C.snd_seq_event_output_direct(a.seq, &event))
+}
+
 type SeqDevice struct {
-	Client     int
-	Port       int
+	SeqAddr
 	ClientName string
 	PortName   string
 }
@@ -147,8 +188,10 @@ func (a *Seq) Devices() (ret []SeqDevice, err error) {
 				continue
 			}
 			dev := SeqDevice{
-				Client:     int(C.snd_seq_port_info_get_client(pinfo)),
-				Port:       int(C.snd_seq_port_info_get_port(pinfo)),
+				SeqAddr: SeqAddr{
+					Client: int(C.snd_seq_port_info_get_client(pinfo)),
+					Port:   int(C.snd_seq_port_info_get_port(pinfo)),
+				},
 				ClientName: C.GoString(C.snd_seq_client_info_get_name(cinfo)),
 				PortName:   C.GoString(C.snd_seq_port_info_get_name(pinfo)),
 			}
@@ -158,6 +201,10 @@ func (a *Seq) Devices() (ret []SeqDevice, err error) {
 	return ret, nil
 }
 
-func (d *SeqDevice) PortString() string {
+func (d *SeqAddr) PortString() string {
 	return fmt.Sprintf("%3d:%3d", d.Client, d.Port)
+}
+
+func (d *SeqAddr) CAddrValues() (C.uchar, C.uchar) {
+	return C.uchar(d.Client), C.uchar(d.Port)
 }

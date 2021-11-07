@@ -1,0 +1,104 @@
+{
+  "Title" : "UNO ModWheel",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 1",
+  "Maps" : [
+    ["Slider1", "ModulationWheel"],
+    ["Slider2", "ModWheelToLFORate"],
+    ["Slider3", "ModWheelToVibrato"],
+    ["Slider4", "ModWheelToWah"],
+    ["Slider5", "ModWheelToTremelo"],
+    ["Slider6", "ModWheelFilterCutoff"],
+    ["Button3", "VibratoOnOff"],
+    ["Button4", "WahOnOff"],
+    ["Button5", "TremoloOnOff"]
+  ]
+}
+{
+  "Title" : "UNO Levels",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 1",
+  "Maps" : [
+    ["Slider1", "OSC1Level"],
+    ["Slider2", "OSC2Level"],
+    ["Slider3", "NoiseLevel"],
+    ["Slider4", "AmpAttack"],
+    ["Slider5", "AmpDecay"],
+    ["Slider6", "AmpSustain"],
+    ["Slider7", "AmpRelease"],
+    ["Slider8", "VCALevel"],
+    ["Slider9", "VelocityToVCA"],
+    ["Knob1", "DelayMix"],
+    ["Knob2", "DelayTime"],
+    ["Knob3", "OSC1Wave"],
+    ["Knob4", "OSC1Tune"],
+    ["Knob5", "OSC2Wave"],
+    ["Knob6", "OSC2Tune"],
+    ["Knob7", "VelocityToFilterCutoff"],
+    ["Knob8", "VelocityToFilterEnvAmount"],
+    ["Knob9", "VelocityToLFORate"]
+  ]
+}
+{
+  "Title" : "UNO Filter Levels",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 1",
+  "Maps" : [
+    ["Slider1", "FilterCutoff"],
+    ["Slider2", "FilterResonance"],
+    ["Slider3", "FilterDrive"],
+    ["Slider4", "FilterAttack"],
+    ["Slider5", "FilterDecay"],
+    ["Slider6", "FilterSustain"],
+    ["Slider7", "FilterRelease"],
+    ["Slider8", "FilterEnv"],
+    ["Knob1", "FilterMode"],
+    ["Knob2", "FilterCutoffKeytrack"],
+    ["Knob3", "FilterEnvToOSC1PWM"],
+    ["Knob4", "FilterEnvToOSC2PWM"],
+    ["Knob5", "FilterEnvToOSC1Wave"],
+    ["Knob6", "FilterEnvToOSC2Wave"]
+  ]
+}
+{
+  "Title" : "UNO LFO",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 1",
+  "Maps" : [
+    ["Slider1", "LFOToPitch"],
+    ["Slider2", "LFOToFilterCutoff"],
+    ["Slider3", "LFOToVibr"],
+    ["Slider4", "LFOToWah"],
+    ["Slider5", "LFOToTremelo"],
+    ["Slider6", "LFOToOSC1PWM"],
+    ["Slider7", "LFOToOSC2PWM"],
+    ["Slider8", "LFOToOSC1Waveform"],
+    ["Slider9", "LFOToOSC2Waveform"],
+    ["Knob1", "LFOWave"],
+    ["Knob2", "LFORate"],
+    ["Button3", "VibratoOnOff"],
+    ["Button4", "WahOnOff"],
+    ["Button5", "TremoloOnOff"]
+  ]
+}
+{
+  "Title" : "UNO Seq",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 1",
+  "Maps" : [
+    ["Slider1", "ArpeggiatorAndSeqGateTime"],
+    ["Slider2", "ArpeggiatorRange"],
+    ["Button2", "ArpeggiatorOnOff"],
+    ["Slider3", "SeqRange"],
+    ["Knob1", "Swing"],
+    ["Knob2", "ArpeggiatorDirection"],
+    ["Knob3", "SeqDirection"],
+    ["Slider4", "DiveRange"],
+    ["Slider5", "ScoopRange"],
+    ["Slider6", "GlideTime"],
+    ["Button4", "DiveOnOff"],
+    ["Button5", "ScoopOnOff"],
+    ["Button6", "GlideOnOff"],
+    ["Slider7", "PitchBendRange"]
+  ]
+}

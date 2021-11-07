@@ -1,0 +1,25 @@
+{
+  "Title" : "Beats Levels",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 3",
+  "Maps" : [
+    ["Slider1", "KickLevel"],
+    ["Slider2", "SnareLevel"],
+    ["Slider3", "LoTomLevel"],
+    ["Slider4", "HiTomLevel"],
+    ["Slider5", "ClosedHatLevel"],
+    ["Slider6", "OpenHatLevel"],
+    ["Slider7", "ClapLevel"],
+    ["Slider8", "ClavesLevel"],
+    ["Slider9", "AgogoLevel"],
+    ["Knob1", "CrashLevel"],
+    ["Knob2", "ClapPCMSpeed"],
+    ["Knob3", "ClavesPCMSpeed"],
+    ["Knob4", "AgogoPCMSpeed"],
+    ["Knob5", "CrashPCMSpeed"],
+    ["Knob6", "StutterTime"],
+    ["Knob7", "StutterDepth"],
+    ["Knob8", "ClosedHatDecay"],
+    ["Knob9", "OpenHatDecay"]
+  ]
+}

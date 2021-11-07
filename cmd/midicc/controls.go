@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"reflect"
 )
 
@@ -60,10 +61,15 @@ func (m *MidiControls) CC(name string) int {
 	return -1
 }
 
-func (m *MidiControls) Set(cc, v int) {
-	ccInfo := m.cc2cc[cc]
+func (m *MidiControls) Set(cc, v int) bool {
+	ccInfo, ok := m.cc2cc[cc]
+	if !ok {
+		log.Println("could not find cc", cc)
+		return false
+	}
 	ccInfo.val = v
 	reflect.ValueOf(m.model).Elem().FieldByName(m.cc2name[cc]).SetInt(int64(v))
+	return true
 }
 
 func (m *MidiControls) Get(cc int) int {

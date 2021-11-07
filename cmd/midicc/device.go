@@ -7,6 +7,7 @@ import (
 
 type DeviceModel struct {
 	Device  string
+	Name    string
 	Channel int
 	Model
 }

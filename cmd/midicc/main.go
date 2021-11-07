@@ -14,15 +14,14 @@ func main() {
 		os.Exit(1)
 	}
 	dms := mustLoadDeviceModels(os.Args[1])
-	assigns := mustLoadAssignments(os.Args[2])
+	devs := make(map[string]*DeviceModel)
 	mcs := make(map[string]*MidiControls)
-	for _, m := range dms {
+	for i, m := range dms {
+		devs[m.Device] = &dms[i]
 		mcs[m.Device] = NewMidiControls(m.MidiParams())
 	}
-	for _, aa := range assigns {
-		fmt.Printf("%+v\n", aa)
-	}
 
+	assigns := mustLoadAssignments(os.Args[2])
 	aseq, err := alsa.OpenSeq("midicc")
 	if err != nil {
 		panic(err)
@@ -37,48 +36,68 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Open input controller from sequencer.
+	inDevs := make(map[string]struct{})
 	for _, a := range assigns {
-		log.Println("opening", a.InDevice)
-		c, p, err := aseq.PortAddress(a.InDevice)
+		inDevs[a.InDevice] = struct{}{}
+	}
+
+	// Open input controller from sequencer.
+	for inDev := range inDevs {
+		log.Printf("opening input device %q", inDev)
+		sa, err := aseq.PortAddress(inDev)
 		if err != nil {
 			panic(err)
 		}
-		if err := aseq.OpenPort(c, p); err != nil {
+		if err := aseq.OpenPort(sa.Client, sa.Port); err != nil {
 			panic(err)
 		}
 	}
-	log.Println("output device", assigns[0].OutDevice)
-	outDev, err := alsa.OpenDeviceByName(assigns[0].OutDevice)
+	log.Printf("opening output device %q", assigns[0].OutDevice)
+	saOut, err := aseq.PortAddress(assigns[0].OutDevice)
 	if err != nil {
 		panic(err)
 	}
-	defer outDev.Close()
+	if err := aseq.OpenPortWrite(saOut); err != nil {
+		panic(err)
+	}
 
 	// Apply existing patch, if any.
-	log.Println("applying old patch to ", assigns[0].OutDevice)
+	outChan := devs[assigns[0].OutDevice].Channel
+	log.Printf("applying old patch to %q on channel %d", assigns[0].OutDevice, outChan)
 	outMcs := mcs[assigns[0].OutDevice]
 	if outMcs == nil {
 		panic("no out mcs" + assigns[0].OutDevice)
 	}
 	for _, msg := range outMcs.ToControlCodes() {
-		msg[0] |= byte(dms[0].Channel - 1)
+		msg[0] |= byte(outChan - 1)
 		log.Println("initializing", outMcs.Name(int(msg[1])), "=", int(msg[2]))
-		if _, err := outDev.Write(msg); err != nil {
+		ev := alsa.SeqEvent{saOut, msg}
+		if err := aseq.Write(ev); err != nil {
 			panic(err)
 		}
 	}
 
+	pgm := 0
 	for {
 		ev, err := aseq.Read()
 		if err != nil {
 			panic(err)
 		}
-		if len(ev.Data) != 3 || ev.Data[0]&0xf0 != 0xb0 {
+		cmd := ev.Data[0] & 0xf0
+
+		if len(ev.Data) == 2 && cmd == 0xc0 {
+			v := int(ev.Data[1])
+			if v < len(assigns) {
+				pgm = v
+				log.Println("controller program", pgm, "is", assigns[pgm].Title)
+				continue
+			}
+		}
+		if len(ev.Data) != 3 || cmd != 0xb0 {
 			continue
 		}
 		cc, val := int(ev.Data[1]), int(ev.Data[2])
-		inName := mcs[assigns[0].InDevice].Name(cc)
+		inName := mcs[assigns[pgm].InDevice].Name(cc)
 		if inName == "" {
 			continue
 		}
@@ -87,15 +106,18 @@ func main() {
 			mustSaveDeviceModels(dms, os.Args[1])
 			continue
 		}
-		outName := assigns[0].InToOut(inName)
+		outName := assigns[pgm].InToOut(inName)
 		if outName == "" {
 			continue
 		}
+		log.Println(inName, "->", outName, "=", val, "; ch =", outChan)
 		outCC := outMcs.CC(outName)
-		outMcs.Set(outCC, val)
-		ch := byte(dms[0].Channel - 1)
-		log.Println(inName, "->", outName, "=", val, "; ch =", int(ch))
-		if _, err := outDev.Write([]byte{0xb0 | ch, byte(outCC), byte(val)}); err != nil {
+		if !outMcs.Set(outCC, val) {
+			continue
+		}
+		ch := byte(outChan - 1)
+		ev = alsa.SeqEvent{SeqAddr: saOut, Data: []byte{0xb0 | ch, byte(outCC), byte(val)}}
+		if err := aseq.Write(ev); err != nil {
 			panic(err)
 		}
 	}

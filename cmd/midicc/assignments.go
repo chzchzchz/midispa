@@ -6,6 +6,7 @@ import (
 )
 
 type Assignments struct {
+	Title     string
 	InDevice  string
 	OutDevice string
 	Maps      [][2]string // in, out
