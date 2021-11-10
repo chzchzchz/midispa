@@ -133,6 +133,18 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 			ret.Data = []byte{
 				0xC0 | byte(ctrl.channel),
 				byte(ctrl.value)}
+		case C.SND_SEQ_EVENT_NOTEON:
+			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{
+				0x90 | byte(note.channel),
+				byte(note.note),
+				byte(note.velocity)}
+		case C.SND_SEQ_EVENT_NOTEOFF:
+			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{
+				0x80 | byte(note.channel),
+				byte(note.note),
+				byte(note.velocity)}
 		default:
 			continue
 		}
