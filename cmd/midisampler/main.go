@@ -77,13 +77,17 @@ func main() {
 		panic(err)
 	}
 	defer wp.Close()
+	sampleHz := wp.Client.GetSampleRate()
 
 	// Load directories for sample wav files.
 	files := util.Walk(*spathFlag)
 	for _, f := range files {
 		path := filepath.Join(*spathFlag, f)
-		if _, err := LoadSample(f, path); err != nil {
+		s, err := LoadSample(f, path)
+		if err != nil {
 			log.Printf("error loading %q: %v", f, err)
+		} else {
+			s.Resample(int(sampleHz))
 		}
 	}
 	log.Printf("loaded %d of %d samples from %q", len(samples), len(files), *spathFlag)
@@ -94,7 +98,6 @@ func main() {
 		panic(err)
 	}
 
-	sampleHz := wp.Client.GetSampleRate()
 	ad := adsrDuration{
 		Attack:  5 * time.Millisecond,
 		Decay:   100 * time.Millisecond,
