@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-type adsrDuration struct {
+type ADSR struct {
 	Attack  time.Duration
 	Decay   time.Duration
 	Sustain float32
@@ -36,7 +36,7 @@ type adsrCycleState struct {
 	velocityScale float32
 }
 
-func (a *adsrDuration) Cycles(hz float64) adsrCycles {
+func (a *ADSR) Cycles(hz float64) adsrCycles {
 	return adsrCycles{
 		Attack:  int(a.Attack.Seconds() * hz),
 		Decay:   int(a.Decay.Seconds() * hz),

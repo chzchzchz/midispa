@@ -24,10 +24,13 @@ func rebiasNote(note byte) int {
 }
 
 var lastWas0 = false
+var soundOff = false
 
 func playCallback(s []j.AudioSample) int {
+	// Copy voices to avoid threading problems.
 	voicesCopy := copyVoices()
-	if len(voicesCopy) > 0 {
+	// Check if only writing out zeroes.
+	if len(voicesCopy) > 0 && !soundOff {
 		lastWas0 = false
 	}
 	if lastWas0 {
@@ -36,10 +39,11 @@ func playCallback(s []j.AudioSample) int {
 	for i := 0; i < len(s); i++ {
 		s[i] = 0
 	}
-	if len(voicesCopy) == 0 {
+	if len(voicesCopy) == 0 || soundOff {
 		lastWas0 = true
 		return 0
 	}
+	// Apply all voices to sample buffer.
 	for _, vs := range voicesCopy {
 		copyLen := len(s)
 		if copyLen > len(vs.remaining) {
@@ -62,6 +66,45 @@ func playCallback(s []j.AudioSample) int {
 		}
 	}
 	return 0
+}
+
+func midiLoop(aseq *alsa.Seq, adsr *adsrCycles) {
+	// midi event loop.
+	for {
+		ev, err := aseq.Read()
+		if err != nil {
+			panic(err)
+		}
+		// midi notes writes wavs into jack memory.
+		cmd /*, ch*/ := ev.Data[0] & 0xf0 /*, (ev.Data[0] & 0xf) */
+		log.Printf("midi message %+v..", ev)
+		switch cmd {
+		case 0x80: /* note off */
+			note := rebiasNote(ev.Data[1])
+			if note < len(sampleSlice) {
+				stopVoice(sampleSlice[note])
+			}
+		case 0x90: /* note on */
+			note, vel := rebiasNote(ev.Data[1]), int(ev.Data[2])
+			if note < len(sampleSlice) {
+				as := adsr.Press(float32(vel) / 127.0)
+				addVoice(sampleSlice[note], vel, &as)
+			}
+		case 0xb0: /* cc */
+			log.Println("got cc", cc, val)
+			cc, val := int(ev.Data[1]), int(ev.Data[2])
+			switch cc {
+			case AllSoundOffCC:
+				soundOff = val != 0
+			case AllNotesOffCC:
+				if val > 0 {
+					for i := range sampleSlice {
+						stopVoice(sampleSlice[i])
+					}
+				}
+			}
+		}
+	}
 }
 
 func main() {
@@ -98,39 +141,12 @@ func main() {
 		panic(err)
 	}
 
-	ad := adsrDuration{
+	ad := ADSR{
 		Attack:  5 * time.Millisecond,
 		Decay:   100 * time.Millisecond,
 		Sustain: 0.7,
 		Release: 200 * time.Millisecond,
 	}
 	adsr := ad.Cycles(float64(sampleHz))
-
-	// midi event loop.
-	for {
-		ev, err := aseq.Read()
-		if err != nil {
-			panic(err)
-		}
-		// midi notes writes wavs into jack memory.
-		cmd /*, ch*/ := ev.Data[0] & 0xf0 /*, (ev.Data[0] & 0xf) */
-		log.Printf("midi message %+v..", ev)
-		switch cmd {
-		case 0x80: /* note off */
-			note := rebiasNote(ev.Data[1])
-			if note < len(sampleSlice) {
-				stopVoice(sampleSlice[note])
-			}
-		case 0x90: /* note on */
-			note, vel := rebiasNote(ev.Data[1]), int(ev.Data[2])
-			if note < len(sampleSlice) {
-				as := adsr.Press(float32(vel) / 127.0)
-				addVoice(sampleSlice[note], vel, &as)
-			}
-		case 0xb0: /* cc */
-			cc, val := int(ev.Data[1]), int(ev.Data[2])
-			log.Println("got cc", cc, val)
-		default:
-		}
-	}
+	midiLoop(aseq, &adsr)
 }
