@@ -15,7 +15,7 @@ type Port struct {
 	f          JackProcessCallback
 	fl         uint64
 
-	client       *jack.Client
+	Client       *jack.Client
 	portExternal *jack.Port
 	portInternal *jack.Port
 
@@ -46,25 +46,25 @@ func NewJackPort(cn, extName string, fl uint64, f JackProcessCallback) (*Port, e
 	j := &Port{
 		extName:    extName,
 		clientName: cn,
-		client:     client,
+		Client:     client,
 		f:          f,
 		fl:         fl,
 		portc:      make(chan *jack.Port, 2),
 	}
-	if code := j.client.SetPortRegistrationCallback(j.portRegistration); code != 0 {
-		j.client.Close()
+	if code := j.Client.SetPortRegistrationCallback(j.portRegistration); code != 0 {
+		j.Client.Close()
 		return nil, jack.StrError(code)
 	}
 	if code := client.SetProcessCallback(j.process); code != 0 {
-		j.client.Close()
+		j.Client.Close()
 		return nil, jack.StrError(code)
 	}
 	if code := client.SetPortConnectCallback(j.portConnect); code != 0 {
-		j.client.Close()
+		j.Client.Close()
 		return nil, jack.StrError(code)
 	}
 	if code := client.Activate(); code != 0 {
-		j.client.Close()
+		j.Client.Close()
 		return nil, jack.StrError(code)
 	}
 	log.Println("jack activated")
@@ -76,7 +76,7 @@ func NewJackPort(cn, extName string, fl uint64, f JackProcessCallback) (*Port, e
 		}
 	}()
 
-	j.portInternal = j.client.PortRegister(
+	j.portInternal = j.Client.PortRegister(
 		fmt.Sprintf("%s-%s", j.clientName, extName),
 		jack.DEFAULT_AUDIO_TYPE,
 		fl,
@@ -103,7 +103,7 @@ func (j *Port) process(nFrames uint32) int {
 func (j *Port) portConnect(a, b jack.PortId, is_connect bool) {}
 
 func (j *Port) portRegistration(id jack.PortId, made bool) {
-	p := j.client.GetPortById(id)
+	p := j.Client.GetPortById(id)
 	name := p.GetName()
 	if !made {
 		if j.portExternal != nil && name == j.portExternal.GetName() {
@@ -124,9 +124,9 @@ func (j *Port) portRegistration(id jack.PortId, made bool) {
 }
 
 func (j *Port) ports(name string) (ret []*jack.Port) {
-	for _, port := range j.client.GetPorts(name, "", 0) {
+	for _, port := range j.Client.GetPorts(name, "", 0) {
 		if !strings.HasPrefix(port, j.clientName) {
-			p := j.client.GetPortByName(port)
+			p := j.Client.GetPortByName(port)
 			ret = append(ret, p)
 		}
 	}
@@ -139,7 +139,7 @@ func (j *Port) connectExternal(ext *jack.Port) error {
 		dst, src = ext, j.portInternal
 	}
 	log.Printf("connecting src=%q to dst=%q", src.GetName(), dst.GetName())
-	if code := j.client.ConnectPorts(src, dst); code != 0 {
+	if code := j.Client.ConnectPorts(src, dst); code != 0 {
 		log.Println("failed to connect ports")
 		return jack.StrError(code)
 	}
@@ -160,8 +160,8 @@ func LogPorts() {
 }
 
 func (j *Port) Close() {
-	j.client.Deactivate()
-	j.client.Close()
+	j.Client.Deactivate()
+	j.Client.Close()
 	close(j.portc)
 	j.wg.Wait()
 }

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"path/filepath"
+	"time"
 
 	j "github.com/xthexder/go-jack"
 
@@ -44,9 +45,16 @@ func playCallback(s []j.AudioSample) int {
 		if copyLen > len(vs.remaining) {
 			copyLen = len(vs.remaining)
 		}
-		for i := 0; i < copyLen; i++ {
-			s[i] += j.AudioSample(vs.velocity * vs.remaining[i])
+		if vs.adsrState == nil {
+			for i := 0; i < copyLen; i++ {
+				s[i] += j.AudioSample(vs.velocity * vs.remaining[i])
+			}
+		} else {
+			for i := 0; i < copyLen; i++ {
+				s[i] += j.AudioSample(vs.adsrState.Apply(vs.remaining[i]))
+			}
 		}
+
 		if len(vs.remaining) <= len(s) {
 			vs.remaining = nil
 		} else {
@@ -86,6 +94,15 @@ func main() {
 		panic(err)
 	}
 
+	sampleHz := wp.Client.GetSampleRate()
+	ad := adsrDuration{
+		Attack:  5 * time.Millisecond,
+		Decay:   100 * time.Millisecond,
+		Sustain: 0.7,
+		Release: 200 * time.Millisecond,
+	}
+	adsr := ad.Cycles(float64(sampleHz))
+
 	// midi event loop.
 	for {
 		ev, err := aseq.Read()
@@ -104,7 +121,8 @@ func main() {
 		case 0x90: /* note on */
 			note, vel := rebiasNote(ev.Data[1]), int(ev.Data[2])
 			if note < len(sampleSlice) {
-				addVoice(sampleSlice[note], vel)
+				as := adsr.Press(float32(vel) / 127.0)
+				addVoice(sampleSlice[note], vel, &as)
 			}
 		case 0xb0: /* cc */
 			cc, val := int(ev.Data[1]), int(ev.Data[2])

@@ -6,15 +6,23 @@ import (
 
 type voicedSample struct {
 	*Sample
+	adsrState *adsrCycleState
 	remaining []float32 // slice from sample
 	velocity  float32
+
+	mu sync.RWMutex
 }
 
 var voicesMu sync.Mutex
 var voices map[*voicedSample]struct{} = make(map[*voicedSample]struct{})
 
-func addVoice(s *Sample, vel int) {
-	vs := &voicedSample{Sample: s, remaining: s.data, velocity: float32(vel) / 127.0}
+func addVoice(s *Sample, vel int, as *adsrCycleState) {
+	vs := &voicedSample{
+		Sample:    s,
+		adsrState: as,
+		remaining: s.data,
+		velocity:  float32(vel) / 127.0,
+	}
 	voicesMu.Lock()
 	voices[vs] = struct{}{}
 	voicesMu.Unlock()
@@ -24,7 +32,11 @@ func stopVoice(s *Sample) {
 	voicesMu.Lock()
 	for vs := range voices {
 		if vs.Sample == s {
-			delete(voices, vs)
+			if vs.adsrState != nil {
+				vs.adsrState.Off()
+			} else {
+				delete(voices, vs)
+			}
 		}
 	}
 	voicesMu.Unlock()
