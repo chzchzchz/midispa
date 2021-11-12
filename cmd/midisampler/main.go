@@ -5,6 +5,7 @@ import (
 	"log"
 	"path/filepath"
 	"time"
+	"unsafe"
 
 	j "github.com/xthexder/go-jack"
 
@@ -13,63 +14,25 @@ import (
 	"github.com/chzchzchz/midispa/util"
 )
 
-const midiNoteBias = 21 // A0
-
-func rebiasNote(note byte) int {
-	v := int(note) - midiNoteBias
-	if v < 0 {
-		return 0
-	}
-	return v
+func lagrangeScale(v float64) float64 {
+	return 0.25*((v*(v-127.0))/(64.0*(64.0-127.0))) +
+		((v * (v - 64.0)) / (127.0 * (127.0 - 64.0)))
 }
 
-var lastWas0 = false
-var soundOff = false
-
-func playCallback(s []j.AudioSample) int {
-	// Copy voices to avoid threading problems.
-	voicesCopy := copyVoices()
-	// Check if only writing out zeroes.
-	if len(voicesCopy) > 0 && !soundOff {
-		lastWas0 = false
+func makeADSR(c *Controls, s *Sample) *ADSR {
+	// TODO: different scaling options?
+	sd := float64(s.Duration)
+	return &ADSR{
+		Attack:  time.Duration(sd * lagrangeScale(float64(c.AttackTime))),
+		Decay:   time.Duration(sd * lagrangeScale(float64(c.DecayTime))),
+		Sustain: float32(c.SustainLevel) / 127.0,
+		Release: time.Duration(sd * lagrangeScale(float64(c.ReleaseTime))),
 	}
-	if lastWas0 {
-		return 0
-	}
-	for i := 0; i < len(s); i++ {
-		s[i] = 0
-	}
-	if len(voicesCopy) == 0 || soundOff {
-		lastWas0 = true
-		return 0
-	}
-	// Apply all voices to sample buffer.
-	for _, vs := range voicesCopy {
-		copyLen := len(s)
-		if copyLen > len(vs.remaining) {
-			copyLen = len(vs.remaining)
-		}
-		if vs.adsrState == nil {
-			for i := 0; i < copyLen; i++ {
-				s[i] += j.AudioSample(vs.velocity * vs.remaining[i])
-			}
-		} else {
-			for i := 0; i < copyLen; i++ {
-				s[i] += j.AudioSample(vs.adsrState.Apply(vs.remaining[i]))
-			}
-		}
-
-		if len(vs.remaining) <= len(s) {
-			vs.remaining = nil
-		} else {
-			vs.remaining = vs.remaining[len(s):]
-		}
-	}
-	return 0
 }
 
-func midiLoop(aseq *alsa.Seq, adsr *adsrCycles) {
-	// midi event loop.
+func midiLoop(aseq *alsa.Seq) {
+	var controls Controls
+	controlsUpdated := false
 	for {
 		ev, err := aseq.Read()
 		if err != nil {
@@ -80,20 +43,37 @@ func midiLoop(aseq *alsa.Seq, adsr *adsrCycles) {
 		log.Printf("midi message %+v..", ev)
 		switch cmd {
 		case 0x80: /* note off */
-			note := rebiasNote(ev.Data[1])
-			if note < len(sampleSlice) {
-				stopVoice(sampleSlice[note])
+			if s := note2sample(int(ev.Data[1])); s != nil {
+				stopVoice(s)
 			}
 		case 0x90: /* note on */
-			note, vel := rebiasNote(ev.Data[1]), int(ev.Data[2])
-			if note < len(sampleSlice) {
-				as := adsr.Press(float32(vel) / 127.0)
-				addVoice(sampleSlice[note], vel, &as)
+			s, vel := note2sample(int(ev.Data[1])), int(ev.Data[2])
+			if s == nil {
+				continue
 			}
+			if controlsUpdated {
+				s.ADSR = makeADSR(&controls, s)
+				log.Printf("adsr set to %+v on %q", s.ADSR, s.name)
+				controlsUpdated = false
+			}
+			addVoice(s, float32(vel)/127.0)
 		case 0xb0: /* cc */
-			log.Println("got cc", cc, val)
 			cc, val := int(ev.Data[1]), int(ev.Data[2])
+			log.Println("got cc", cc, val)
+			// TODO: use midicontrols
 			switch cc {
+			case AttackTimeCC:
+				controls.AttackTime = val
+				controlsUpdated = true
+			case DecayTimeCC:
+				controls.DecayTime = val
+				controlsUpdated = true
+			case SustainLevelCC:
+				controls.SustainLevel = val
+				controlsUpdated = true
+			case ReleaseTimeCC:
+				controls.ReleaseTime = val
+				controlsUpdated = true
 			case AllSoundOffCC:
 				soundOff = val != 0
 			case AllNotesOffCC:
@@ -105,6 +85,12 @@ func midiLoop(aseq *alsa.Seq, adsr *adsrCycles) {
 			}
 		}
 	}
+}
+
+func playCallback(s []j.AudioSample) int {
+	x := *(*[]float32)(unsafe.Pointer(&s))
+	playVoices(x)
+	return 0
 }
 
 func main() {
@@ -123,6 +109,12 @@ func main() {
 	sampleHz := wp.Client.GetSampleRate()
 
 	// Load directories for sample wav files.
+	adsr := ADSR{
+		Attack:  time.Millisecond,
+		Decay:   100 * time.Millisecond,
+		Sustain: 0.7,
+		Release: 200 * time.Millisecond,
+	}
 	files := util.Walk(*spathFlag)
 	for _, f := range files {
 		path := filepath.Join(*spathFlag, f)
@@ -130,7 +122,9 @@ func main() {
 		if err != nil {
 			log.Printf("error loading %q: %v", f, err)
 		} else {
+			s.ADSR = &adsr
 			s.Resample(int(sampleHz))
+			s.Normalize()
 		}
 	}
 	log.Printf("loaded %d of %d samples from %q", len(samples), len(files), *spathFlag)
@@ -140,13 +134,5 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	ad := ADSR{
-		Attack:  5 * time.Millisecond,
-		Decay:   100 * time.Millisecond,
-		Sustain: 0.7,
-		Release: 200 * time.Millisecond,
-	}
-	adsr := ad.Cycles(float64(sampleHz))
-	midiLoop(aseq, &adsr)
+	midiLoop(aseq)
 }

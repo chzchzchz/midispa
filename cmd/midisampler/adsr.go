@@ -37,22 +37,29 @@ type adsrCycleState struct {
 }
 
 func (a *ADSR) Cycles(hz float64) adsrCycles {
-	return adsrCycles{
+	ac := adsrCycles{
 		Attack:  int(a.Attack.Seconds() * hz),
 		Decay:   int(a.Decay.Seconds() * hz),
 		Sustain: a.Sustain,
 		Release: int(a.Release.Seconds() * hz),
-
-		attackStep: float32(a.Attack.Seconds() / hz),
-		decayStep:  -float32((1.0 - float64(a.Sustain)) * a.Decay.Seconds() / hz),
 	}
+	ac.attackStep = 1.0 / float32(ac.Attack)
+	ac.decayStep = -(1.0 - a.Sustain) / float32(ac.Decay)
+	return ac
 }
 
 func (a *adsrCycleState) Off() {
-	if a.on && a.releaseCycles == 0 {
-		a.attackCycles, a.decayCycles, a.releaseCycles = 0, 0, a.Release
-		a.releaseStep = -a.currentScale / float32(a.Release)
+	if !a.on || a.releaseCycles > 0 {
+		return
 	}
+	a.releaseCycles, a.releaseStep = a.Release, -a.Sustain/float32(a.Release)
+
+	// Oops, this would lead to notes never sounding on slow attack.
+	// a.attackCycles, a.decayCycles, a.releaseCycles = 0, 0, a.Release
+	// a.releaseStep = -a.currentScale / float32(a.Release)
+	// if a.releaseStep > 0 {
+	//  a.releaseStep, a.on, a.releaseCycles = 0, false, 0
+	// }
 }
 
 func (a *adsrCycleState) Apply(samp float32) float32 {
@@ -61,9 +68,15 @@ func (a *adsrCycleState) Apply(samp float32) float32 {
 	} else if a.attackCycles > 0 {
 		a.attackCycles--
 		a.currentScale += a.attackStep
+		if a.attackCycles == 0 {
+			a.currentScale = 1
+		}
 	} else if a.decayCycles > 0 {
 		a.decayCycles--
 		a.currentScale += a.decayStep
+		if a.decayCycles == 0 {
+			a.currentScale = a.Sustain
+		}
 	} else if a.releaseCycles > 0 {
 		a.releaseCycles--
 		a.currentScale += a.releaseStep

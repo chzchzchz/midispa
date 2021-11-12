@@ -13,15 +13,65 @@ type voicedSample struct {
 	mu sync.RWMutex
 }
 
+var lastWas0 = false
+var soundOff = false
+
+func playVoices(s []float32) {
+	// Copy voices to avoid threading problems.
+	voicesCopy := copyVoices()
+	// Check if only writing out zeroes.
+	if len(voicesCopy) > 0 && !soundOff {
+		lastWas0 = false
+	}
+	if lastWas0 {
+		return
+	}
+	for i := 0; i < len(s); i++ {
+		s[i] = 0
+	}
+	if len(voicesCopy) == 0 || soundOff {
+		lastWas0 = true
+		return
+	}
+	// Apply all voices to sample buffer.
+	for _, vs := range voicesCopy {
+		copyLen := len(s)
+		if copyLen > len(vs.remaining) {
+			copyLen = len(vs.remaining)
+		}
+		if vs.adsrState == nil {
+			for i := 0; i < copyLen; i++ {
+				s[i] += vs.velocity * vs.remaining[i]
+			}
+		} else {
+			for i := 0; i < copyLen; i++ {
+				s[i] += vs.adsrState.Apply(vs.remaining[i])
+			}
+		}
+
+		if len(vs.remaining) <= len(s) {
+			vs.remaining = nil
+		} else {
+			vs.remaining = vs.remaining[len(s):]
+		}
+	}
+}
+
 var voicesMu sync.Mutex
 var voices map[*voicedSample]struct{} = make(map[*voicedSample]struct{})
 
-func addVoice(s *Sample, vel int, as *adsrCycleState) {
+func addVoice(s *Sample, vel float32) {
+	var as *adsrCycleState
+	if s.ADSR != nil {
+		ac := s.Cycles(float64(s.rate))
+		a := ac.Press(vel)
+		as = &a
+	}
 	vs := &voicedSample{
 		Sample:    s,
 		adsrState: as,
 		remaining: s.data,
-		velocity:  float32(vel) / 127.0,
+		velocity:  vel,
 	}
 	voicesMu.Lock()
 	voices[vs] = struct{}{}

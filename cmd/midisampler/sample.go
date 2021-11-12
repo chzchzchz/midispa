@@ -15,6 +15,9 @@ type Sample struct {
 	time.Duration
 	data []float32
 	rate int
+	name string
+
+	*ADSR
 }
 
 func (s *Sample) Resample(sampleHz int) {
@@ -25,23 +28,39 @@ func (s *Sample) Resample(sampleHz int) {
 	newSamples := int(float64(len(s.data)) * ratio)
 	newData := make([]float32, newSamples)
 	newData[0] = s.data[0]
-	var min float32
-	var max float32
 	for i := 0; i < newSamples; i++ {
 		fi, fj := float64(i-1)*1.0/ratio, float64(i)*1.0/ratio
 		ii, ij := int(fi), int(fj)
 		alpha := float32(fi - float64(ii))
 		newData[i] = (alpha*s.data[ii] + (1.0-alpha)*s.data[ij]) / 2.0
-		if newData[i] > max {
-			max = newData[i]
-		} else if newData[i] < min {
-			min = newData[i]
+	}
+
+	s.rate, s.data = sampleHz, s.data
+}
+
+func (s *Sample) Normalize() {
+	var min float32
+	var max float32
+	for _, v := range s.data {
+		if v > max {
+			max = v
+		} else if v < min {
+			min = v
 		}
 	}
-	for i := 0; i < newSamples; i++ {
-		newData[i] = 2.0 * (((newData[i] - min) / (max - min)) - 0.5)
+	for i := range s.data {
+		s.data[i] = 2.0 * (((s.data[i] - min) / (max - min)) - 0.5)
 	}
-	s.rate, s.data = sampleHz, newData
+}
+
+const midiMiddleC = 60
+
+func note2sample(note int) *Sample {
+	n := (note - midiMiddleC) + len(sampleSlice)/2
+	if n < 0 || n >= len(sampleSlice) {
+		return nil
+	}
+	return sampleSlice[n]
 }
 
 func LoadSample(name, path string) (*Sample, error) {
@@ -64,7 +83,12 @@ func LoadSample(name, path string) (*Sample, error) {
 		return nil, err
 	}
 	pcmf32 := pcm.AsFloat32Buffer()
-	s := &Sample{Duration: dur, data: pcmf32.Data, rate: pcm.Format.SampleRate}
+	s := &Sample{
+		Duration: dur,
+		data:     pcmf32.Data,
+		rate:     pcm.Format.SampleRate,
+		name:     name,
+	}
 
 	samples[name] = s
 	sampleSlice = append(sampleSlice, s)
