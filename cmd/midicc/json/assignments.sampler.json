@@ -1,0 +1,11 @@
+{
+  "Title" : "ADSR Levels",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "midisampler",
+  "Maps" : [
+    ["Knob1", "SoundController4"],
+    ["Knob2", "SoundController6"],
+    ["Knob3", "SoundController10"],
+    ["Knob4", "SoundController3"]
+  ]
+}

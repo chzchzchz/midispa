@@ -1,0 +1,10 @@
+{
+ "Device": "midisampler",
+ "Model": "Sound Controller",
+ "SoundController": {}
+}
+{
+ "Device": "WORLDE easy control MIDI 1",
+ "Channel": 1,
+ "Model": "WorldeEasyControl9"
+}

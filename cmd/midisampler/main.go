@@ -19,19 +19,20 @@ func lagrangeScale(v float64) float64 {
 		((v * (v - 64.0)) / (127.0 * (127.0 - 64.0)))
 }
 
-func makeADSR(c *Controls, s *Sample) *ADSR {
+func makeADSR(c *Controls, td time.Duration) *ADSR {
 	// TODO: different scaling options?
-	sd := float64(s.Duration)
+	d := float64(td)
 	return &ADSR{
-		Attack:  time.Duration(sd * lagrangeScale(float64(c.AttackTime))),
-		Decay:   time.Duration(sd * lagrangeScale(float64(c.DecayTime))),
+		Attack:  time.Duration(d * lagrangeScale(float64(c.AttackTime))),
+		Decay:   time.Duration(d * lagrangeScale(float64(c.DecayTime))),
 		Sustain: float32(c.SustainLevel) / 127.0,
-		Release: time.Duration(sd * lagrangeScale(float64(c.ReleaseTime))),
+		Release: time.Duration(d * lagrangeScale(float64(c.ReleaseTime))),
 	}
 }
 
 func midiLoop(aseq *alsa.Seq) {
 	var controls Controls
+	lastDuration := time.Second
 	controlsUpdated := false
 	for {
 		ev, err := aseq.Read()
@@ -40,7 +41,6 @@ func midiLoop(aseq *alsa.Seq) {
 		}
 		// midi notes writes wavs into jack memory.
 		cmd /*, ch*/ := ev.Data[0] & 0xf0 /*, (ev.Data[0] & 0xf) */
-		log.Printf("midi message %+v..", ev)
 		switch cmd {
 		case 0x80: /* note off */
 			if s := note2sample(int(ev.Data[1])); s != nil {
@@ -51,9 +51,10 @@ func midiLoop(aseq *alsa.Seq) {
 			if s == nil {
 				continue
 			}
+			lastDuration = s.Duration
 			if controlsUpdated {
-				s.ADSR = makeADSR(&controls, s)
-				log.Printf("adsr set to %+v on %q", s.ADSR, s.name)
+				s.ADSR = makeADSR(&controls, s.Duration)
+				log.Printf("adsr set to %+v on %q", *s.ADSR, s.name)
 				controlsUpdated = false
 			}
 			addVoice(s, float32(vel)/127.0)
@@ -82,7 +83,14 @@ func midiLoop(aseq *alsa.Seq) {
 						stopVoice(sampleSlice[i])
 					}
 				}
+			default:
+				log.Printf("unrecognized control message %+v..", ev)
 			}
+			if controlsUpdated {
+				log.Printf("pending adsr %+v", *makeADSR(&controls, lastDuration))
+			}
+		default:
+			log.Printf("unrecognized midi message %+v..", ev)
 		}
 	}
 }
