@@ -92,6 +92,18 @@ func stopVoice(s *Sample) {
 	voicesMu.Unlock()
 }
 
+func stopVoices() {
+	voicesMu.Lock()
+	for vs := range voices {
+		if vs.adsrState != nil {
+			vs.adsrState.Off()
+		} else {
+			delete(voices, vs)
+		}
+	}
+	voicesMu.Unlock()
+}
+
 func copyVoices() (ret []*voicedSample) {
 	voicesMu.Lock()
 	voicesCopy := make([]*voicedSample, 0, len(voices))

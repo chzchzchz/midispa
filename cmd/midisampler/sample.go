@@ -2,23 +2,73 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
+	"sort"
+	"sync"
 	"time"
 
+	"github.com/chzchzchz/midispa/util"
 	"github.com/go-audio/wav"
 )
 
-var samples map[string]*Sample = make(map[string]*Sample)
-var sampleSlice []*Sample
-
 type Sample struct {
+	Name  string
+	*ADSR `json:"ADSR",omitempty`
+
 	time.Duration
 	data []float32
 	rate int
-	name string
-
-	*ADSR
 }
+
+type SampleBank struct {
+	samples map[string]*Sample
+	slice   sampleSlice
+}
+
+func MustLoadSampleBank(libPath string) *SampleBank {
+	sb := &SampleBank{samples: make(map[string]*Sample)}
+	files := util.Walk(libPath)
+	adsr := ADSR{
+		Attack:  time.Millisecond,
+		Decay:   100 * time.Millisecond,
+		Sustain: 0.7,
+		Release: 200 * time.Millisecond,
+	}
+	var wg sync.WaitGroup
+	outc := make(chan *Sample, len(files))
+	for i := range files {
+		wg.Add(1)
+		go func(f string) {
+			defer wg.Done()
+			path := filepath.Join(libPath, f)
+			s, err := LoadSample(f, path)
+			if err != nil {
+				log.Printf("error loading %q: %v", f, err)
+			} else {
+				s.ADSR = &adsr
+				s.Normalize()
+				outc <- s
+			}
+		}(files[i])
+	}
+	wg.Wait()
+	close(outc)
+	for s := range outc {
+		sb.samples[s.Name], sb.slice = s, append(sb.slice, s)
+	}
+	sort.Sort(sb.slice)
+	log.Printf("loaded %d of %d samples from %q", len(sb.samples), len(files), libPath)
+
+	return sb
+}
+
+type sampleSlice []*Sample
+
+func (ss sampleSlice) Len() int           { return len(ss) }
+func (ss sampleSlice) Less(i, j int) bool { return ss[i].Name < ss[j].Name }
+func (ss sampleSlice) Swap(i, j int)      { ss[i], ss[j] = ss[j], ss[i] }
 
 func (s *Sample) Resample(sampleHz int) {
 	if s.rate == sampleHz {
@@ -34,7 +84,6 @@ func (s *Sample) Resample(sampleHz int) {
 		alpha := float32(fi - float64(ii))
 		newData[i] = (alpha*s.data[ii] + (1.0-alpha)*s.data[ij]) / 2.0
 	}
-
 	s.rate, s.data = sampleHz, s.data
 }
 
@@ -51,16 +100,6 @@ func (s *Sample) Normalize() {
 	for i := range s.data {
 		s.data[i] = 2.0 * (((s.data[i] - min) / (max - min)) - 0.5)
 	}
-}
-
-const midiMiddleC = 60
-
-func note2sample(note int) *Sample {
-	n := (note - midiMiddleC) + len(sampleSlice)/2
-	if n < 0 || n >= len(sampleSlice) {
-		return nil
-	}
-	return sampleSlice[n]
 }
 
 func LoadSample(name, path string) (*Sample, error) {
@@ -87,10 +126,7 @@ func LoadSample(name, path string) (*Sample, error) {
 		Duration: dur,
 		data:     pcmf32.Data,
 		rate:     pcm.Format.SampleRate,
-		name:     name,
+		Name:     name,
 	}
-
-	samples[name] = s
-	sampleSlice = append(sampleSlice, s)
 	return s, nil
 }

@@ -1,6 +1,7 @@
 package main
 
 const (
+	VolumeCC       = 7
 	AttackTimeCC   = 73
 	DecayTimeCC    = 75
 	SustainLevelCC = 79
@@ -10,6 +11,8 @@ const (
 )
 
 type Controls struct {
+	Volume int `midicc:7`
+
 	AttackTime   int `midicc:73`
 	DecayTime    int `midicc:75`
 	SustainLevel int `midicc:79` // sound control 10; no default
@@ -17,4 +20,26 @@ type Controls struct {
 
 	AllSoundOff int `midicc:120` // mute
 	AllNotesOff int `midicc:123` // panic
+
+	updated bool
+}
+
+func (c *Controls) Set(cc, val int) bool {
+	switch cc {
+	case VolumeCC:
+		c.Volume = val
+	case AttackTimeCC:
+		c.AttackTime = val
+	case DecayTimeCC:
+		c.DecayTime = val
+	case SustainLevelCC:
+		c.SustainLevel = val
+	case ReleaseTimeCC:
+		c.ReleaseTime = val
+	default:
+		return false
+	}
+	c.updated = true
+	return true
+
 }
