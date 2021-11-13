@@ -1,0 +1,80 @@
+{
+  "Title" : "Volume Levels 1-8",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "midisampler",
+  "Maps" : [
+    ["Knob1", "Pan/1"],
+    ["Knob2", "Pan/2"],
+    ["Knob3", "Pan/3"],
+    ["Knob4", "Pan/4"],
+    ["Knob5", "Pan/5"],
+    ["Knob6", "Pan/6"],
+    ["Knob7", "Pan/7"],
+    ["Knob8", "Pan/8"],
+    ["Slider1", "ChannelVolume/1"],
+    ["Slider2", "ChannelVolume/2"],
+    ["Slider3", "ChannelVolume/3"],
+    ["Slider4", "ChannelVolume/4"],
+    ["Slider5", "ChannelVolume/5"],
+    ["Slider6", "ChannelVolume/6"],
+    ["Slider7", "ChannelVolume/7"],
+    ["Slider8", "ChannelVolume/8"],
+    ["Button1", "Arm:Knob1,Slider1"],
+    ["Button2", "Arm:Knob2,Slider2"],
+    ["Button3", "Arm:Knob3,Slider3"],
+    ["Button4", "Arm:Knob4,Slider4"],
+    ["Button5", "Arm:Knob5,Slider5"],
+    ["Button6", "Arm:Knob6,Slider6"],
+    ["Button7", "Arm:Knob7,Slider7"],
+    ["Button8", "Arm:Knob8,Slider8"],
+    ["Button9", "Arm:*"]
+  ]
+}
+{
+  "Title" : "Volume Levels 9-16",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "midisampler",
+  "Maps" : [
+    ["Knob1", "Pan/9"],
+    ["Knob2", "Pan/10"],
+    ["Knob3", "Pan/11"],
+    ["Knob4", "Pan/12"],
+    ["Knob5", "Pan/13"],
+    ["Knob6", "Pan/14"],
+    ["Knob7", "Pan/15"],
+    ["Knob8", "Pan/16"],
+    ["Slider1", "ChannelVolume/9"],
+    ["Slider2", "ChannelVolume/10"],
+    ["Slider3", "ChannelVolume/11"],
+    ["Slider4", "ChannelVolume/12"],
+    ["Slider5", "ChannelVolume/13"],
+    ["Slider6", "ChannelVolume/14"],
+    ["Slider7", "ChannelVolume/15"],
+    ["Slider8", "ChannelVolume/16"],
+    ["Button1", "Arm:Knob1,Slider1"],
+    ["Button2", "Arm:Knob2,Slider2"],
+    ["Button3", "Arm:Knob3,Slider3"],
+    ["Button4", "Arm:Knob4,Slider4"],
+    ["Button5", "Arm:Knob5,Slider5"],
+    ["Button6", "Arm:Knob6,Slider6"],
+    ["Button7", "Arm:Knob7,Slider7"],
+    ["Button8", "Arm:Knob8,Slider8"],
+    ["Button9", "Arm:*"]
+  ]
+}
+{
+  "Title" : "ADSR Levels",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "midisampler",
+  "Maps" : [
+    ["Knob1", "SoundController4"],
+    ["Knob2", "SoundController6"],
+    ["Knob3", "SoundController10"],
+    ["Knob4", "SoundController3"],
+    ["Button1", "Arm(Knob1)"],
+    ["Button2", "Arm(Knob2)"],
+    ["Button3", "Arm(Knob3)"],
+    ["Button4", "Arm(Knob4)"],
+    ["Button9", "Arm(*)"]
+  ]
+}

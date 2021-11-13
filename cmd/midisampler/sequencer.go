@@ -39,6 +39,10 @@ func midiLoop(aseq *alsa.Seq) {
 		// TODO: load controls from programs
 		ch.Controls.Volume = 127
 		ch.Controls.SustainLevel = 127
+		ch.Controls.AttackTime = 10
+		ch.Controls.DecayTime = 10
+		ch.Controls.SustainLevel = 64
+		ch.Controls.ReleaseTime = 20
 	}
 	for {
 		ev, err := aseq.Read()
@@ -79,6 +83,7 @@ func midiLoop(aseq *alsa.Seq) {
 			cc, val := int(ev.Data[1]), int(ev.Data[2])
 			// TODO use controls code from midicc
 			if controls.Set(cc, val) {
+				log.Printf("controls for ch%d: %+v", ch, *controls)
 				log.Printf("pending adsr %+v", *makeADSR(controls, lastDuration))
 				continue
 			}

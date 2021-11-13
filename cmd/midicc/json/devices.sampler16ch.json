@@ -1,0 +1,15 @@
+{
+ "Device": "midisampler",
+ "Model": "GM Controller",
+ "GMController": {"ChannelVolume": 127, "Pan" : 64}
+}
+{
+ "Device": "midisampler",
+ "Model": "Sound Controller",
+ "SoundController": {}
+}
+{
+ "Device": "WORLDE easy control MIDI 1",
+ "Channel": 1,
+ "Model": "WorldeEasyControl9"
+}

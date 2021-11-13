@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"reflect"
 )
 
@@ -13,6 +12,36 @@ type MidiControls struct {
 	model   interface{}
 	// consistent ordering
 	ccInfos []*ccInfo
+}
+
+type MidiControlsMap map[string]MidiControlsSlice
+
+type MidiControlsSlice []*MidiControls
+
+func (m MidiControlsSlice) Name(cc int) string {
+	for _, mcs := range m {
+		if s := mcs.Name(cc); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func (m MidiControlsSlice) Set(name string, val int) (int, bool) {
+	for _, mcs := range m {
+		if cc := mcs.CC(name); cc >= 0 {
+			return cc, mcs.Set(cc, val)
+		}
+	}
+	return -1, false
+}
+
+// Convert a midi-tagged struct to control codes.
+func (m MidiControlsSlice) ToControlCodes() (ret [][]byte) {
+	for _, mcs := range m {
+		ret = append(ret, mcs.ToControlCodes()...)
+	}
+	return ret
 }
 
 type ccInfo struct {
@@ -64,7 +93,6 @@ func (m *MidiControls) CC(name string) int {
 func (m *MidiControls) Set(cc, v int) bool {
 	ccInfo, ok := m.cc2cc[cc]
 	if !ok {
-		log.Println("could not find cc", cc)
 		return false
 	}
 	ccInfo.val = v

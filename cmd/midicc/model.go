@@ -268,7 +268,7 @@ type Skulpt struct {
 	// Randomise patch 121
 }
 
-// SoundController represents a general midi sound controller.
+// SoundController represents a general midi 2 sound controller.
 type SoundController struct {
 	SoundController1  int `midicc:"70"`
 	SoundController2  int `midicc:"71"`
@@ -282,6 +282,17 @@ type SoundController struct {
 	SoundController10 int `midicc:"79"`
 }
 
+type GMController struct {
+	BankSelect           int `midicc:"0"`
+	Modulation           int `midicc:"1"`
+	BreathController     int `midicc:"2"`
+	FootController       int `midicc:"4"`
+	ChannelVolume        int `midicc:"7"`
+	ChannelBalance       int `midicc:"8"`
+	Pan                  int `midicc:"10"`
+	ExpressionController int `midicc:"11"`
+}
+
 type Model struct {
 	Model            string
 	*VolcaBeats      `json:"VolcaBeats,omitempty"`
@@ -289,6 +300,7 @@ type Model struct {
 	*UnoSynth        `json:"UnoSynth,omitempty"`
 	*Skulpt          `json:"Skulpt,omitempty"`
 	*SoundController `json:"SoundController,omitempty"`
+	*GMController    `json:"GMController,omitempty"`
 }
 
 func (m *Model) MidiParams() interface{} {
@@ -305,6 +317,8 @@ func (m *Model) MidiParams() interface{} {
 		return m.Skulpt
 	case "Sound Controller":
 		return m.SoundController
+	case "GM Controller":
+		return m.GMController
 	default:
 		panic("unknown model " + m.Model)
 	}
