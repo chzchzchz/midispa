@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/sysex"
 )
 
 type Seq struct {
@@ -38,7 +39,8 @@ func (s *Seq) processEvent() error {
 			log.Printf("using controller program #%d: %q",
 				s.pgm, s.assigns[s.pgm].Title)
 		} else {
-			log.Printf("could not find program #%d; max %d", v, len(s.assigns)-1)
+			log.Printf("could not find program #%d of %d",
+				v, len(s.assigns)-1)
 		}
 		return nil
 	}
@@ -50,12 +52,30 @@ func (s *Seq) processEvent() error {
 	inName := s.mcs[a.InDevice].Name(cc)
 	if inName == "" {
 		return nil
-	}
-	if inName == "Record" && val == 0 {
+	} else if inName == "Record" && val == 0 {
 		s.savef()
 		return nil
 	}
 	outName, outCh := a.InToOut(inName)
+	sysDevId := 0x10
+	switch outName {
+	case "MasterBalance":
+		v := float32(val) * (((1 << 14) - 1) / 127.0)
+		mb := sysex.MasterBalance{DeviceId: sysDevId, Balance: int(v)}
+		log.Println("setting master balance to", mb.Balance)
+		return s.aseq.Write(
+			alsa.SeqEvent{SeqAddr: a.saOut, Data: mb.Encode()})
+	case "MasterVolume":
+		v := float32(val) * (((1 << 14) - 1) / 127.0)
+		mv := sysex.MasterVolume{DeviceId: sysDevId, Volume: int(v)}
+		log.Println("setting master volume to", mv.Volume)
+		return s.aseq.Write(
+			alsa.SeqEvent{SeqAddr: a.saOut, Data: mv.Encode()})
+	case "Dump":
+		panic("stub")
+	case "Load":
+		panic("stub")
+	}
 	writef := func() error {
 		if outCh <= 0 {
 			outCh = s.outChan
@@ -63,7 +83,8 @@ func (s *Seq) processEvent() error {
 		log.Println(inName, "->", outName, "=", val, "; ch =", outCh)
 		outCC, ok := s.mcs[a.OutDevice].Set(outName, val)
 		if !ok {
-			log.Printf("missing cc outName=%s on device %s\n", outCC, outName, a.OutDevice)
+			log.Printf("missing cc outName=%s on device %s\n",
+				outCC, outName, a.OutDevice)
 			return nil
 		}
 		ch := byte(outCh - 1)
@@ -74,8 +95,10 @@ func (s *Seq) processEvent() error {
 		return s.aseq.Write(ev)
 	}
 	if outName != "" {
+		// Write input CC to output CC
 		return writef()
 	}
+	// Try to arm if button.
 	if val == 0 {
 		return nil
 	}
@@ -95,8 +118,8 @@ func (s *Seq) processEvent() error {
 }
 
 func (s *Seq) applyPatches() {
-	// Apply existing patch, if any.
-	log.Printf("applying old patch to %q on channel %d", s.assigns[0].OutDevice, s.outChan)
+	log.Printf("applying old patch to %q on channel %d",
+		s.assigns[0].OutDevice, s.outChan)
 	outMcs := s.mcs[s.assigns[0].OutDevice]
 	if outMcs == nil {
 		panic("no out mcs" + s.assigns[0].OutDevice)

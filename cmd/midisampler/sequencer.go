@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/sysex"
 )
 
 var sampBank *SampleBank
@@ -66,9 +67,9 @@ func midiLoop(aseq *alsa.Seq) {
 		case 0x90: /* note on */
 			note, vel := int(ev.Data[1]), int(ev.Data[2])
 			s := pgm.Note2Sample(note)
-			log.Println("got note on", ev.Data)
+			log.Println("got note", ev.Data, "in", pgm.Instrument)
 			if s == nil {
-				log.Println("could not find note", note, "in program", pgm.Instrument)
+				log.Println("could not find note", note, "in", pgm.Instrument)
 				continue
 			}
 			lastDuration = s.Duration
@@ -95,10 +96,23 @@ func midiLoop(aseq *alsa.Seq) {
 					stopVoices()
 				}
 			default:
-				log.Printf("unrecognized control message %+v..", ev)
+				log.Printf("unrecognized control message %+v", ev)
+			}
+		case 0xf0: /* sysex */
+			s := sysex.Decode(ev.Data)
+			if s == nil {
+				log.Printf("? sysex %+v", ev)
+				continue
+			}
+			switch ss := s.(type) {
+			case *sysex.MasterVolume:
+				masterVolume = ss.Float32()
+				log.Println("setting master volume to", masterVolume)
+			default:
+				log.Printf("? sysex %+v", s)
 			}
 		default:
-			log.Printf("unrecognized midi message %+v..", ev)
+			log.Printf("? midi %+v..", ev)
 		}
 	}
 }

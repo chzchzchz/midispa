@@ -15,9 +15,11 @@ type voicedSample struct {
 
 var lastWas0 = false
 var soundOff = false
+var masterVolume float32
 
 func playVoices(s []float32) {
 	// Copy voices to avoid threading problems.
+	// TODO: move outside loop, copy when voice is sounded.
 	voicesCopy := copyVoices()
 	// Check if only writing out zeroes.
 	if len(voicesCopy) > 0 && !soundOff {
@@ -54,6 +56,9 @@ func playVoices(s []float32) {
 		} else {
 			vs.remaining = vs.remaining[len(s):]
 		}
+	}
+	for i := range s {
+		s[i] *= masterVolume
 	}
 }
 

@@ -7,6 +7,7 @@ package alsa
 #include <stdlib.h>
 
 uint8_t* snd_seq_ev_ext_data(const snd_seq_ev_ext_t* ext) { return ext->ptr; }
+void snd_seq_ev_ext_data_set(snd_seq_ev_ext_t* ext, uint8_t* v) { ext->ptr = v; }
 */
 import "C"
 
@@ -154,22 +155,32 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 }
 
 func (a *Seq) Write(ev SeqEvent) error {
-	if len(ev.Data) != 3 {
-		panic("bad length")
-	}
-	if ev.Data[0]&0xf0 != 0xb0 {
-		panic("not ctrl code")
+	if len(ev.Data) == 0 {
+		return nil
 	}
 	var event C.snd_seq_event_t
 	event.source.client, event.source.port = a.CAddrValues()
 	event.dest.client, event.dest.port = ev.CAddrValues()
-	//	event.dest.client, event.dest.port = C.SND_SEQ_ADDRESS_SUBSCRIBERS, C.SND_SEQ_ADDRESS_UNKNOWN
 	event.queue = C.SND_SEQ_QUEUE_DIRECT
-	ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-	ctrl.channel = C.uchar(ev.Data[0] & 0xf)
-	ctrl.param = C.uint(ev.Data[1])
-	ctrl.value = C.int(ev.Data[2])
-	event._type = C.SND_SEQ_EVENT_CONTROLLER
+	// event.dest.client, event.dest.port = C.SND_SEQ_ADDRESS_SUBSCRIBERS, C.SND_SEQ_ADDRESS_UNKNOWN
+	if ev.Data[0] == 0xf0 {
+		event._type = C.SND_SEQ_EVENT_SYSEX
+		event.flags = C.SND_SEQ_EVENT_LENGTH_VARIABLE
+		ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
+		ext.len = C.uint(len(ev.Data))
+		C.snd_seq_ev_ext_data_set(ext, (*C.uchar)(&ev.Data[0]))
+	} else if ev.Data[0]&0xf0 == 0xb0 {
+		if len(ev.Data) != 3 {
+			panic("bad length")
+		}
+		event._type = C.SND_SEQ_EVENT_CONTROLLER
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
+		ctrl.param = C.uint(ev.Data[1])
+		ctrl.value = C.int(ev.Data[2])
+	} else {
+		panic("unknown midi data")
+	}
 	return snderr2error(C.snd_seq_event_output_direct(a.seq, &event))
 }
 
