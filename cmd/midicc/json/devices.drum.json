@@ -1,0 +1,41 @@
+{
+ "Device": "MIDI4x4 MIDI 2",
+ "Channel": 1,
+ "Model": "Volca Drum",
+ "VolcaDrum": {}
+}
+{
+ "Device": "MIDI4x4 MIDI 2",
+ "Channel": 2,
+ "Model": "Volca Drum",
+ "VolcaDrum": {}
+}
+{
+ "Device": "MIDI4x4 MIDI 2",
+ "Channel": 3,
+ "Model": "Volca Drum",
+ "VolcaDrum": {}
+}
+{
+ "Device": "MIDI4x4 MIDI 2",
+ "Channel": 4,
+ "Model": "Volca Drum",
+ "VolcaDrum": {}
+}
+{
+ "Device": "MIDI4x4 MIDI 2",
+ "Channel": 5,
+ "Model": "Volca Drum",
+ "VolcaDrum": {}
+}
+{
+ "Device": "MIDI4x4 MIDI 2",
+ "Channel": 6,
+ "Model": "Volca Drum",
+ "VolcaDrum": {}
+}
+{
+ "Device": "WORLDE easy control MIDI 1",
+ "Channel": 1,
+ "Model": "WorldeEasyControl9"
+}

@@ -67,9 +67,9 @@ func midiLoop(aseq *alsa.Seq) {
 		case 0x90: /* note on */
 			note, vel := int(ev.Data[1]), int(ev.Data[2])
 			s := pgm.Note2Sample(note)
-			log.Println("got note", ev.Data, "in", pgm.Instrument)
+			log.Println("got note", note, "/", vel, "in", pgm.Instrument, ch)
 			if s == nil {
-				log.Println("could not find note", note, "in", pgm.Instrument)
+				log.Println("could not find note", note, "in", pgm.Instrument, ch)
 				continue
 			}
 			lastDuration = s.Duration
@@ -84,7 +84,7 @@ func midiLoop(aseq *alsa.Seq) {
 			cc, val := int(ev.Data[1]), int(ev.Data[2])
 			// TODO use controls code from midicc
 			if controls.Set(cc, val) {
-				log.Printf("controls for ch%d: %+v", ch, *controls)
+				log.Printf("cc ch%d: %+v", ch, *controls)
 				log.Printf("pending adsr %+v", *makeADSR(controls, lastDuration))
 				continue
 			}

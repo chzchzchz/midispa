@@ -1,0 +1,103 @@
+{
+  "Title" : "Drums Levels 1",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 2",
+  "Maps" : [
+    ["ButtonLeftProgramKnob", "PrevChannel"],
+    ["ButtonRightProgramKnob", "NextChannel"],
+
+    ["Slider1", "Level1"],
+    ["Slider2", "EGAttack1"],
+    ["Slider3", "EGRelease1"],
+    ["Slider4", "Pitch1"],
+    ["Slider5", "ModAmount1"],
+    ["Slider6", "ModRate1"],
+    ["Knob1", "Select1"],
+    ["Button1", "Arm:Slider1,Knob1"],
+    ["Button2", "Arm:Slider2,Knob2"],
+    ["Button3", "Arm:Slider3,Knob3"],
+    ["Button4", "Arm:Slider4,Knob4"],
+    ["Button5", "Arm:Slider5,Knob5"],
+    ["Button6", "Arm:Slider6,Knob6"],
+
+    ["Slider7", "DryGain"],
+    ["Slider8", "Decay"],
+    ["Slider9", "Drive"],
+
+    ["Knob2", "BitReduction"],
+    ["Knob3", "Fold"],
+    ["Knob4", "Send"],
+    ["Knob5", "WaveGuideModel"],
+    ["Knob6", "Tune"],
+    ["Button9", "Arm:Knob2,Knob3,Knob4,Knob5,Knob6,Slider7,Slider8,Slider9"]
+  ]
+}
+{
+  "Title" : "Drums Levels 2",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 2",
+  "Maps" : [
+    ["ButtonLeftProgramKnob", "PrevChannel"],
+    ["ButtonRightProgramKnob", "NextChannel"],
+
+    ["Slider1", "Level2"],
+    ["Slider2", "EGAttack2"],
+    ["Slider3", "EGRelease2"],
+    ["Slider4", "Pitch2"],
+    ["Slider5", "ModAmount2"],
+    ["Slider6", "ModRate2"],
+    ["Knob1", "Select2"],
+    ["Button1", "Arm:Slider1,Knob1"],
+    ["Button2", "Arm:Slider2,Knob2"],
+    ["Button3", "Arm:Slider3,Knob3"],
+    ["Button4", "Arm:Slider4,Knob4"],
+    ["Button5", "Arm:Slider5,Knob5"],
+    ["Button6", "Arm:Slider6,Knob6"],
+
+    ["Slider7", "DryGain"],
+    ["Slider8", "Decay"],
+    ["Slider9", "Drive"],
+
+    ["Knob2", "BitReduction"],
+    ["Knob3", "Fold"],
+    ["Knob4", "Send"],
+    ["Knob5", "WaveGuideModel"],
+    ["Knob6", "Tune"],
+    ["Button9", "Arm:Knob2,Knob3,Knob4,Knob5,Knob6,Slider7,Slider8,Slider9"]
+  ]
+}
+{
+  "Title" : "Drums Levels 1m2",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI 2",
+  "Maps" : [
+    ["ButtonLeftProgramKnob", "PrevChannel"],
+    ["ButtonRightProgramKnob", "NextChannel"],
+
+    ["Slider1", "Level1m2"],
+    ["Slider2", "EGAttack1m2"],
+    ["Slider3", "EGRelease1m2"],
+    ["Slider4", "Pitch1m2"],
+    ["Slider5", "ModAmount1m2"],
+    ["Slider6", "ModRate1m2"],
+    ["Knob1", "Select1m2"],
+
+    ["Button1", "Arm:Slider1,Knob1"],
+    ["Button2", "Arm:Slider2,Knob2"],
+    ["Button3", "Arm:Slider3,Knob3"],
+    ["Button4", "Arm:Slider4,Knob4"],
+    ["Button5", "Arm:Slider5,Knob5"],
+    ["Button6", "Arm:Slider6,Knob6"],
+
+    ["Slider7", "DryGain"],
+    ["Slider8", "Decay"],
+    ["Slider9", "Drive"],
+
+    ["Knob2", "BitReduction"],
+    ["Knob3", "Fold"],
+    ["Knob4", "Send"],
+    ["Knob5", "WaveGuideModel"],
+    ["Knob6", "Tune"],
+    ["Button9", "Arm:Knob2,Knob3,Knob4,Knob5,Knob6,Slider7,Slider8,Slider9"]
+  ]
+}

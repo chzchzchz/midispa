@@ -59,16 +59,32 @@ func (s *Seq) processEvent() error {
 	outName, outCh := a.InToOut(inName)
 	sysDevId := 0x10
 	switch outName {
+	case "NextChannel":
+		if val > 0 {
+			if s.outChan = (s.outChan + 1) % 16; s.outChan == 0 {
+				s.outChan = 1
+			}
+			log.Println("set channel to", s.outChan)
+		}
+		return nil
+	case "PrevChannel":
+		if val > 0 {
+			if s.outChan = s.outChan - 1; s.outChan < 1 {
+				s.outChan = 16
+			}
+			log.Println("set channel to", s.outChan)
+		}
+		return nil
 	case "MasterBalance":
 		v := float32(val) * (((1 << 14) - 1) / 127.0)
 		mb := sysex.MasterBalance{DeviceId: sysDevId, Balance: int(v)}
-		log.Println("setting master balance to", mb.Balance)
+		log.Println("set master balance to", mb.Balance)
 		return s.aseq.Write(
 			alsa.SeqEvent{SeqAddr: a.saOut, Data: mb.Encode()})
 	case "MasterVolume":
 		v := float32(val) * (((1 << 14) - 1) / 127.0)
 		mv := sysex.MasterVolume{DeviceId: sysDevId, Volume: int(v)}
-		log.Println("setting master volume to", mv.Volume)
+		log.Println("set master volume to", mv.Volume)
 		return s.aseq.Write(
 			alsa.SeqEvent{SeqAddr: a.saOut, Data: mv.Encode()})
 	case "Dump":
@@ -83,7 +99,7 @@ func (s *Seq) processEvent() error {
 		log.Println(inName, "->", outName, "=", val, "; ch =", outCh)
 		outCC, ok := s.mcs[a.OutDevice].Set(outName, val)
 		if !ok {
-			log.Printf("missing cc outName=%s on device %s\n",
+			log.Printf("missing cc=%d outName=%s on device %q\n",
 				outCC, outName, a.OutDevice)
 			return nil
 		}
@@ -94,7 +110,7 @@ func (s *Seq) processEvent() error {
 		}
 		return s.aseq.Write(ev)
 	}
-	if outName != "" {
+	if outName != "" && cc > -1 {
 		// Write input CC to output CC
 		return writef()
 	}
