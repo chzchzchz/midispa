@@ -48,7 +48,6 @@ func MustLoadSampleBank(libPath string) *SampleBank {
 				log.Printf("error loading %q: %v", f, err)
 			} else {
 				s.ADSR = &adsr
-				s.Normalize()
 				outc <- s
 			}
 		}(files[i])
@@ -74,17 +73,19 @@ func (s *Sample) Resample(sampleHz int) {
 	if s.rate == sampleHz {
 		return
 	}
+	log.Printf("resampling %s from %d to %d", s.Name, s.rate, sampleHz)
 	ratio := float64(sampleHz) / float64(s.rate)
 	newSamples := int(float64(len(s.data)) * ratio)
 	newData := make([]float32, newSamples)
 	newData[0] = s.data[0]
-	for i := 0; i < newSamples; i++ {
+	for i := range newData {
 		fi, fj := float64(i-1)*1.0/ratio, float64(i)*1.0/ratio
 		ii, ij := int(fi), int(fj)
 		alpha := float32(fi - float64(ii))
 		newData[i] = (alpha*s.data[ii] + (1.0-alpha)*s.data[ij]) / 2.0
 	}
-	s.rate, s.data = sampleHz, s.data
+	s.rate, s.data = sampleHz, newData
+	s.Normalize()
 }
 
 func (s *Sample) Normalize() {

@@ -1,7 +1,6 @@
 package jack
 
 import (
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -76,11 +75,7 @@ func NewJackPort(cn, extName string, fl uint64, f JackProcessCallback) (*Port, e
 		}
 	}()
 
-	j.portInternal = j.Client.PortRegister(
-		fmt.Sprintf("%s-%s", j.clientName, extName),
-		jack.DEFAULT_AUDIO_TYPE,
-		fl,
-		8192)
+	j.portInternal = j.Client.PortRegister(extName, jack.DEFAULT_AUDIO_TYPE, fl, 8192)
 
 	if srcs := j.ports(j.extName); len(srcs) > 0 {
 		if err := j.connectExternal(srcs[0]); err != nil {

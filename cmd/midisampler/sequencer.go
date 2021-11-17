@@ -67,11 +67,11 @@ func midiLoop(aseq *alsa.Seq) {
 		case 0x90: /* note on */
 			note, vel := int(ev.Data[1]), int(ev.Data[2])
 			s := pgm.Note2Sample(note)
-			log.Println("got note", note, "/", vel, "in", pgm.Instrument, ch)
 			if s == nil {
 				log.Println("could not find note", note, "in", pgm.Instrument, ch)
 				continue
 			}
+			log.Printf("got note %d/%d@%d from %s/%q", note, vel, ch, pgm.Instrument, s.Name)
 			lastDuration = s.Duration
 			if controls.updated {
 				s.ADSR = makeADSR(controls, s.Duration)

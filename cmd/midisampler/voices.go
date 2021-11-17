@@ -15,7 +15,7 @@ type voicedSample struct {
 
 var lastWas0 = false
 var soundOff = false
-var masterVolume float32
+var masterVolume = float32(1.0)
 
 func playVoices(s []float32) {
 	// Copy voices to avoid threading problems.
