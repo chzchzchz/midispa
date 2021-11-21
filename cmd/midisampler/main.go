@@ -41,9 +41,10 @@ func main() {
 	log.Printf("loading sample bank from %q", *spathFlag)
 	sampBank = MustLoadSampleBank(*spathFlag)
 	sampleHz := wp.Client.GetSampleRate()
-	log.Println("resampling to", sampleHz, "sample rate")
+	log.Println("resampling to", sampleHz, "sample rate and normalizing")
 	for _, s := range sampBank.slice {
 		s.Resample(int(sampleHz))
+		s.Normalize()
 	}
 	log.Println("loading programs and banks")
 	pm, err := LoadProgramMap(filepath.Join(*configPath, "programs.json"))

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,12 +86,10 @@ func (s *Sample) Resample(sampleHz int) {
 		newData[i] = (alpha*s.data[ii] + (1.0-alpha)*s.data[ij]) / 2.0
 	}
 	s.rate, s.data = sampleHz, newData
-	s.Normalize()
 }
 
 func (s *Sample) Normalize() {
-	var min float32
-	var max float32
+	min, max := float32(math.MaxFloat32), float32(-math.MaxFloat32)
 	for _, v := range s.data {
 		if v > max {
 			max = v
