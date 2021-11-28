@@ -10,8 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chzchzchz/midispa/util"
 	"github.com/go-audio/wav"
+
+	"github.com/chzchzchz/midispa/ladspa"
+	"github.com/chzchzchz/midispa/util"
 )
 
 type Sample struct {
@@ -74,7 +76,6 @@ func (s *Sample) Resample(sampleHz int) {
 	if s.rate == sampleHz {
 		return
 	}
-	log.Printf("resampling %s from %d to %d", s.Name, s.rate, sampleHz)
 	ratio := float64(sampleHz) / float64(s.rate)
 	newSamples := int(float64(len(s.data)) * ratio)
 	newData := make([]float32, newSamples)
@@ -85,6 +86,22 @@ func (s *Sample) Resample(sampleHz int) {
 		alpha := float32(fi - float64(ii))
 		newData[i] = (alpha*s.data[ii] + (1.0-alpha)*s.data[ij]) / 2.0
 	}
+
+	p, err := ladspa.LowPassFilter(sampleHz)
+	if err != nil {
+		log.Printf("resampled %s from %d to %d", s.Name, s.rate, sampleHz)
+		s.rate, s.data = sampleHz, newData
+		return
+	}
+	defer p.Close()
+
+	hz := float32(s.rate) / 2.0
+	log.Printf("resampled %s from %d to %d; lpf %dHz", s.Name, s.rate, sampleHz, int(hz))
+	p.Connect("Input", &newData[0])
+	p.Connect("Output", &newData[0])
+	p.Connect("Cutoff Frequency (Hz)", &hz)
+	p.Run(len(newData))
+
 	s.rate, s.data = sampleHz, newData
 }
 
