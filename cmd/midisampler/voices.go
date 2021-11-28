@@ -4,68 +4,73 @@ import (
 	"sync"
 )
 
-type voicedSample struct {
-	*Sample
-	adsrState *adsrCycleState
-	remaining []float32 // slice from sample
-	velocity  float32
+type Voices struct {
+	lastWas0 bool
+	soundOff bool
 
-	mu sync.RWMutex
+	mu     sync.Mutex
+	voices map[*voicedSample]struct{}
+
+	voicesCopy []*voicedSample
+
+	fx *Fx
 }
 
-var lastWas0 = false
-var soundOff = false
-var masterVolume = float32(1.0)
-
-func playVoices(s []float32) {
-	// Copy voices to avoid threading problems.
-	// TODO: move outside loop, copy when voice is sounded.
-	voicesCopy := copyVoices()
-	// Check if only writing out zeroes.
-	if len(voicesCopy) > 0 && !soundOff {
-		lastWas0 = false
+func newVoices(sampleRate int) *Voices {
+	fx, err := NewFx(sampleRate)
+	if err != nil {
+		panic(err)
 	}
-	if lastWas0 {
+	return &Voices{
+		voices: make(map[*voicedSample]struct{}),
+		fx:     fx,
+	}
+}
+
+var masterVolume = float32(1.0)
+var bufferSize = 1024
+
+func (vv *Voices) play(s []float32) {
+	// Copy voices to avoid threading conflicts.
+	vv.mu.Lock()
+	voicesCopy := vv.voicesCopy
+	vv.mu.Unlock()
+
+	// Check if only writing out zeroes.
+	if len(voicesCopy) > 0 && !vv.soundOff {
+		vv.lastWas0 = false
+	}
+	if vv.lastWas0 {
 		return
 	}
 	for i := 0; i < len(s); i++ {
 		s[i] = 0
+		vv.fx.revBuffer[i], vv.fx.choBuffer[i] = 0, 0
 	}
-	if len(voicesCopy) == 0 || soundOff {
-		lastWas0 = true
+	if len(voicesCopy) == 0 || vv.soundOff {
+		vv.lastWas0 = true
 		return
 	}
+
 	// Apply all voices to sample buffer.
 	for _, vs := range voicesCopy {
-		copyLen := len(s)
-		if copyLen > len(vs.remaining) {
-			copyLen = len(vs.remaining)
-		}
-		if vs.adsrState == nil {
-			for i := 0; i < copyLen; i++ {
-				s[i] += vs.velocity * vs.remaining[i]
-			}
-		} else {
-			for i := 0; i < copyLen; i++ {
-				s[i] += vs.adsrState.Apply(vs.remaining[i])
-			}
-		}
-
-		if len(vs.remaining) <= len(s) {
-			vs.remaining = nil
-		} else {
-			vs.remaining = vs.remaining[len(s):]
+		for i, v := range vs.step() {
+			s[i] += v
+			vv.fx.revBuffer[i] += vs.ReverbSendLevel * v
+			vv.fx.choBuffer[i] += vs.ChorusSendLevel * v
 		}
 	}
+
+	// Apply chorus and reverb effects.
+	vv.fx.Run(s)
+
+	// Apply master volume.
 	for i := range s {
 		s[i] *= masterVolume
 	}
 }
 
-var voicesMu sync.Mutex
-var voices map[*voicedSample]struct{} = make(map[*voicedSample]struct{})
-
-func addVoice(s *Sample, vel float32) {
+func (vv *Voices) add(s *Sample, vel float32, fxlvl *FxLevel) {
 	var as *adsrCycleState
 	if s.ADSR != nil {
 		ac := s.Cycles(float64(s.rate))
@@ -73,52 +78,91 @@ func addVoice(s *Sample, vel float32) {
 		as = &a
 	}
 	vs := &voicedSample{
-		Sample:    s,
-		adsrState: as,
-		remaining: s.data,
-		velocity:  vel,
+		Sample:       s,
+		adsrState:    as,
+		remaining:    s.data,
+		velocity:     vel,
+		directBuffer: make([]float32, bufferSize),
+		FxLevel:      fxlvl,
 	}
-	voicesMu.Lock()
-	voices[vs] = struct{}{}
-	voicesMu.Unlock()
+	vv.mu.Lock()
+	vv.voices[vs] = struct{}{}
+	vv.mu.Unlock()
+
+	vv.copyVoices()
 }
 
-func stopVoice(s *Sample) {
-	voicesMu.Lock()
-	for vs := range voices {
+func (vv *Voices) stop(s *Sample) {
+	vv.mu.Lock()
+	for vs := range vv.voices {
 		if vs.Sample == s {
 			if vs.adsrState != nil {
 				vs.adsrState.Off()
 			} else {
-				delete(voices, vs)
+				delete(vv.voices, vs)
 			}
 		}
 	}
-	voicesMu.Unlock()
+	vv.mu.Unlock()
+	vv.copyVoices()
 }
 
-func stopVoices() {
-	voicesMu.Lock()
-	for vs := range voices {
+func (vv *Voices) stopAll() {
+	vv.mu.Lock()
+	for vs := range vv.voices {
 		if vs.adsrState != nil {
 			vs.adsrState.Off()
 		} else {
-			delete(voices, vs)
+			delete(vv.voices, vs)
 		}
 	}
-	voicesMu.Unlock()
+	vv.mu.Unlock()
+	vv.copyVoices()
 }
 
-func copyVoices() (ret []*voicedSample) {
-	voicesMu.Lock()
-	voicesCopy := make([]*voicedSample, 0, len(voices))
-	for vs := range voices {
+func (vv *Voices) copyVoices() {
+	vv.mu.Lock()
+	vv.voicesCopy = make([]*voicedSample, 0, len(vv.voices))
+	for vs := range vv.voices {
 		if vs.remaining == nil {
-			delete(voices, vs)
+			delete(vv.voices, vs)
 			continue
 		}
-		voicesCopy = append(voicesCopy, vs)
+		vv.voicesCopy = append(vv.voicesCopy, vs)
 	}
-	voicesMu.Unlock()
-	return voicesCopy
+	vv.mu.Unlock()
+}
+
+type voicedSample struct {
+	*Sample
+	adsrState    *adsrCycleState
+	remaining    []float32 // slice from sample
+	directBuffer []float32 // holds sample data before fx
+
+	velocity float32
+	*FxLevel
+
+	mu sync.RWMutex
+}
+
+func (vs *voicedSample) step() []float32 {
+	copyLen := len(vs.directBuffer)
+	if copyLen > len(vs.remaining) {
+		copyLen = len(vs.remaining)
+	}
+	if vs.adsrState == nil {
+		for i := 0; i < copyLen; i++ {
+			vs.directBuffer[i] = vs.velocity * vs.remaining[i]
+		}
+	} else {
+		for i := 0; i < copyLen; i++ {
+			vs.directBuffer[i] = vs.adsrState.Apply(vs.remaining[i])
+		}
+	}
+	if len(vs.remaining) <= len(vs.directBuffer) {
+		vs.remaining = nil
+	} else {
+		vs.remaining = vs.remaining[len(vs.directBuffer):]
+	}
+	return vs.directBuffer[:copyLen]
 }

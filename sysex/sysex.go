@@ -29,6 +29,8 @@ func DecodeRealTime(data []byte) interface{} {
 			return MasterVolumeFromSysEx(data)
 		case DeviceControlIdMasterBalance:
 			return MasterBalanceFromSysEx(data)
+		case DeviceControlIdGlobalParameterControl:
+			return GlobalParameterControlFromSysEx(data)
 		}
 	}
 	return nil

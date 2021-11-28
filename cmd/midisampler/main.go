@@ -12,12 +12,6 @@ import (
 	"github.com/chzchzchz/midispa/jack"
 )
 
-func playCallback(s []j.AudioSample) int {
-	x := *(*[]float32)(unsafe.Pointer(&s))
-	playVoices(x)
-	return 0
-}
-
 func main() {
 	configPath := flag.String("config-path", "./", "path to configuration")
 	spathFlag := flag.String("samples-path", "./dat/samples", "path to samples")
@@ -27,6 +21,15 @@ func main() {
 	flag.Parse()
 
 	// Create jack instance.
+	var vv *Voices
+	playCallback := func(s []j.AudioSample) int {
+		// TODO: have a pipeline that copies buffers into this one
+		x := *(*[]float32)(unsafe.Pointer(&s))
+		if vv != nil {
+			vv.play(x)
+		}
+		return 0
+	}
 	wp, err := jack.NewWritePort(*cnFlag, *sinkPortFlag, playCallback)
 	if err != nil {
 		panic(err)
@@ -46,6 +49,9 @@ func main() {
 		s.Resample(int(sampleHz))
 		s.Normalize()
 	}
+	bufferSize = int(wp.Client.GetBufferSize())
+	vv = newVoices(int(sampleHz))
+
 	log.Println("loading programs and banks")
 	pm, err := LoadProgramMap(filepath.Join(*configPath, "programs.json"))
 	if err != nil {
@@ -59,7 +65,7 @@ func main() {
 		log.Println("no banks.json defined, making a bank with known programs")
 		bank = BankFromProgramMap(pm)
 	}
-	currentBank = bank
+	s := NewSequencer(bank)
 	log.Println("waiting on midi events")
-	midiLoop(aseq)
+	s.midiLoop(aseq, vv)
 }

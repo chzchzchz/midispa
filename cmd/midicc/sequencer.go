@@ -87,6 +87,22 @@ func (s *Seq) processEvent() error {
 		log.Println("set master volume to", mv.Volume)
 		return s.aseq.Write(
 			alsa.SeqEvent{SeqAddr: a.saOut, Data: mv.Encode()})
+	case "ChorusModRate":
+		msg := sysex.ChorusModRate{
+			DeviceId: 0x7f,
+			ModRate:  float32(val) / 127.0 * (127.0 * 0.122),
+		}
+		log.Println("chorus mod rate set to", msg.ModRate)
+		return s.aseq.Write(
+			alsa.SeqEvent{SeqAddr: a.saOut, Data: msg.Encode()})
+	case "ChorusSendToReverb":
+		msg := sysex.ChorusSendToReverb{
+			DeviceId:     0x7f,
+			SendToReverb: float32(val) / 127.0,
+		}
+		log.Println("send chorus to reverb set to", msg.SendToReverb)
+		return s.aseq.Write(
+			alsa.SeqEvent{SeqAddr: a.saOut, Data: msg.Encode()})
 	case "Dump":
 		panic("stub")
 	case "Load":

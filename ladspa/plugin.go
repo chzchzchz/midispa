@@ -28,6 +28,7 @@ type Port struct {
 	Output  bool
 	Control bool
 	Audio   bool
+	Value   *float32
 	// todo: port hints
 }
 
@@ -85,6 +86,19 @@ func NewPlugin(lib string, sampleRate int) (*Plugin, error) {
 	}
 
 	return p, nil
+}
+
+func (p *Plugin) Control(name string) *float32 {
+	idx, ok := p.name2port[name]
+	if !ok {
+		return nil
+	} else if ret := p.Ports[idx].Value; ret != nil {
+		return ret
+	}
+	ret := float32(0)
+	p.Ports[idx].Value = &ret
+	p.Connect(name, &ret)
+	return &ret
 }
 
 func (p *Plugin) Connect(name string, data *float32) {

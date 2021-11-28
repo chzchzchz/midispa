@@ -9,8 +9,11 @@ import (
 )
 
 var sampBank *SampleBank
-var channels [16]Channel
-var currentBank *Bank
+
+type sequencer struct {
+	channels    [16]*Channel
+	currentBank *Bank
+}
 
 func lagrangeScale(v float64) float64 {
 	return 0.25*((v*(v-127.0))/(64.0*(64.0-127.0))) +
@@ -23,35 +26,32 @@ func makeADSR(c *Controls, td time.Duration) *ADSR {
 	return &ADSR{
 		Attack:  time.Duration(d * lagrangeScale(float64(c.AttackTime))),
 		Decay:   time.Duration(d * lagrangeScale(float64(c.DecayTime))),
-		Sustain: float32(c.SustainLevel) / 127.0,
+		Sustain: scale(c.SustainLevel),
 		Release: time.Duration(d * lagrangeScale(float64(c.ReleaseTime))),
 	}
 }
 
-func midiLoop(aseq *alsa.Seq) {
-	lastDuration := time.Second
-	for i := range channels {
-		ch := &channels[i]
-		if ch.Program = currentBank.programs[i]; ch.Program == nil {
-			continue
+func NewSequencer(b *Bank) *sequencer {
+	s := &sequencer{currentBank: b}
+	for i := range s.channels {
+		ch := NewChannel()
+		s.channels[i] = ch
+		if ch.Program = s.currentBank.programs[i]; ch.Program != nil {
+			log.Printf("setting channel %d to program %q", i, ch.Program.Instrument)
 		}
-		log.Printf("setting channel %d to program %q", i, ch.Program.Instrument)
-		ch.Volume = 1.0
-		// TODO: load controls from programs
-		ch.Controls.Volume = 127
-		ch.Controls.SustainLevel = 127
-		ch.Controls.AttackTime = 10
-		ch.Controls.DecayTime = 10
-		ch.Controls.SustainLevel = 64
-		ch.Controls.ReleaseTime = 20
 	}
+	return s
+}
+
+func (s *sequencer) midiLoop(aseq *alsa.Seq, vv *Voices) {
+	lastDuration := time.Second
 	for {
 		ev, err := aseq.Read()
 		if err != nil {
 			panic(err)
 		}
 		cmd, ch := ev.Data[0]&0xf0, int(ev.Data[0]&0xf)
-		channel := &channels[ch]
+		channel := s.channels[ch]
 		pgm := channel.Program
 		if pgm == nil {
 			log.Printf("no pgm set for ch=%d, ignoring midi %+v", ch, ev)
@@ -62,7 +62,7 @@ func midiLoop(aseq *alsa.Seq) {
 		case 0x80:
 			/* note off */
 			if s := pgm.Note2Sample(int(ev.Data[1])); s != nil {
-				stopVoice(s)
+				vv.stop(s)
 			}
 		case 0x90: /* note on */
 			note, vel := int(ev.Data[1]), int(ev.Data[2])
@@ -73,13 +73,11 @@ func midiLoop(aseq *alsa.Seq) {
 			}
 			log.Printf("got note %d/%d@%d from %s/%q", note, vel, ch, pgm.Instrument, s.Name)
 			lastDuration = s.Duration
-			if controls.updated {
+			if channel.UpdateControls() {
 				s.ADSR = makeADSR(controls, s.Duration)
-				channel.Volume = float32(controls.Volume) / 127.0
 				log.Printf("adsr set to %+v on %q", *s.ADSR, s.Name)
-				controls.updated = false
 			}
-			addVoice(s, channel.Volume*float32(vel)/127.0)
+			vv.add(s, channel.Volume*scale(vel), &channel.FxLevel)
 		case 0xb0: /* cc */
 			cc, val := int(ev.Data[1]), int(ev.Data[2])
 			// TODO use controls code from midicc
@@ -90,10 +88,10 @@ func midiLoop(aseq *alsa.Seq) {
 			}
 			switch cc {
 			case AllSoundOffCC:
-				soundOff = val != 0
+				vv.soundOff = val != 0
 			case AllNotesOffCC:
 				if val > 0 {
-					stopVoices()
+					vv.stopAll()
 				}
 			default:
 				log.Printf("unrecognized control message %+v", ev)
@@ -108,6 +106,12 @@ func midiLoop(aseq *alsa.Seq) {
 			case *sysex.MasterVolume:
 				masterVolume = ss.Float32()
 				log.Println("setting master volume to", masterVolume)
+			case *sysex.ChorusSendToReverb:
+				vv.fx.SendToReverb = ss.SendToReverb
+				log.Println("setting send to reverb to", ss.SendToReverb)
+			case *sysex.ChorusModRate:
+				*vv.fx.ChorusModRate = ss.ModRate
+				log.Println("setting chorus mod rate to ", ss.ModRate)
 			default:
 				log.Printf("? sysex %+v", s)
 			}

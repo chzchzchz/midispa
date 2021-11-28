@@ -291,6 +291,19 @@ type GMController struct {
 	ChannelBalance       int `midicc:"8"`
 	Pan                  int `midicc:"10"`
 	ExpressionController int `midicc:"11"`
+
+	SoundVariation  int `midicc:"70"`
+	FilterResonance int `midicc:"71"`
+	ReleaseTime     int `midicc:"72"`
+	AttackTime      int `midicc:"73"`
+	Brightness      int `midicc:"74"`
+	DecayTime       int `midicc:"75"`
+	VibratoRate     int `midicc:"76"`
+	VibratoDepth    int `midicc:"77"`
+	VibratoDelay    int `midicc:"78"`
+
+	ReverbSendLevel int `midicc:"91"`
+	ChorusSendLevel int `midicc:"93"`
 }
 
 type Model struct {

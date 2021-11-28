@@ -1,12 +1,12 @@
 {
  "Device": "midisampler",
- "Model": "GM Controller",
- "GMController": {"ChannelVolume": 127, "Pan" : 64}
+ "Model": "Sound Controller",
+ "SoundController": {}
 }
 {
  "Device": "midisampler",
- "Model": "Sound Controller",
- "SoundController": {}
+ "Model": "GM Controller",
+ "GMController": {"ChannelVolume": 127, "Pan" : 64}
 }
 {
  "Device": "WORLDE easy control MIDI 1",
