@@ -146,6 +146,12 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 				0x80 | byte(note.channel),
 				byte(note.note),
 				byte(note.velocity)}
+		case C.SND_SEQ_EVENT_START:
+			ret.Data = []byte{0xfa}
+		case C.SND_SEQ_EVENT_CONTINUE:
+			ret.Data = []byte{0xfb}
+		case C.SND_SEQ_EVENT_STOP:
+			ret.Data = []byte{0xfc}
 		default:
 			continue
 		}
@@ -163,13 +169,14 @@ func (a *Seq) Write(ev SeqEvent) error {
 	event.dest.client, event.dest.port = ev.CAddrValues()
 	event.queue = C.SND_SEQ_QUEUE_DIRECT
 	// event.dest.client, event.dest.port = C.SND_SEQ_ADDRESS_SUBSCRIBERS, C.SND_SEQ_ADDRESS_UNKNOWN
-	if ev.Data[0] == 0xf0 {
+	switch {
+	case ev.Data[0] == 0xf0:
 		event._type = C.SND_SEQ_EVENT_SYSEX
 		event.flags = C.SND_SEQ_EVENT_LENGTH_VARIABLE
 		ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
 		ext.len = C.uint(len(ev.Data))
 		C.snd_seq_ev_ext_data_set(ext, (*C.uchar)(&ev.Data[0]))
-	} else if ev.Data[0]&0xf0 == 0xb0 {
+	case ev.Data[0]&0xf0 == 0xb0:
 		if len(ev.Data) != 3 {
 			panic("bad length")
 		}
@@ -178,7 +185,28 @@ func (a *Seq) Write(ev SeqEvent) error {
 		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
 		ctrl.param = C.uint(ev.Data[1])
 		ctrl.value = C.int(ev.Data[2])
-	} else {
+	case ev.Data[0] == 0xfa:
+		if len(ev.Data) != 1 {
+			panic("bad size for START")
+		}
+		event._type = C.SND_SEQ_EVENT_START
+		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
+		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	case ev.Data[0] == 0xfb:
+		if len(ev.Data) != 1 {
+			panic("bad size for CONTINUE")
+		}
+		event._type = C.SND_SEQ_EVENT_CONTINUE
+		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
+		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	case ev.Data[0] == 0xfc:
+		if len(ev.Data) != 1 {
+			panic("bad size for STOP")
+		}
+		event._type = C.SND_SEQ_EVENT_STOP
+		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
+		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	default:
 		panic("unknown midi data")
 	}
 	return snderr2error(C.snd_seq_event_output_direct(a.seq, &event))
