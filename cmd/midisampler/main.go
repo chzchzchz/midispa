@@ -18,6 +18,8 @@ func main() {
 	spathFlag := flag.String("samples-path", "./dat/samples", "path to samples")
 	cnFlag := flag.String("client-name", "midisampler", "midi and jack client name")
 	sinkPortFlag := flag.String("sink-port", "system:playback", "jack sink port names; comma delimited")
+	midiInputPortFlag := flag.String("midi-in-port", "", "subscribe to given existing port")
+
 	// NB: Set sink server via JACK_DEFAULT_SERVER
 	flag.Parse()
 
@@ -37,11 +39,24 @@ func main() {
 		panic(err)
 	}
 	defer wp.Close()
+
 	// Create midi sequencer for reading events from controllers.
 	aseq, err := alsa.OpenSeq(*cnFlag)
 	if err != nil {
 		panic(err)
 	}
+	if len(*midiInputPortFlag) > 0 {
+		log.Printf("looking up input midi address %q", *midiInputPortFlag)
+		sa, err := aseq.PortAddress(*midiInputPortFlag)
+		if err != nil {
+			panic(err)
+		}
+		log.Printf("listening on input midi port %v", sa)
+		if err := aseq.OpenPort(sa.Client, sa.Port); err != nil {
+			panic(err)
+		}
+	}
+
 	// Load directories for sample wav files.
 	log.Printf("loading sample bank from %q", *spathFlag)
 	sampBank = MustLoadSampleBank(*spathFlag)
