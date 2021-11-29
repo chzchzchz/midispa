@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"path/filepath"
+	"strings"
 	"unsafe"
 
 	j "github.com/xthexder/go-jack"
@@ -16,7 +17,7 @@ func main() {
 	configPath := flag.String("config-path", "./", "path to configuration")
 	spathFlag := flag.String("samples-path", "./dat/samples", "path to samples")
 	cnFlag := flag.String("client-name", "midisampler", "midi and jack client name")
-	sinkPortFlag := flag.String("sink-port", "system:playback_1", "jack sink port name")
+	sinkPortFlag := flag.String("sink-port", "system:playback", "jack sink port names; comma delimited")
 	// NB: Set sink server via JACK_DEFAULT_SERVER
 	flag.Parse()
 
@@ -30,7 +31,8 @@ func main() {
 		}
 		return 0
 	}
-	wp, err := jack.NewWritePort(*cnFlag, *sinkPortFlag, playCallback)
+	pc := jack.PortConfig{*cnFlag, "out", strings.Split(*sinkPortFlag, ",")}
+	wp, err := jack.NewWritePort(pc, playCallback)
 	if err != nil {
 		panic(err)
 	}
