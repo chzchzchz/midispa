@@ -34,21 +34,21 @@ func NewFx(rate int) (*Fx, error) {
 	rev.Connect("Input", &revBuffer[0])
 	rev.Connect("Output", &revBuffer[0])
 
-	*rev.Control("Delay Time (s)") = 0.1
-	*rev.Control("Dry Level (dB)") = -10.0
-	*rev.Control("Wet Level (dB)") = 3.0
-	*rev.Control("Feedback") = 0.3
-	*rev.Control("Crossfade samples") = 128
+	*rev.Control("Delay Time (s)") = 0.050
+	*rev.Control("Dry Level (dB)") = 0.0
+	*rev.Control("Wet Level (dB)") = 0.0
+	*rev.Control("Feedback") = 0.05
+	*rev.Control("Crossfade samples") = 64
 
 	choBuffer := make([]float32, bufferSize)
 	cho.Connect("Input", &choBuffer[0])
 	cho.Connect("Output", &choBuffer[0])
 
 	*cho.Control("Number of voices") = 3.0
-	*cho.Control("Delay base (ms)") = 5
-	*cho.Control("Voice separation (ms)") = 5
+	*cho.Control("Delay base (ms)") = 6.3
+	*cho.Control("Voice separation (ms)") = 1.0
 	*cho.Control("Detune (%)") = 1
-	*cho.Control("LFO frequency (Hz)") = 10.0
+	*cho.Control("LFO frequency (Hz)") = 1.1
 	*cho.Control("Output attenuation (dB)") = -10.0
 
 	return &Fx{
