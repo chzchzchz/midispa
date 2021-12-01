@@ -97,7 +97,10 @@ func (a *Seq) OpenPortName(portName string) error {
 	return a.OpenPort(sa.Client, sa.Port)
 }
 
-func (a *Seq) PortAddress(portName string) (SeqAddr, error) {
+func (a *Seq) PortAddress(portName string) (sa SeqAddr, err error) {
+	if n, _ := fmt.Sscanf(portName, "%d:%d", &sa.Client, &sa.Port); n == 2 {
+		return sa, nil
+	}
 	devs, err := a.Devices()
 	if err != nil {
 		return SeqAddr{-1, -1}, err
