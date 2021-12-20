@@ -188,6 +188,24 @@ func (a *Seq) Write(ev SeqEvent) error {
 		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
 		ctrl.param = C.uint(ev.Data[1])
 		ctrl.value = C.int(ev.Data[2])
+	case ev.Data[0]&0xf0 == 0x80:
+		if len(ev.Data) != 3 {
+			panic("bad length")
+		}
+		event._type = C.SND_SEQ_EVENT_NOTEOFF
+		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
+		ctrl.note = C.uchar(ev.Data[1])
+		ctrl.velocity = C.uchar(ev.Data[2])
+	case ev.Data[0]&0xf0 == 0x90:
+		if len(ev.Data) != 3 {
+			panic("bad length")
+		}
+		event._type = C.SND_SEQ_EVENT_NOTEON
+		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
+		ctrl.note = C.uchar(ev.Data[1])
+		ctrl.velocity = C.uchar(ev.Data[2])
 	case ev.Data[0] == 0xfa:
 		if len(ev.Data) != 1 {
 			panic("bad size for START")
