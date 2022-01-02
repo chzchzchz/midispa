@@ -9,7 +9,9 @@ import (
 type Program struct {
 	Instrument string
 	Volume     float32
-	Notes      map[int]*Sample
+	Path       string
+	// loaded from json only if using per-sample ADSRs
+	Notes map[int]*Sample
 }
 
 type ProgramMap map[string]*Program
@@ -23,7 +25,7 @@ func (pm ProgramMap) Instruments() []string {
 	return ret
 }
 
-func LoadProgramMap(path string) (ProgramMap, error) {
+func LoadProgramMap(path string, sb *SampleBank) (ProgramMap, error) {
 	ret := make(ProgramMap)
 	f, err := os.Open(path)
 	if err != nil {
@@ -35,6 +37,20 @@ func LoadProgramMap(path string) (ProgramMap, error) {
 		p := &Program{}
 		if err := dec.Decode(p); err != nil {
 			return nil, err
+		}
+		if p.Notes == nil {
+			// No notes, load from path.
+			p.Notes = make(map[int]*Sample)
+			pathSamples := sb.ByPrefix(p.Path)
+			for i, s := range pathSamples {
+				note := (i + midiMiddleC) - len(pathSamples)/2
+				p.Notes[note] = s
+			}
+		} else if p.Path != "" {
+			panic("instrument " + p.Instrument + " had path and notes")
+		}
+		if _, ok := ret[p.Instrument]; ok {
+			panic("instrument " + p.Instrument + " defined twice")
 		}
 		ret[p.Instrument] = p
 	}

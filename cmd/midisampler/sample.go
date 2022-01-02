@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,6 +67,16 @@ func MustLoadSampleBank(libPath string) *SampleBank {
 	return sb
 }
 
+func (sb *SampleBank) ByPrefix(pfx string) (ret []*Sample) {
+	for _, v := range sb.slice {
+		if strings.HasPrefix(v.Name, pfx) {
+			ret = append(ret, v)
+		}
+	}
+	sort.Sort(sampleSlice(ret))
+	return ret
+}
+
 type sampleSlice []*Sample
 
 func (ss sampleSlice) Len() int           { return len(ss) }
@@ -81,7 +92,10 @@ func (s *Sample) Resample(sampleHz int) {
 	newData := make([]float32, newSamples)
 	newData[0] = s.data[0]
 	for i := range newData {
-		fi, fj := float64(i-1)*1.0/ratio, float64(i)*1.0/ratio
+		fi, fj := float64(i-1)/ratio, float64(i)/ratio
+		if fi < 0 {
+			fi = 0
+		}
 		ii, ij := int(fi), int(fj)
 		alpha := float32(fi - float64(ii))
 		newData[i] = (alpha*s.data[ii] + (1.0-alpha)*s.data[ij]) / 2.0
@@ -131,7 +145,8 @@ func LoadSample(name, path string) (*Sample, error) {
 	if err != nil {
 		return nil, err
 	}
-	if format := dec.Format(); format.NumChannels != 1 {
+	format := dec.Format()
+	if format.NumChannels == 0 {
 		return nil, fmt.Errorf("bad format %+v", *format)
 	}
 	pcm, err := dec.FullPCMBuffer()
@@ -139,9 +154,21 @@ func LoadSample(name, path string) (*Sample, error) {
 		return nil, err
 	}
 	pcmf32 := pcm.AsFloat32Buffer()
+	mono := pcmf32.Data
+	if format.NumChannels > 1 {
+		log.Printf("downmixing %q to single channel", name)
+		mono = make([]float32, len(pcmf32.Data)/format.NumChannels)
+		for i := range mono {
+			v := float32(0)
+			for j := 0; j < format.NumChannels; j++ {
+				v += pcmf32.Data[i*format.NumChannels+j]
+			}
+			mono[i] = v / float32(format.NumChannels)
+		}
+	}
 	s := &Sample{
 		Duration: dur,
-		data:     pcmf32.Data,
+		data:     mono,
 		rate:     pcm.Format.SampleRate,
 		Name:     name,
 	}

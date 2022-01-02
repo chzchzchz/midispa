@@ -1,0 +1,10 @@
+{
+	"Instrument" : "sine tones",
+	"Volume" : 1.0,
+	"Path" : "sine"
+}
+{
+	"Instrument" : "metronome",
+	"Volume" : 1.0,
+	"Path" : "clicks"
+}

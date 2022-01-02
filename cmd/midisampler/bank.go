@@ -1,7 +1,8 @@
 package main
 
 import (
-	"io"
+	"encoding/json"
+	"os"
 )
 
 type Bank struct {
@@ -11,7 +12,26 @@ type Bank struct {
 }
 
 func LoadBank(path string, pm ProgramMap) (*Bank, error) {
-	return nil, io.EOF
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	dec := json.NewDecoder(f)
+	b := &Bank{}
+	if err := dec.Decode(b); err != nil {
+		return nil, err
+	}
+	b.programs = make(map[int]*Program)
+	for k, v := range b.Programs {
+		p := pm[v]
+		if p == nil {
+			panic("could not find program " + v)
+		}
+		// subtract 1 so json can have mapping to drum channel 10
+		b.programs[k-1] = pm[v]
+	}
+	return b, nil
 }
 
 func BankFromProgramMap(pm ProgramMap) *Bank {

@@ -68,7 +68,7 @@ func (s *sequencer) midiLoop(aseq *alsa.Seq, vv *Voices) {
 			note, vel := int(ev.Data[1]), int(ev.Data[2])
 			s := pgm.Note2Sample(note)
 			if s == nil {
-				log.Println("could not find note", note, "in", pgm.Instrument, ch)
+				log.Printf("could not find note %d@%d in %q", note, ch, pgm.Instrument)
 				continue
 			}
 			log.Printf("got note %d/%d@%d from %s/%q", note, vel, ch, pgm.Instrument, s.Name)

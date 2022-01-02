@@ -69,10 +69,10 @@ func main() {
 	bufferSize = int(wp.Client.GetBufferSize())
 	vv = newVoices(int(sampleHz))
 
-	log.Println("loading programs and banks")
-	pm, err := LoadProgramMap(filepath.Join(*configPath, "programs.json"))
+	log.Println("loading programs and banks from configuration path", *configPath)
+	pm, err := LoadProgramMap(filepath.Join(*configPath, "programs.json"), sampBank)
 	if err != nil {
-		log.Println("no programs.json defined, making one from global sample bank")
+		log.Printf("failed to load programs.json (%v), making one from global sample bank", err)
 		p := ProgramFromSampleBank(sampBank)
 		pm = make(ProgramMap)
 		pm[p.Instrument] = p
