@@ -15,7 +15,7 @@ type FileDumpRequest struct {
 	Name     string
 }
 
-func (f *FileDumpRequest) Encode() []byte {
+func (f *FileDumpRequest) MarshalBinary() ([]byte, error) {
 	ret := []byte{
 		0xF0, IdNonRealTime, byte(f.DeviceId),
 		SubIdFileDump, FileDumpIdRequest,
@@ -27,7 +27,7 @@ func (f *FileDumpRequest) Encode() []byte {
 	ret = append(ret, []byte(f.Type)...)
 	ret = append(ret, []byte(f.Name)...)
 	ret = append(ret, 0xf7)
-	return ret
+	return ret, nil
 }
 
 func FileDumpRequestFromSysEx(data []byte) *FileDumpRequest {
@@ -44,7 +44,7 @@ type FileDumpHeader struct {
 	Length int
 }
 
-func (f *FileDumpHeader) Encode() []byte {
+func (f *FileDumpHeader) MarshalBinary() ([]byte, error) {
 	ret := []byte{
 		0xF0, IdNonRealTime, byte(f.DeviceId),
 		SubIdFileDump, FileDumpIdRequest,
@@ -57,7 +57,7 @@ func (f *FileDumpHeader) Encode() []byte {
 	ret = append(ret, encode7bitInt(f.Length, 4)...)
 	ret = append(ret, []byte(f.Name)...)
 	ret = append(ret, 0xf7)
-	return ret
+	return ret, nil
 }
 
 func FileDumpHeaderFromSysEx(data []byte) *FileDumpHeader {
@@ -78,7 +78,7 @@ type FileDumpDataPacket struct {
 	Data     []byte
 }
 
-func (f *FileDumpDataPacket) Encode() []byte {
+func (f *FileDumpDataPacket) MarshalBinary() ([]byte, error) {
 	ret := []byte{
 		0xF0, IdNonRealTime, byte(f.DeviceId),
 		SubIdFileDump, FileDumpIdDataPacket,
@@ -112,7 +112,7 @@ func (f *FileDumpDataPacket) Encode() []byte {
 	}
 	ret = append(ret, chksum)
 	ret = append(ret, 0xf7)
-	return ret
+	return ret, nil
 }
 
 func FileDumpDataPacketFromSysEx(data []byte) *FileDumpDataPacket {

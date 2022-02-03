@@ -27,7 +27,7 @@ type ChorusParameters struct {
 	Value     int
 }
 
-func (r *ChorusParameters) Encode() []byte {
+func (r *ChorusParameters) marshalBinary() ([]byte, error) {
 	return []byte{
 		0xf0, IdRealTime, byte(r.DeviceId),
 		SubIdDeviceControl, DeviceControlIdGlobalParameterControl,
@@ -36,7 +36,7 @@ func (r *ChorusParameters) Encode() []byte {
 		byte(r.Parameter),
 		byte(r.Value),
 		0xf7,
-	}
+	}, nil
 }
 
 type ChorusType struct {
@@ -44,13 +44,13 @@ type ChorusType struct {
 	Type     int
 }
 
-func (rt *ChorusType) Encode() []byte {
-	rp := ChorusParameters{
-		DeviceId:  rt.DeviceId,
+func (ct *ChorusType) MarshalBinary() ([]byte, error) {
+	cp := ChorusParameters{
+		DeviceId:  ct.DeviceId,
 		Parameter: ChorusParameterType,
-		Value:     rt.Type,
+		Value:     ct.Type,
 	}
-	return rp.Encode()
+	return cp.marshalBinary()
 }
 
 type ChorusModRate struct {
@@ -58,13 +58,13 @@ type ChorusModRate struct {
 	ModRate  float32 // hz; * 0.122
 }
 
-func (cm *ChorusModRate) Encode() []byte {
+func (cm *ChorusModRate) MarshalBinary() ([]byte, error) {
 	cp := ChorusParameters{
 		DeviceId:  cm.DeviceId,
 		Parameter: ChorusParameterModRate,
 		Value:     int(cm.ModRate / 0.122),
 	}
-	return cp.Encode()
+	return cp.marshalBinary()
 }
 
 type ChorusModDepth struct {
@@ -72,13 +72,13 @@ type ChorusModDepth struct {
 	ModDepth time.Duration // val + 1 / 3.2; peak-to-peak swing time in ms
 }
 
-func (cm *ChorusModDepth) Encode() []byte {
+func (cm *ChorusModDepth) MarshalBinary() ([]byte, error) {
 	cp := ChorusParameters{
 		DeviceId:  cm.DeviceId,
 		Parameter: ChorusParameterModDepth,
 		Value:     int(float32(cm.ModDepth/time.Millisecond) / 3.2),
 	}
-	return cp.Encode()
+	return cp.marshalBinary()
 }
 
 type ChorusFeedback struct {
@@ -86,12 +86,12 @@ type ChorusFeedback struct {
 	Feedback float32 // val * 0.763; pct
 }
 
-func (rt *ChorusFeedback) Encode() []byte {
-	rp := ChorusParameters{
-		DeviceId:  rt.DeviceId,
+func (cf *ChorusFeedback) MarshalBinary() ([]byte, error) {
+	cp := ChorusParameters{
+		DeviceId:  cf.DeviceId,
 		Parameter: ChorusParameterFeedback,
 	}
-	return rp.Encode()
+	return cp.marshalBinary()
 }
 
 type ChorusSendToReverb struct {
@@ -99,11 +99,11 @@ type ChorusSendToReverb struct {
 	SendToReverb float32 // val * 0.787; send level in pct
 }
 
-func (rt *ChorusSendToReverb) Encode() []byte {
-	rp := ChorusParameters{
-		DeviceId:  rt.DeviceId,
+func (cs *ChorusSendToReverb) MarshalBinary() ([]byte, error) {
+	cp := ChorusParameters{
+		DeviceId:  cs.DeviceId,
 		Parameter: ChorusParameterSendToReverb,
-		Value:     int((rt.SendToReverb * 100.0) / 0.787),
+		Value:     int((cs.SendToReverb * 100.0) / 0.787),
 	}
-	return rp.Encode()
+	return cp.marshalBinary()
 }

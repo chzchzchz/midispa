@@ -14,7 +14,7 @@ type Handshake struct {
 	Packet   int
 }
 
-func (h *Handshake) Encode() []byte {
+func (h *Handshake) MarshalBinary() ([]byte, error) {
 	if h.SubId == 0 {
 		panic("bad sub id")
 	}
@@ -22,7 +22,7 @@ func (h *Handshake) Encode() []byte {
 		0xF0, IdNonRealTime, byte(h.DeviceId),
 		byte(h.SubId), byte(h.Packet),
 		0xf7,
-	}
+	}, nil
 }
 
 func HandshakeFromSysEx(data []byte) *Handshake {

@@ -79,30 +79,30 @@ func (s *Seq) processEvent() error {
 		v := float32(val) * (((1 << 14) - 1) / 127.0)
 		mb := sysex.MasterBalance{DeviceId: sysDevId, Balance: int(v)}
 		log.Println("set master balance to", mb.Balance)
-		return s.aseq.Write(
-			alsa.SeqEvent{SeqAddr: a.saOut, Data: mb.Encode()})
+		msg, _ := mb.MarshalBinary()
+		return s.aseq.Write(alsa.SeqEvent{SeqAddr: a.saOut, Data: msg})
 	case "MasterVolume":
 		v := float32(val) * (((1 << 14) - 1) / 127.0)
 		mv := sysex.MasterVolume{DeviceId: sysDevId, Volume: int(v)}
 		log.Println("set master volume to", mv.Volume)
-		return s.aseq.Write(
-			alsa.SeqEvent{SeqAddr: a.saOut, Data: mv.Encode()})
+		msg, _ := mv.MarshalBinary()
+		return s.aseq.Write(alsa.SeqEvent{SeqAddr: a.saOut, Data: msg})
 	case "ChorusModRate":
-		msg := sysex.ChorusModRate{
+		cmr := sysex.ChorusModRate{
 			DeviceId: 0x7f,
 			ModRate:  float32(val) / 127.0 * (127.0 * 0.122),
 		}
-		log.Println("chorus mod rate set to", msg.ModRate)
-		return s.aseq.Write(
-			alsa.SeqEvent{SeqAddr: a.saOut, Data: msg.Encode()})
+		log.Println("chorus mod rate set to", cmr.ModRate)
+		msg, _ := cmr.MarshalBinary()
+		return s.aseq.Write(alsa.SeqEvent{SeqAddr: a.saOut, Data: msg})
 	case "ChorusSendToReverb":
-		msg := sysex.ChorusSendToReverb{
+		cs2r := sysex.ChorusSendToReverb{
 			DeviceId:     0x7f,
 			SendToReverb: float32(val) / 127.0,
 		}
-		log.Println("send chorus to reverb set to", msg.SendToReverb)
-		return s.aseq.Write(
-			alsa.SeqEvent{SeqAddr: a.saOut, Data: msg.Encode()})
+		log.Println("send chorus to reverb set to", cs2r.SendToReverb)
+		msg, _ := cs2r.MarshalBinary()
+		return s.aseq.Write(alsa.SeqEvent{SeqAddr: a.saOut, Data: msg})
 	case "Dump":
 		panic("stub")
 	case "Load":

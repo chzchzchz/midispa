@@ -23,22 +23,22 @@ type MasterBalance struct {
 	Balance  int
 }
 
-func (m *MasterBalance) Encode() []byte {
+func (m *MasterBalance) MarshalBinary() ([]byte, error) {
 	v := encode7bitInt(m.Balance, 2)
 	return []byte{
 		0xf0, IdRealTime, byte(m.DeviceId),
 		SubIdDeviceControl, DeviceControlIdMasterBalance,
 		v[0], v[1],
-		0xf7}
+		0xf7}, nil
 }
 
-func (m *MasterVolume) Encode() []byte {
+func (m *MasterVolume) MarshalBinary() ([]byte, error) {
 	v := encode7bitInt(m.Volume, 2)
 	return []byte{
 		0xf0, IdRealTime, byte(m.DeviceId),
 		SubIdDeviceControl, DeviceControlIdMasterVolume,
 		v[0], v[1],
-		0xf7}
+		0xf7}, nil
 }
 
 func MasterVolumeFromSysEx(data []byte) *MasterVolume {

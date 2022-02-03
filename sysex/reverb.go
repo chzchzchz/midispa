@@ -25,7 +25,7 @@ type ReverbParameters struct {
 	Value     int
 }
 
-func (r *ReverbParameters) Encode() []byte {
+func (r *ReverbParameters) marshalBinary() ([]byte, error) {
 	return []byte{
 		0xf0, IdRealTime, byte(r.DeviceId),
 		SubIdDeviceControl, DeviceControlIdGlobalParameterControl,
@@ -34,7 +34,7 @@ func (r *ReverbParameters) Encode() []byte {
 		byte(r.Parameter),
 		byte(r.Value),
 		0xf7,
-	}
+	}, nil
 }
 
 type ReverbType struct {
@@ -42,13 +42,13 @@ type ReverbType struct {
 	Type     int
 }
 
-func (rt *ReverbType) Encode() []byte {
+func (rt *ReverbType) MarshalBinary() ([]byte, error) {
 	rp := ReverbParameters{
 		DeviceId:  rt.DeviceId,
 		Parameter: ReverbParameterType,
 		Value:     rt.Type,
 	}
-	return rp.Encode()
+	return rp.marshalBinary()
 }
 
 type ReverbTime struct {
@@ -56,11 +56,11 @@ type ReverbTime struct {
 	Time     time.Duration
 }
 
-func (rt *ReverbTime) Encode() []byte {
+func (rt *ReverbTime) MarshalBinary() ([]byte, error) {
 	rp := ReverbParameters{
 		DeviceId:  rt.DeviceId,
 		Parameter: ReverbParameterTime,
 		Value:     int(math.Log(rt.Time.Seconds())/0.025 + 40),
 	}
-	return rp.Encode()
+	return rp.marshalBinary()
 }
