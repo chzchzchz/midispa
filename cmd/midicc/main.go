@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/cc"
 )
 
 func main() {
@@ -15,10 +16,10 @@ func main() {
 	}
 	dms := mustLoadDeviceModels(os.Args[1])
 	devs := make(map[string]*DeviceModel)
-	mcs := make(MidiControlsMap)
+	mcs := make(cc.MidiControlsMap)
 	for i, m := range dms {
 		devs[m.Device] = &dms[i]
-		mcs[m.Device] = append(mcs[m.Device], NewMidiControls(m.MidiParams()))
+		mcs[m.Device] = append(mcs[m.Device], cc.NewMidiControls(m.MidiParams()))
 	}
 
 	assigns := mustLoadAssignments(os.Args[2])

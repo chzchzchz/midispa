@@ -7,12 +7,12 @@ import (
 type DrumSet [12]Drum
 
 type Drum struct {
-	SoundNumber  int // 0-232
-	OutputSelect bool
-	Volume       int // 0-99
-	Panning      int // 0=left,3=center,6=right
-	Assignment   int //0-3; multi, single, group1, group2
-	Tuning       int // 0=-4, 4=0, 7=+3
+	SoundNumber  int  // 0-232
+	OutputSelect bool // false = main
+	Volume       int  // 0-99
+	Panning      int  // 0=left,3=center,6=right
+	Assignment   int  //0-3; multi, single, group1, group2
+	Tuning       int  // 0=-4, 4=0, 7=+3
 }
 
 func (d *Drum) encode() ([]byte, error) {
@@ -56,8 +56,8 @@ func (ds *DrumSet) MarshalBinary() ([]byte, error) {
 	// 0-6 transmitted in the second MIDI byte.
 	var payload []byte
 	for _, v := range drums {
-		payload = append(payload, (v&0x80)>>7)
 		payload = append(payload, v&0x7f)
+		payload = append(payload, (v&0x80)>>7)
 	}
 	if len(payload) != 72 {
 		panic("payload unexpected length")
@@ -71,4 +71,16 @@ func (ds *DrumSet) MarshalBinary() ([]byte, error) {
 	data = append(data, payload...)
 	data = append(data, 0xf7)
 	return data, nil
+}
+
+type DrumSetRequest struct{}
+
+func (ds *DrumSetRequest) MarshalBinary() ([]byte, error) {
+	return []byte{
+		0xf0,             // sysex
+		0x00, 0x00, 0x0e, // alesis
+		0x05, // sr-16
+		0x0a, // request drumset data
+		0xf7,
+	}, nil
 }

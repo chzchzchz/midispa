@@ -89,6 +89,10 @@ func (a *Seq) OpenPortWrite(sa SeqAddr) error {
 	return snderr2error(C.snd_seq_connect_to(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
 }
 
+func (a *Seq) ClosePortWrite(sa SeqAddr) error {
+	return snderr2error(C.snd_seq_disconnect_to(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+}
+
 func (a *Seq) OpenPortName(portName string) error {
 	sa, err := a.PortAddress(portName)
 	if err != nil {

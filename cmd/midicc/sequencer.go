@@ -4,13 +4,14 @@ import (
 	"log"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/cc"
 	"github.com/chzchzchz/midispa/sysex"
 )
 
 type Seq struct {
 	aseq    *alsa.Seq
 	savef   func()
-	mcs     MidiControlsMap
+	mcs     cc.MidiControlsMap
 	assigns []Assignments
 	outChan int
 

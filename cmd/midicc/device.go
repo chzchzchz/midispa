@@ -3,13 +3,15 @@ package main
 import (
 	"encoding/json"
 	"os"
+
+	"github.com/chzchzchz/midispa/cc"
 )
 
 type DeviceModel struct {
 	Device  string
 	Name    string
 	Channel int
-	Model
+	cc.Model
 }
 
 func mustLoadDeviceModels(path string) (m []DeviceModel) {

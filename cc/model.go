@@ -1,4 +1,4 @@
-package main
+package cc
 
 type VolcaBeats struct {
 	KickLevel      int `midicc:"40"`
