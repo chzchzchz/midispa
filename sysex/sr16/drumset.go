@@ -42,6 +42,19 @@ func (d *Drum) encode() ([]byte, error) {
 	}, nil
 }
 
+func (d *Drum) UnmarshalBinary(data []byte) error {
+	if len(data) != 3 {
+		return fmt.Errorf("wrong length")
+	}
+	d.SoundNumber = int(data[0])
+	d.OutputSelect = (data[1] & 0x80) == 1
+	d.Volume = int(data[1] & ((1 << 6) - 1))
+	d.Tuning = int(data[2] & 0x7)
+	d.Assignment = int((data[2] >> 3) & 0x3)
+	d.Panning = int((data[2] >> 5) & 0x7)
+	return nil
+}
+
 func (ds *DrumSet) MarshalBinary() ([]byte, error) {
 	var drums []byte
 	for _, d := range ds {
@@ -71,6 +84,26 @@ func (ds *DrumSet) MarshalBinary() ([]byte, error) {
 	data = append(data, payload...)
 	data = append(data, 0xf7)
 	return data, nil
+}
+
+func (ds *DrumSet) UnmarshalBinary(data []byte) error {
+	if len(data) < 72+1+6 {
+		return fmt.Errorf("data wrong length")
+	}
+	if !isHeaderOK(data) || data[5] != 8 {
+		return fmt.Errorf("bad header")
+	}
+	for i := range ds {
+		payload := data[6+(i*6) : 6+((i+1)*6)]
+		msg := make([]byte, 3)
+		for j := range msg {
+			msg[j] = payload[2*j] | (payload[2*j+1] << 7)
+		}
+		if err := ds[i].UnmarshalBinary(msg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type DrumSetRequest struct{}

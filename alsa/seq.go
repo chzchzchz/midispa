@@ -85,12 +85,20 @@ func (a *Seq) OpenPort(client, port int) error {
 	return snderr2error(C.snd_seq_connect_from(a.seq, 0, C.int(client), C.int(port)))
 }
 
+func (a *Seq) OpenPortRead(sa SeqAddr) error {
+	return snderr2error(C.snd_seq_connect_from(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+}
+
 func (a *Seq) OpenPortWrite(sa SeqAddr) error {
 	return snderr2error(C.snd_seq_connect_to(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
 }
 
 func (a *Seq) ClosePortWrite(sa SeqAddr) error {
 	return snderr2error(C.snd_seq_disconnect_to(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+}
+
+func (a *Seq) ClosePortRead(sa SeqAddr) error {
+	return snderr2error(C.snd_seq_disconnect_from(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
 }
 
 func (a *Seq) OpenPortName(portName string) error {
@@ -164,7 +172,6 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 		}
 		return ret, nil
 	}
-	return ret, nil
 }
 
 func (a *Seq) Write(ev SeqEvent) error {

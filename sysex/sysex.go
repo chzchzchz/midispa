@@ -1,5 +1,9 @@
 package sysex
 
+import (
+	"fmt"
+)
+
 const (
 	// add vendor id's when supported
 
@@ -74,4 +78,20 @@ func encode7bitInt(v, w int) []byte {
 		panic("value exceeded width")
 	}
 	return ret
+}
+
+type SysEx struct { Data []byte }
+
+func (se *SysEx) UnmarshalBinary(data []byte) error {
+	if len(data) < 2 {
+		return fmt.Errorf("not enough data")
+	}
+	if data[0] != 0xf0 {
+		return fmt.Errorf("bad sysex header")
+	}
+	if data[len(data)-1] != 0xf7 {
+		return fmt.Errorf("missing eox")
+	}
+	se.Data = data
+	return nil
 }
