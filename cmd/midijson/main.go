@@ -20,6 +20,11 @@ type httpHandler struct {
 	mu sync.RWMutex
 }
 
+func replyJSON(resp http.ResponseWriter, iface interface{}) error {
+	resp.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(resp).Encode(iface)
+}
+
 func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	errReply := func(err error) {
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -31,14 +36,6 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 			log.Printf("error recovered %q", r)
 		}
 	}()
-
-	replyJSON := func(iface interface{}) {
-		resp.Header().Set("Content-Type", "application/json")
-		enc := json.NewEncoder(resp)
-		if err := enc.Encode(iface); err != nil {
-			errReply(err)
-		}
-	}
 
 	switch req.Method {
 	case http.MethodPost:
@@ -95,33 +92,13 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 			}
 			defer h.aseq.ClosePortRead(sa)
 		}
-		if err := h.aseq.Write(alsa.SeqEvent{sa, msg}); err != nil {
+		rws := rwSysEx{h.aseq, sa, msg, sysexIface, req.URL.Path}
+		inSysEx, err := rws.doAllSysEx()
+		if err != nil {
 			errReply(err)
 		}
-		log.Printf("wrote sysex for %q", req.URL.Path)
-
 		if isRead {
-			var msg []byte
-			// TODO: timeout if read takes too long
-			for {
-				ev, err := h.aseq.Read()
-				if err != nil {
-					errReply(err)
-				}
-				log.Printf("%+v", ev)
-				msg = append(msg, ev.Data...)
-				if msg[len(msg)-1] == 0xf7 {
-					break
-				}
-			}
-			bu, ok := sysexIface.(encoding.BinaryUnmarshaler)
-			if !ok {
-				errReply(fmt.Errorf("content %q not binary unmarshaller", accept))
-			}
-			if err := bu.UnmarshalBinary(msg); err != nil {
-				errReply(err)
-			}
-			replyJSON(sysexIface)
+			replyJSON(resp, inSysEx)
 		} else {
 			resp.WriteHeader(http.StatusOK)
 		}
@@ -130,7 +107,9 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		if err != nil {
 			errReply(err)
 		}
-		replyJSON(d)
+		if err := replyJSON(resp, d); err != nil {
+			errReply(err)
+		}
 	default:
 		resp.WriteHeader(http.StatusMethodNotAllowed)
 	}

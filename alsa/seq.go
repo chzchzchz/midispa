@@ -125,6 +125,10 @@ func (a *Seq) PortAddress(portName string) (sa SeqAddr, err error) {
 	return SeqAddr{-1, -1}, io.EOF
 }
 
+func (a *Seq) MayRead() bool {
+	return C.snd_seq_event_input_pending(a.seq, 1) > 0
+}
+
 func (a *Seq) Read() (ret SeqEvent, err error) {
 	var event *C.snd_seq_event_t
 	for {

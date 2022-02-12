@@ -7,17 +7,27 @@ import (
 	"reflect"
 
 	"github.com/chzchzchz/midispa/sysex"
+	"github.com/chzchzchz/midispa/sysex/arturia"
 	"github.com/chzchzchz/midispa/sysex/sr16"
+	"github.com/chzchzchz/midispa/sysex/stanton"
 )
 
 var reflectMap = map[string]interface{}{
-	"sysex/sr16/DrumSet":        &sr16.DrumSet{},
-	"sysex/sr16/DrumSetRequest": &sr16.DrumSetRequest{},
-	"sysex/sr16/DumpRequest":    &sr16.DumpRequest{},
-	"sysex/sr16/Dump":           &sr16.Dump{},
-	"sysex/SysEx":               &sysex.SysEx{},
-	"sysex/MasterBalance":       &sysex.MasterBalance{},
-	"sysex/MasterVolume":        &sysex.MasterVolume{},
+	"sysex/sr16/DrumSet":                    &sr16.DrumSet{},
+	"sysex/sr16/DrumSetRequest":             &sr16.DrumSetRequest{},
+	"sysex/sr16/DumpRequest":                &sr16.DumpRequest{},
+	"sysex/sr16/Dump":                       &sr16.Dump{},
+	"sysex/SysEx":                           &sysex.SysEx{},
+	"sysex/MasterBalance":                   &sysex.MasterBalance{},
+	"sysex/MasterVolume":                    &sysex.MasterVolume{},
+	"sysex/arturia/keystep37/PatternsDump":  &arturia.PatternsDump{},
+	"sysex/DeviceInquiryRequest":            &sysex.DeviceInquiryRequest{DeviceId: sysex.DeviceInquiryCallAll},
+	"sysex/DeviceInquiryResponse":           &sysex.DeviceInquiryResponse{},
+	"sysex/stanton/scs3d/SlidersMode":       &stanton.SlidersMode{},
+	"sysex/stanton/scs3d/ButtonsMode":       &stanton.ButtonsMode{},
+	"sysex/stanton/scs3d/ButtonsLeftMode":   &stanton.ButtonsLeftMode{},
+	"sysex/stanton/scs3d/ButtonsRightMode":  &stanton.ButtonsRightMode{},
+	"sysex/stanton/scs3d/CompatibilityMode": &stanton.CompatibilityMode{},
 }
 
 func readReflectedJson(ty string, r io.Reader) (interface{}, error) {
