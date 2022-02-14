@@ -27,6 +27,9 @@ func replyJSON(resp http.ResponseWriter, iface interface{}) error {
 
 func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	errReply := func(err error) {
+		if err == nil {
+			return
+		}
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(err.Error()))
 		panic(err)
@@ -43,35 +46,27 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		devName, ty := pathParts[1], strings.Join(pathParts[2:], "/")
 		defer req.Body.Close()
 		rty, err := readReflectedJson(ty, req.Body)
-		if err != nil {
-			errReply(err)
-		}
+		errReply(err)
 		bm, ok := rty.(encoding.BinaryMarshaler)
 		if !ok {
 			errReply(fmt.Errorf("couldn't binary marshal %s", req.URL.Path))
 		}
 		msg, err := bm.MarshalBinary()
-		if err != nil {
-			errReply(err)
-		}
+		errReply(err)
 
 		accept := req.Header.Get("Accept")
 		isRead := false
 		var sysexIface interface{}
 		if accept != "" {
 			mt, params, err := mime.ParseMediaType(accept)
-			if err != nil {
-				errReply(err)
-			}
+			errReply(err)
 			if isRead = mt == "application/json"; isRead {
 				content, ok := params["content"]
 				if !ok {
 					errReply(fmt.Errorf("no decode type given"))
 				}
 				sysexIface, err = copyTypeInterface(content)
-				if err != nil {
-					errReply(err)
-				}
+				errReply(err)
 			}
 		}
 
@@ -79,24 +74,16 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		defer h.mu.Unlock()
 		// get device, apply sysex
 		sa, err := h.aseq.PortAddress(devName)
-		if err != nil {
-			errReply(err)
-		}
-		if err := h.aseq.OpenPortWrite(sa); err != nil {
-			errReply(err)
-		}
+		errReply(err)
+		errReply(h.aseq.OpenPortWrite(sa))
 		defer h.aseq.ClosePortWrite(sa)
 		if isRead {
-			if err := h.aseq.OpenPortRead(sa); err != nil {
-				errReply(err)
-			}
+			errReply(h.aseq.OpenPortRead(sa))
 			defer h.aseq.ClosePortRead(sa)
 		}
 		rws := rwSysEx{h.aseq, sa, msg, sysexIface, req.URL.Path}
 		inSysEx, err := rws.doAllSysEx()
-		if err != nil {
-			errReply(err)
-		}
+		errReply(err)
 		if isRead {
 			replyJSON(resp, inSysEx)
 		} else {
@@ -104,12 +91,8 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		}
 	case http.MethodGet:
 		d, err := alsa.Devices()
-		if err != nil {
-			errReply(err)
-		}
-		if err := replyJSON(resp, d); err != nil {
-			errReply(err)
-		}
+		errReply(err)
+		errReply(replyJSON(resp, d))
 	default:
 		resp.WriteHeader(http.StatusMethodNotAllowed)
 	}

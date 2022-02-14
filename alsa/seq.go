@@ -12,10 +12,12 @@ void snd_seq_ev_ext_data_set(snd_seq_ev_ext_t* ext, uint8_t* v) { ext->ptr = v; 
 import "C"
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"unsafe"
 )
+
+var errExpectedSysEx = errors.New("expected sysex")
 
 type Seq struct {
 	seq *C.snd_seq_t
@@ -122,11 +124,28 @@ func (a *Seq) PortAddress(portName string) (sa SeqAddr, err error) {
 			return dev.SeqAddr, nil
 		}
 	}
-	return SeqAddr{-1, -1}, io.EOF
+	return SeqAddr{-1, -1}, fmt.Errorf("port %q not found", portName)
 }
 
 func (a *Seq) MayRead() bool {
 	return C.snd_seq_event_input_pending(a.seq, 1) > 0
+}
+
+func (a *Seq) ReadSysEx() (ret SeqEvent, err error) {
+	for {
+		ev, err := a.Read()
+		if err != nil {
+			return ret, err
+		}
+		if len(ret.Data) == 0 && ev.Data[0] != 0xf0 {
+			return ret, errExpectedSysEx
+		}
+		ret.SeqAddr, ret.Data = ev.SeqAddr, append(ret.Data, ev.Data...)
+		if ret.Data[len(ret.Data)-1] == 0xf7 {
+			break
+		}
+	}
+	return ret, nil
 }
 
 func (a *Seq) Read() (ret SeqEvent, err error) {

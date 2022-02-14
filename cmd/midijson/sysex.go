@@ -20,7 +20,6 @@ type rwSysEx struct {
 }
 
 func (rws *rwSysEx) doAllSysEx() ([]interface{}, error) {
-	log.Println("do all sysex")
 	s := sysex.SysEx{Data: rws.out}
 	sp, err := s.Split()
 	if err != nil {
@@ -59,25 +58,16 @@ func (rws *rwSysEx) doAllSysEx() ([]interface{}, error) {
 func (rws *rwSysEx) read() (ins []interface{}, err error) {
 	// TODO: timeout if read takes too long
 	readMsg := func() error {
-		var msg []byte
-		for {
-			// TODO: throw away if first read not sysex.
-			ev, err := rws.aseq.Read()
-			if err != nil {
-				return err
-			}
-			log.Printf("%+v", ev)
-			msg = append(msg, ev.Data...)
-			if msg[len(msg)-1] == 0xf7 {
-				break
-			}
+		ev, err := rws.aseq.ReadSysEx()
+		if err != nil {
+			return err
 		}
 		nextIn := reflect.ValueOf(rws.in).Interface()
 		bu, ok := nextIn.(encoding.BinaryUnmarshaler)
 		if !ok {
 			return fmt.Errorf("content not binary unmarshaller")
 		}
-		if err := bu.UnmarshalBinary(msg); err != nil {
+		if err := bu.UnmarshalBinary(ev.Data); err != nil {
 			return err
 		}
 		ins = append(ins, nextIn)

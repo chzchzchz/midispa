@@ -22,30 +22,50 @@ func isHeaderOK(data []byte) bool {
 }
 
 func (d *Dump) UnmarshalBinary(data []byte) error {
-	if !isHeaderOK(data) || data[4] != 0 {
+	if !isHeaderOK(data) || data[5] != 0 {
 		return fmt.Errorf("bad header")
 	}
-	payload := data[5 : len(data)-1]
+	payload := data[6 : len(data)-1]
+	d.Memory = decodeDataBytes(payload)
+	return nil
+}
+
+func encodeDataBytes(payload []byte) (ret []byte) {
 	for i := range payload {
-		blockIdx := i % 8
-		maskHi := byte((1 << (7 - blockIdx)) - 1)
-		maskLo := byte(((1 << blockIdx) - 1) << (7 - blockIdx))
-		hi := (payload[i] & maskHi) << blockIdx
-		lo := (payload[i] & maskLo) >> (7 - blockIdx)
-		if blockIdx > 0 {
-			d.Memory[len(d.Memory)-1] |= lo
+		bidx := i % 7
+		mask := byte((1 << (bidx + 1)) - 1)
+		// the most significant bits of payload[i]
+		hi := (payload[i] & ^mask) >> (bidx + 1)
+		// the least significant bits of payload[i]
+		lo := (payload[i] & mask) << (7 - (bidx + 1))
+		if bidx == 0 {
+			ret = append(ret, hi)
+		} else {
+			ret[len(ret)-1] |= hi
 		}
-		if blockIdx != 7 {
-			d.Memory = append(d.Memory, hi)
+		ret = append(ret, lo)
+	}
+	return ret
+}
+
+func decodeDataBytes(payload []byte) (ret []byte) {
+	decodeBlock := func(v []byte) {
+		for i := 0; i < len(v)-1; i++ {
+			bidx := i % 7
+			hi := v[i] << (bidx + 1)
+			lo := v[i+1] >> (6 - bidx)
+			ret = append(ret, hi|lo)
 		}
 	}
-	return nil
+	for i := 0; i < len(payload); i += 8 {
+		decodeBlock(payload[i : i+8])
+	}
+	return ret
 }
 
 func (d *Dump) MarshalBinary() ([]byte, error) {
 	data := []byte{0xf0, 0, 0, 0xe, 5, 0}
-	// data = append(data, payload...)
-	panic("encoding")
+	data = append(data, encodeDataBytes(d.Memory)...)
 	data = append(data, 0xf7)
 	return data, nil
 }
