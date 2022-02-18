@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/sysex"
 )
 
 var midiPort = os.Getenv("MIDI_PORT")
@@ -20,7 +21,7 @@ func noErr(t *testing.T, err error) {
 func TestEncodeDataBytes(t *testing.T) {
 	plain := []byte{0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff}
 	plain = append(plain, plain...)
-	enc := encodeDataBytes(plain)
+	enc := sysex.LoHiEncodeDataBytes(plain)
 	vals := []byte{0x7f, 0x40, 0x1f, 0x70, 0x07, 0x7c, 0x01, 0x7f}
 	vals = append(vals, vals...)
 	for i := range vals {
@@ -28,7 +29,7 @@ func TestEncodeDataBytes(t *testing.T) {
 			t.Errorf("0x%x = enc[%d] != expected[%d] = 0x%x", enc[i], i, i, vals[i])
 		}
 	}
-	dec := decodeDataBytes(vals)
+	dec := sysex.LoHiDecodeDataBytes(vals)
 	for i := range plain {
 		if dec[i] != plain[i] {
 			t.Errorf("0x%x = dec[%d] != expected[%d] = 0x%x", dec[i], i, i, plain[i])

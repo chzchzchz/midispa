@@ -122,3 +122,40 @@ func (se *SysEx) Split() (ret []SysEx, err error) {
 	}
 	return ret, nil
 }
+
+// 0 A6 ... A0
+// 0 A7 ... B2
+// 0 B1 ... C3
+
+func LoHiEncodeDataBytes(payload []byte) (ret []byte) {
+	for i := range payload {
+		bidx := i % 7
+		mask := byte((1 << (bidx + 1)) - 1)
+		// the most significant bits of payload[i]
+		hi := (payload[i] & ^mask) >> (bidx + 1)
+		// the least significant bits of payload[i]
+		lo := (payload[i] & mask) << (7 - (bidx + 1))
+		if bidx == 0 {
+			ret = append(ret, hi)
+		} else {
+			ret[len(ret)-1] |= hi
+		}
+		ret = append(ret, lo)
+	}
+	return ret
+}
+
+func LoHiDecodeDataBytes(payload []byte) (ret []byte) {
+	decodeBlock := func(v []byte) {
+		for i := 0; i < len(v)-1; i++ {
+			bidx := i % 7
+			hi := v[i] << (bidx + 1)
+			lo := v[i+1] >> (6 - bidx)
+			ret = append(ret, hi|lo)
+		}
+	}
+	for i := 0; i < len(payload); i += 8 {
+		decodeBlock(payload[i : i+8])
+	}
+	return ret
+}
