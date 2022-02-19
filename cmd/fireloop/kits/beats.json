@@ -1,0 +1,14 @@
+{
+  "Name" : "beats",
+  "MidiPort" : "MIDI4x4 MIDI 4",
+  "Channel" : 10,
+  "Voices" : [
+  	{ "Name" : "KICK", "Note": 36},
+	{ "Name" : "SNARE", "Note" : 38},
+	{ "Name" : "CL HAT", "Note" : 42},
+	{ "Name" : "OP HAT", "Note" : 46},
+	{ "Name" : "CLAP", "Note" : 39},
+	{ "Name" : "LO TOM", "Note" : 43},
+	{ "Name" : "HI TOM", "Note" : 50}
+   ]
+}

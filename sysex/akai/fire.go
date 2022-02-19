@@ -51,7 +51,7 @@ func (p *ScreenUpdate) MarshalBinary() (ret []byte, err error) {
 	if p.ColumnStart < 0 || p.ColumnStart >= 128 || p.ColumnEnd < 0 || p.ColumnEnd >= 128 {
 		return nil, ErrDimensions
 	}
-	if p.BandStart < p.BandEnd || p.ColumnStart > p.ColumnEnd {
+	if p.BandStart > p.BandEnd || p.ColumnStart > p.ColumnEnd {
 		return nil, ErrDimensions
 	}
 	bits := (8 * (1 + p.BandEnd - p.BandStart)) * (1 + p.ColumnEnd - p.ColumnStart)
