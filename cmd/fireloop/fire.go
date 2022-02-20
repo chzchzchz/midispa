@@ -19,6 +19,10 @@ var (
 	NoteMute3 = 38
 	NoteMute4 = 39
 
+	// alt, stop
+	LEDYellow    = 1
+	LEDMaxYellow = 2
+
 	// 0 off, 3 max red, 4 max green
 	LEDRed     = 1
 	LEDGreen   = 2

@@ -56,7 +56,22 @@ func (p *PatternBank) Jump(n int) error {
 	return nil
 }
 
+func (p *PatternBank) ClearTrackRow(n int) error {
+	v := p.vb.voices[p.trackVoices[n-1]]
+	p.Patterns[p.selPatIdx].ClearVoice(v)
+	for i := 0; i < 4; i++ {
+		if p.trackVoices[n-1] != p.trackVoices[i] {
+			continue
+		}
+		if err := p.redrawTrackPads(i + 1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *PatternBank) SelectTrackRow(n int) error {
+	// Deselect currently selected row, if any.
 	if p.selTrackRow > 0 {
 		if err := p.f.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
 			return err
@@ -69,6 +84,7 @@ func (p *PatternBank) SelectTrackRow(n int) error {
 		p.selTrackRow = 0
 		return nil
 	}
+	// Select new row.
 	p.selTrackRow = n
 	if err := p.printTrackRow(n, true); err != nil {
 		return err
@@ -169,24 +185,25 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 	return p.f.LightPadColumn(col, rgb)
 }
 
-func (p *PatternBank) ToggleEvent(row, col, v int) error {
+func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 	ev := Event{
 		Voice:    p.vb.voices[p.trackVoices[row]],
 		Beat:     float32(col) / 4.0,
 		Velocity: v,
 	}
-	g := 0
-	if p.Patterns[p.selPatIdx].ToggleEvent(ev) {
-		g = 50
+	g := 50
+	if !p.Patterns[p.selPatIdx].ToggleEvent(ev) {
+		g = 0
+		ev.Velocity = 0
 	}
 	for i := 0; i < 4; i++ {
 		if p.trackVoices[i] == p.trackVoices[row] {
 			if err := p.f.LightPad(col, i, 0, g, 0); err != nil {
-				return err
+				return ev, err
 			}
 		}
 	}
-	return nil
+	return ev, nil
 }
 
 type VoiceBank struct {

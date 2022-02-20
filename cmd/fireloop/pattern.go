@@ -56,3 +56,16 @@ func (p *Pattern) FindBeat(beat float32) (ret []Event) {
 	p.mu.RUnlock()
 	return ret
 }
+
+func (p *Pattern) ClearVoice(v *Voice) {
+	p.mu.Lock()
+	j := 0
+	for i := 0; i < len(p.Events); i++ {
+		if p.Events[i].Voice != v {
+			p.Events[j] = p.Events[i]
+			j++
+		}
+	}
+	p.Events = p.Events[:j]
+	p.mu.Unlock()
+}

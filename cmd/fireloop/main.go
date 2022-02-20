@@ -16,9 +16,18 @@ func must(err error) {
 }
 
 var shiftOn = false
+var altOn = false
 var pendingNumber = 0
 var bpm = 139
 var cancelPlayback context.CancelFunc
+
+func handleMute(n int) error {
+	if altOn {
+		patbank.ClearTrackRow(n)
+		return patbank.Jump(0)
+	}
+	return patbank.SelectTrackRow(n)
+}
 
 func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	fmt.Printf("%+v\n", ev)
@@ -32,11 +41,14 @@ func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		switch int(ev.Data[1]) {
 		case NoteShift:
 			shiftOn = false
-			if pendingNumber < 300 {
+			if pendingNumber > 20 && pendingNumber < 300 {
 				bpm = pendingNumber
+				pendingNumber = 0
+				return patbank.Jump(0)
 			}
-			pendingNumber = 0
-			return patbank.Jump(0)
+		case NoteAlt:
+			altOn = false
+			return patbank.f.SetLed(NoteAlt, 0)
 		}
 		return nil
 	}
@@ -51,7 +63,7 @@ func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 			if pendingNumber > 999 {
 				pendingNumber = 0
 			}
-			addend := (3*y + x%3) + 1
+			addend := (3*y + ((x % 4) % 3)) + 1
 			if y == 3 {
 				addend = 0
 			}
@@ -62,7 +74,17 @@ func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 			s := fmt.Sprintf("Tempo: %03d", pendingNumber)
 			return patbank.f.Print(4, 3, s)
 		}
-		return patbank.ToggleEvent(y, x, int(ev.Data[2]))
+		patEv, err := patbank.ToggleEvent(y, x, int(ev.Data[2]))
+		if err != nil {
+			return err
+		}
+		if cancelPlayback != nil {
+			return nil
+		}
+		if patEv.Velocity > 0 {
+			return writeMidiMsgs(aseq, patEv.device.SeqAddr, patEv.ToMidi())
+		}
+		return nil
 	}
 	switch int(ev.Data[1]) {
 	case NoteShift:
@@ -73,15 +95,21 @@ func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	case NotePatternDown:
 		return patbank.Jump(-1)
 	case NoteAlt:
-		return patbank.f.Off()
+		altOn = true
+		if err := patbank.f.SetLed(NoteAlt, 1); err != nil {
+			return err
+		}
+		if shiftOn {
+			return patbank.f.Off()
+		}
 	case NoteMute1:
-		return patbank.SelectTrackRow(1)
+		return handleMute(1)
 	case NoteMute2:
-		return patbank.SelectTrackRow(2)
+		return handleMute(2)
 	case NoteMute3:
-		return patbank.SelectTrackRow(3)
+		return handleMute(3)
 	case NoteMute4:
-		return patbank.SelectTrackRow(4)
+		return handleMute(4)
 	case CCSelect:
 		dir := 1
 		if int(ev.Data[2]) == EncoderLeft {

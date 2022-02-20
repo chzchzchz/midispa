@@ -14,6 +14,16 @@ func startSequencer(aseq *alsa.Seq) {
 	go runSequencer(ctx, aseq)
 }
 
+func writeMidiMsgs(aseq *alsa.Seq, sa alsa.SeqAddr, msgs [][]byte) error {
+	for _, msg := range msgs {
+		err := aseq.Write(alsa.SeqEvent{sa, msg})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func runSequencer(ctx context.Context, aseq *alsa.Seq) error {
 	var curPattern *Pattern
 	var curBeat float32
@@ -39,13 +49,9 @@ func runSequencer(ctx context.Context, aseq *alsa.Seq) error {
 				nextBeat = evs[i].Beat
 				break
 			}
-			// Send out this event.
 			msgs := evs[i].ToMidi()
-			for _, msg := range msgs {
-				err := aseq.Write(alsa.SeqEvent{evs[i].device.SeqAddr, msg})
-				if err != nil {
-					return err
-				}
+			if err := writeMidiMsgs(aseq, evs[i].device.SeqAddr, msgs); err != nil {
+				return err
 			}
 			i++
 		}
