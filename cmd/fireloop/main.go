@@ -20,6 +20,7 @@ var altOn = false
 var pendingNumber = 0
 var bpm = 139
 var cancelPlayback context.CancelFunc
+var patternClipboard *Pattern
 
 func handleMute(n int) error {
 	if altOn {
@@ -27,6 +28,33 @@ func handleMute(n int) error {
 		return patbank.Jump(0)
 	}
 	return patbank.SelectTrackRow(n)
+}
+
+func handleGrid(aseq *alsa.Seq, x, y, vel int) error {
+	if shiftOn {
+		pendingNumber *= 10
+		if pendingNumber > 999 {
+			pendingNumber = 0
+		}
+		addend := (3*y + ((x % 4) % 3)) + 1
+		if y == 3 {
+			addend = 0
+		}
+		pendingNumber += addend
+		if err := patbank.f.ClearOLED(); err != nil {
+			return err
+		}
+		s := fmt.Sprintf("Tempo: %03d", pendingNumber)
+		return patbank.f.Print(4, 3, s)
+	}
+	patEv, err := patbank.ToggleEvent(y, x, vel)
+	if err != nil {
+		return err
+	}
+	if cancelPlayback != nil || patEv.Velocity == 0 {
+		return nil
+	}
+	return writeMidiMsgs(aseq, patEv.device.SeqAddr, patEv.ToMidi())
 }
 
 func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
@@ -58,33 +86,7 @@ func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		return nil
 	}
 	if x, y, ok := Note2Grid(int(ev.Data[1])); ok {
-		if shiftOn {
-			pendingNumber *= 10
-			if pendingNumber > 999 {
-				pendingNumber = 0
-			}
-			addend := (3*y + ((x % 4) % 3)) + 1
-			if y == 3 {
-				addend = 0
-			}
-			pendingNumber += addend
-			if err := patbank.f.ClearOLED(); err != nil {
-				return err
-			}
-			s := fmt.Sprintf("Tempo: %03d", pendingNumber)
-			return patbank.f.Print(4, 3, s)
-		}
-		patEv, err := patbank.ToggleEvent(y, x, int(ev.Data[2]))
-		if err != nil {
-			return err
-		}
-		if cancelPlayback != nil {
-			return nil
-		}
-		if patEv.Velocity > 0 {
-			return writeMidiMsgs(aseq, patEv.device.SeqAddr, patEv.ToMidi())
-		}
-		return nil
+		return handleGrid(aseq, x, y, int(ev.Data[2]))
 	}
 	switch int(ev.Data[1]) {
 	case NoteShift:
@@ -116,17 +118,32 @@ func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 			dir = -1
 		}
 		return patbank.JogSelect(dir)
+	case NotePlay:
+		if patternClipboard != nil {
+			if err := patbank.SetPattern(patternClipboard); err != nil {
+				return err
+			}
+			patternClipboard = nil
+			return patbank.f.SetLed(NoteRecord, LEDOff)
+		}
+		if cancelPlayback == nil {
+			startSequencer(aseq)
+		}
 	case NoteStop:
+		if altOn {
+			return patbank.SetPattern(&Pattern{})
+		}
 		if cancelPlayback != nil {
 			cancelPlayback()
 			cancelPlayback = nil
 		}
-		return nil
-	case NotePlay:
-		if cancelPlayback == nil {
-			startSequencer(aseq)
+	case NoteRecord:
+		if patternClipboard != nil {
+			patternClipboard = nil
+			return patbank.f.SetLed(NoteRecord, LEDOff)
 		}
-		return nil
+		patternClipboard = patbank.CurrentPattern().Copy()
+		return patbank.f.SetLed(NoteRecord, LEDGreen)
 	}
 	return nil
 }

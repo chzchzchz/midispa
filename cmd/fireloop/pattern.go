@@ -9,6 +9,14 @@ type Pattern struct {
 	mu     sync.RWMutex
 }
 
+func (p *Pattern) Copy() *Pattern {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	evs := make([]Event, len(p.Events))
+	copy(evs, p.Events)
+	return &Pattern{Events: evs}
+}
+
 // ToggleEvent returns true if event is added, false if deleted.
 func (p *Pattern) ToggleEvent(ev Event) bool {
 	isAdd := true

@@ -30,6 +30,11 @@ func (p *PatternBank) CurrentPattern() *Pattern {
 	return p.Patterns[p.selPatIdx]
 }
 
+func (p *PatternBank) SetPattern(pat *Pattern) error {
+	p.Patterns[p.selPatIdx] = pat
+	return p.Jump(0)
+}
+
 func (p *PatternBank) Jump(n int) error {
 	newIdx := p.selPatIdx + n
 	if newIdx <= 0 || newIdx > 999 {

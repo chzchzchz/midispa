@@ -23,7 +23,8 @@ var (
 	LEDYellow    = 1
 	LEDMaxYellow = 2
 
-	// 0 off, 3 max red, 4 max green
+	// 3 max red, 4 max green
+	LEDOff     = 0
 	LEDRed     = 1
 	LEDGreen   = 2
 	CCMuteLED1 = 0x28
@@ -57,6 +58,7 @@ var (
 	NotePlay      = 51
 	NoteCountdown = 52
 	NoteStop      = 52
+	NoteRecord    = 53
 	NoteLoopRec   = 53
 )
 
