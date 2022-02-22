@@ -1,151 +1,26 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"fmt"
 	"log"
 
 	"github.com/chzchzchz/midispa/alsa"
 )
 
+func writeMidiMsgs(aseq *alsa.Seq, sa alsa.SeqAddr, msgs [][]byte) error {
+	for _, msg := range msgs {
+		err := aseq.Write(alsa.SeqEvent{sa, msg})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func must(err error) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-var shiftOn = false
-var altOn = false
-var pendingNumber = 0
-var bpm = 139
-var cancelPlayback context.CancelFunc
-var patternClipboard *Pattern
-
-func handleMute(n int) error {
-	if altOn {
-		patbank.ClearTrackRow(n)
-		return patbank.Jump(0)
-	}
-	return patbank.SelectTrackRow(n)
-}
-
-func handleGrid(aseq *alsa.Seq, x, y, vel int) error {
-	if shiftOn {
-		pendingNumber *= 10
-		if pendingNumber > 999 {
-			pendingNumber = 0
-		}
-		addend := (3*y + ((x % 4) % 3)) + 1
-		if y == 3 {
-			addend = 0
-		}
-		pendingNumber += addend
-		if err := patbank.f.ClearOLED(); err != nil {
-			return err
-		}
-		s := fmt.Sprintf("Tempo: %03d", pendingNumber)
-		return patbank.f.Print(4, 3, s)
-	}
-	patEv, err := patbank.ToggleEvent(y, x, vel)
-	if err != nil {
-		return err
-	}
-	if cancelPlayback != nil || patEv.Velocity == 0 {
-		return nil
-	}
-	return writeMidiMsgs(aseq, patEv.device.SeqAddr, patEv.ToMidi())
-}
-
-func processEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
-	fmt.Printf("%+v\n", ev)
-	if len(ev.Data) != 3 {
-		return nil
-	}
-
-	cmd := ev.Data[0] & 0xf0
-	if cmd == 0x80 {
-		// note-off
-		switch int(ev.Data[1]) {
-		case NoteShift:
-			shiftOn = false
-			if pendingNumber > 20 && pendingNumber < 300 {
-				bpm = pendingNumber
-				pendingNumber = 0
-				return patbank.Jump(0)
-			}
-		case NoteAlt:
-			altOn = false
-			return patbank.f.SetLed(NoteAlt, 0)
-		}
-		return nil
-	}
-
-	// cc / note on only
-	if cmd != 0x90 && cmd != 0xb0 {
-		return nil
-	}
-	if x, y, ok := Note2Grid(int(ev.Data[1])); ok {
-		return handleGrid(aseq, x, y, int(ev.Data[2]))
-	}
-	switch int(ev.Data[1]) {
-	case NoteShift:
-		shiftOn = true
-		return nil
-	case NotePatternUp:
-		return patbank.Jump(1)
-	case NotePatternDown:
-		return patbank.Jump(-1)
-	case NoteAlt:
-		altOn = true
-		if err := patbank.f.SetLed(NoteAlt, 1); err != nil {
-			return err
-		}
-		if shiftOn {
-			return patbank.f.Off()
-		}
-	case NoteMute1:
-		return handleMute(1)
-	case NoteMute2:
-		return handleMute(2)
-	case NoteMute3:
-		return handleMute(3)
-	case NoteMute4:
-		return handleMute(4)
-	case CCSelect:
-		dir := 1
-		if int(ev.Data[2]) == EncoderLeft {
-			dir = -1
-		}
-		return patbank.JogSelect(dir)
-	case NotePlay:
-		if patternClipboard != nil {
-			if err := patbank.SetPattern(patternClipboard); err != nil {
-				return err
-			}
-			patternClipboard = nil
-			return patbank.f.SetLed(NoteRecord, LEDOff)
-		}
-		if cancelPlayback == nil {
-			startSequencer(aseq)
-		}
-	case NoteStop:
-		if altOn {
-			return patbank.SetPattern(&Pattern{})
-		}
-		if cancelPlayback != nil {
-			cancelPlayback()
-			cancelPlayback = nil
-		}
-	case NoteRecord:
-		if patternClipboard != nil {
-			patternClipboard = nil
-			return patbank.f.SetLed(NoteRecord, LEDOff)
-		}
-		patternClipboard = patbank.CurrentPattern().Copy()
-		return patbank.f.SetLed(NoteRecord, LEDGreen)
-	}
-	return nil
 }
 
 func main() {
@@ -186,7 +61,10 @@ func main() {
 	must(f.Off())
 	must(patbank.Jump(1))
 
+	songbank = NewSongBank(f, patbank)
+
 	inc := make(chan alsa.SeqEvent, 4)
+	processEvent = processPatternEvent
 	go func() {
 		for ev := range inc {
 			must(processEvent(aseq, ev))

@@ -7,3 +7,19 @@ type Voice struct {
 
 	device *Device // backpointer
 }
+
+type VoiceBank struct {
+	voices []*Voice
+}
+
+func NewVoiceBank(devs []Device) *VoiceBank {
+	vb := &VoiceBank{}
+	for _, d := range devs {
+		for i := range d.Voices {
+			vv := &d.Voices[i]
+			vv.device = &d
+			vb.voices = append(vb.voices, vv)
+		}
+	}
+	return vb
+}

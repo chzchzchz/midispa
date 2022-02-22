@@ -9,6 +9,8 @@ type Pattern struct {
 	mu     sync.RWMutex
 }
 
+var emptyPattern Pattern
+
 func (p *Pattern) Copy() *Pattern {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -77,3 +79,5 @@ func (p *Pattern) ClearVoice(v *Voice) {
 	p.Events = p.Events[:j]
 	p.mu.Unlock()
 }
+
+func (p *Pattern) Beats() float32 { return 4.0 }

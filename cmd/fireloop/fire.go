@@ -47,19 +47,20 @@ var (
 	NoteGridLeft  = 34
 	NoteGridRight = 35
 
-	NoteAccent    = 44
-	NoteSnap      = 45
-	NoteTap       = 46
-	NoteOverview  = 47
-	NoteShift     = 48
-	NoteAlt       = 49
-	NoteMetronome = 50
-	NoteWait      = 51
-	NotePlay      = 51
-	NoteCountdown = 52
-	NoteStop      = 52
-	NoteRecord    = 53
-	NoteLoopRec   = 53
+	NoteAccent      = 44
+	NoteSnap        = 45
+	NoteTap         = 46
+	NoteOverview    = 47
+	NoteShift       = 48
+	NoteAlt         = 49
+	NotePatternSong = 50
+	NoteMetronome   = 50
+	NoteWait        = 51
+	NotePlay        = 51
+	NoteCountdown   = 52
+	NoteStop        = 52
+	NoteRecord      = 53
+	NoteLoopRec     = 53
 )
 
 type Fire struct {
@@ -82,12 +83,7 @@ func Note2Grid(n int) (int, int, bool) {
 // return write([]byte{0xb0, byte(CCTopLeftLEDs), 0x10 | (i % 0xf)})
 
 func (f *Fire) LedsOff() error {
-	lp := akai.LightPads{}
-	for i := 0; i < 64; i++ {
-		lp.Pads = append(lp.Pads, akai.Pad{Idx: i})
-	}
-	b, _ := lp.MarshalBinary()
-	if err := f.write(b); err != nil {
+	if err := f.PadsOff(); err != nil {
 		return err
 	}
 	for _, n := range []int{
@@ -104,6 +100,14 @@ func (f *Fire) LedsOff() error {
 		}
 	}
 	return nil
+}
+
+func (f *Fire) PadsOff() error {
+	var pads []akai.Pad
+	for i := 0; i < 64; i++ {
+		pads = append(pads, akai.Pad{Idx: i})
+	}
+	return f.LightPadSlice(pads)
 }
 
 func (f *Fire) SetLed(n, v int) error {
@@ -182,45 +186,33 @@ func (f *Fire) LightPad(x, y, r, g, b int) error {
 		return errOutOfRange
 	}
 	pad := akai.Pad{Idx: idx, Red: r, Green: g, Blue: b}
-	lp := akai.LightPads{Pads: []akai.Pad{pad}}
-	v, _ := lp.MarshalBinary()
-	return f.write(v)
+	return f.LightPadSlice([]akai.Pad{pad})
 }
 
 func (f *Fire) LightPadRow(row int, vals [16][3]int) error {
 	if row < 0 || row >= 4 {
 		return errOutOfRange
 	}
-	lp := akai.LightPads{}
+	var pads []akai.Pad
 	for i := 0; i < 16; i++ {
-		lp.Pads = append(
-			lp.Pads,
-			akai.Pad{
-				Idx:   row*16 + i,
-				Red:   vals[i][0],
-				Green: vals[i][1],
-				Blue:  vals[i][2],
-			})
+		pads = append(pads, makePad(i, row, vals[i]))
 	}
-	v, _ := lp.MarshalBinary()
-	return f.write(v)
+	return f.LightPadSlice(pads)
 }
 
 func (f *Fire) LightPadColumn(col int, vals [4][3]int) error {
 	if col < 0 || col > 15 {
 		return errOutOfRange
 	}
-	lp := akai.LightPads{}
+	var pads []akai.Pad
 	for row := 0; row < 4; row++ {
-		lp.Pads = append(
-			lp.Pads,
-			akai.Pad{
-				Idx:   row*16 + col,
-				Red:   vals[row][0],
-				Green: vals[row][1],
-				Blue:  vals[row][2],
-			})
+		pads = append(pads, makePad(col, row, vals[row]))
 	}
+	return f.LightPadSlice(pads)
+}
+
+func (f *Fire) LightPadSlice(pads []akai.Pad) error {
+	lp := akai.LightPads{Pads: pads}
 	v, _ := lp.MarshalBinary()
 	return f.write(v)
 }

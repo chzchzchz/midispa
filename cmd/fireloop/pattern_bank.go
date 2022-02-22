@@ -13,8 +13,6 @@ type PatternBank struct {
 	vb          *VoiceBank
 }
 
-var patbank *PatternBank
-
 func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 	if len(vb.voices) == 0 {
 		panic("no voices")
@@ -30,8 +28,20 @@ func (p *PatternBank) CurrentPattern() *Pattern {
 	return p.Patterns[p.selPatIdx]
 }
 
+func (pb *PatternBank) PatternIdxMap() map[*Pattern]int {
+	ret := make(map[*Pattern]int)
+	for i, p := range pb.Patterns {
+		ret[p] = i
+	}
+	return ret
+}
+
 func (p *PatternBank) SetPattern(pat *Pattern) error {
-	p.Patterns[p.selPatIdx] = pat
+	// Don't swap out pointer since song may already be using it.
+	oldPat := p.Patterns[p.selPatIdx]
+	oldPat.mu.Lock()
+	oldPat.Events = pat.Events
+	oldPat.mu.Unlock()
 	return p.Jump(0)
 }
 
@@ -40,14 +50,14 @@ func (p *PatternBank) Jump(n int) error {
 	if newIdx <= 0 || newIdx > 999 {
 		return nil
 	}
-	if pp, ok := p.Patterns[p.selPatIdx]; ok && len(pp.Events) == 0 {
-		delete(p.Patterns, p.selPatIdx)
-	}
 	p.selPatIdx = newIdx
 	if _, ok := p.Patterns[p.selPatIdx]; !ok {
 		p.Patterns[p.selPatIdx] = &Pattern{}
 	}
 	if err := p.f.Print(0, 0, fmt.Sprintf("Pattern %03d", p.selPatIdx)); err != nil {
+		return err
+	}
+	if err := p.f.Print(0, 1, "-----------"); err != nil {
 		return err
 	}
 	for i := 0; i < 4; i++ {
@@ -209,20 +219,4 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 		}
 	}
 	return ev, nil
-}
-
-type VoiceBank struct {
-	voices []*Voice
-}
-
-func NewVoiceBank(devs []Device) *VoiceBank {
-	vb := &VoiceBank{}
-	for _, d := range devs {
-		for i := range d.Voices {
-			vv := &d.Voices[i]
-			vv.device = &d
-			vb.voices = append(vb.voices, vv)
-		}
-	}
-	return vb
 }
