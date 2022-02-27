@@ -9,8 +9,7 @@ import (
 
 func writeMidiMsgs(aseq *alsa.Seq, sa alsa.SeqAddr, msgs [][]byte) error {
 	for _, msg := range msgs {
-		err := aseq.Write(alsa.SeqEvent{sa, msg})
-		if err != nil {
+		if err := aseq.Write(alsa.SeqEvent{sa, msg}); err != nil {
 			return err
 		}
 	}
@@ -37,6 +36,7 @@ func main() {
 	must(err)
 	must(aseq.OpenPortWrite(sa))
 	must(aseq.OpenPortRead(sa))
+	must(aseq.CreatePort("fireloop sync")) // port 1 used to send start/stop events
 
 	write := func(b []byte) error {
 		return aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: b})

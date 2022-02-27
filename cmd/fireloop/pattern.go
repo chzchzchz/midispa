@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"sync"
 )
 
@@ -45,24 +46,9 @@ func (p *Pattern) ToggleEvent(ev Event) bool {
 // FindBeat returns a slice of all events >= a given beat.
 func (p *Pattern) FindBeat(beat float32) (ret []Event) {
 	p.mu.RLock()
-	l, r := 0, len(p.Events)-1
-	for l < r {
-		mid := (l + r) / 2
-		midv := p.Events[mid].Beat
-		if midv < beat {
-			l = mid + 1
-		} else if midv > beat {
-			r = mid
-		} else if p.Events[l].Beat < beat {
-			// ev[l] <= beat; ev[r] >= beat
-			l = l + 1
-		} else {
-			r = mid - 1
-		}
-	}
-	if len(p.Events) > 0 && p.Events[l].Beat >= beat {
-		ret = p.Events[l:]
-	}
+	cmp := func(i int) bool { return p.Events[i].Beat >= beat }
+	l := sort.Search(len(p.Events), cmp)
+	ret = p.Events[l:]
 	p.mu.RUnlock()
 	return ret
 }

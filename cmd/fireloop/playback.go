@@ -32,31 +32,42 @@ func (p *Playback) JumpSongBeat(beat float32) (oldSongBeat float32) {
 	return oldSongBeat
 }
 
+func (p *Playback) playBeat(aseq *alsa.Seq, pat *Pattern) (float32, error) {
+	evs := pat.FindBeat(p.patBeat)
+	nextBeat := float32(0)
+	i := 0
+	for i < len(evs) {
+		if evs[i].Beat > p.patBeat {
+			// No more events to send.
+			nextBeat = evs[i].Beat
+			break
+		}
+		msgs := evs[i].ToMidi()
+		if err := writeMidiMsgs(aseq, evs[i].device.SeqAddr, msgs); err != nil {
+			return 0, err
+		}
+		i++
+	}
+	return nextBeat, p.updatePads(p.songBeat)
+}
+
 func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 	p.nextSongBeat = -1
 	curBpm, curPattern := bpm, p.nextPattern(0)
 	// Compute measures w/r/t this start time + now() to avoid drift.
 	start := time.Now()
 	for {
+		if p.songBeat == 0 {
+			ev := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{0xfa}}
+			if err := aseq.WritePort(ev, 1); err != nil {
+				return err
+			}
+		}
 		if curPattern == nil {
 			curPattern = &emptyPattern
 		}
-		evs := curPattern.FindBeat(p.patBeat)
-		nextBeat := float32(0)
-		i := 0
-		for i < len(evs) {
-			if evs[i].Beat > p.patBeat {
-				// No more events to send.
-				nextBeat = evs[i].Beat
-				break
-			}
-			msgs := evs[i].ToMidi()
-			if err := writeMidiMsgs(aseq, evs[i].device.SeqAddr, msgs); err != nil {
-				return err
-			}
-			i++
-		}
-		if err := p.updatePads(p.songBeat); err != nil {
+		nextBeat, err := p.playBeat(aseq, curPattern)
+		if err != nil {
 			return err
 		}
 		// Find next event time, if any.
@@ -97,7 +108,8 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 		select {
 		case <-time.After(waitUntil):
 		case <-ctx.Done():
-			return nil
+			ev := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{0xfc}}
+			return aseq.WritePort(ev, 1)
 		}
 	}
 }
@@ -107,7 +119,10 @@ func (pb *PatternBank) startSequencer(aseq *alsa.Seq) context.CancelFunc {
 	// Reset to start of pattern.
 	next := func(beat float32) *Pattern {
 		lastColumn = 15
-		return pb.CurrentPattern()
+		if beat == 0 {
+			return pb.CurrentPattern()
+		}
+		return nil
 	}
 	// Light up column if new position.
 	update := func(beat float32) error {

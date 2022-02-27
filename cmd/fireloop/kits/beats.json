@@ -9,6 +9,9 @@
 	{ "Name" : "OP HAT", "Note" : 46},
 	{ "Name" : "CLAP", "Note" : 39},
 	{ "Name" : "LO TOM", "Note" : 43},
-	{ "Name" : "HI TOM", "Note" : 50}
+	{ "Name" : "HI TOM", "Note" : 50},
+	{ "Name" : "CLAVES", "Note" : 75},
+	{ "Name" : "AGOGO", "Note" : 67},
+	{ "Name" : "CRASH", "Note" : 49}
    ]
 }

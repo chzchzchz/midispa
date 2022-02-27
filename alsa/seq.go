@@ -29,6 +29,8 @@ type SeqAddr struct {
 	Port   int
 }
 
+var SubsSeqAddr = SeqAddr{C.SND_SEQ_ADDRESS_SUBSCRIBERS, 0}
+
 type SeqEvent struct {
 	SeqAddr
 	Data []byte
@@ -50,7 +52,6 @@ func OpenSeq(clientName string) (a *Seq, err error) {
 
 	seqname := C.CString("default")
 	defer C.free(unsafe.Pointer(seqname))
-
 	if err := C.snd_seq_open(&a.seq, seqname, C.SND_SEQ_OPEN_DUPLEX, 0); err < 0 {
 		return nil, snderr2error(err)
 	}
@@ -59,28 +60,37 @@ func OpenSeq(clientName string) (a *Seq, err error) {
 			a.Close()
 		}
 	}()
-
 	cname := C.CString(clientName)
 	defer C.free(unsafe.Pointer(cname))
 	if err := C.snd_seq_set_client_name(a.seq, cname); err < 0 {
 		return nil, snderr2error(err)
 	}
+	c, err := C.snd_seq_client_id(a.seq)
+	if err != nil {
+		return nil, err
+	}
+	a.Client = int(c)
+	if err = a.CreatePort(clientName); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+func (a *Seq) CreatePort(name string) error {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
 	if err := C.snd_seq_create_simple_port(a.seq, cname,
+		C.SND_SEQ_PORT_CAP_DUPLEX|
 		C.SND_SEQ_PORT_CAP_READ|
 			C.SND_SEQ_PORT_CAP_SUBS_READ|
 			C.SND_SEQ_PORT_CAP_WRITE|
 			C.SND_SEQ_PORT_CAP_SUBS_WRITE,
 		C.SND_SEQ_PORT_TYPE_MIDI_GENERIC|
+		C.SND_SEQ_PORT_TYPE_PORT|
 			C.SND_SEQ_PORT_TYPE_APPLICATION); err < 0 {
-		return nil, snderr2error(err)
+		return snderr2error(err)
 	}
-	c, err := C.snd_seq_client_id(a.seq)
-	if err != nil {
-		fmt.Println("oops no seq addr " + clientName)
-		return nil, err
-	}
-	a.Client = int(c)
-	return a, nil
+	return nil
 }
 
 func (a *Seq) OpenPort(client, port int) error {
@@ -198,11 +208,16 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 }
 
 func (a *Seq) Write(ev SeqEvent) error {
+	return a.WritePort(ev, 0)
+}
+
+func (a *Seq) WritePort(ev SeqEvent, port int) error {
 	if len(ev.Data) == 0 {
 		return nil
 	}
 	var event C.snd_seq_event_t
-	event.source.client, event.source.port = a.CAddrValues()
+	src := SeqAddr{a.SeqAddr.Client, port}
+	event.source.client, event.source.port = src.CAddrValues()
 	event.dest.client, event.dest.port = ev.CAddrValues()
 	event.queue = C.SND_SEQ_QUEUE_DIRECT
 	// event.dest.client, event.dest.port = C.SND_SEQ_ADDRESS_SUBSCRIBERS, C.SND_SEQ_ADDRESS_UNKNOWN
