@@ -15,13 +15,14 @@ func Decode(data []byte) interface{} {
 	case IdNonRealTime:
 		return DecodeNonRealTime(data)
 	case IdRealTime:
-		return DecodeRealTime(data[2:])
+		return DecodeRealTime(data)
 	default:
 		return nil
 	}
 }
 
-func DecodeRealTime(data []byte) interface{} {
+func DecodeRealTime(dd []byte) interface{} {
+	data := dd[2:]
 	switch data[1] {
 	case SubIdDeviceControl:
 		switch data[2] {
@@ -31,6 +32,15 @@ func DecodeRealTime(data []byte) interface{} {
 			return MasterBalanceFromSysEx(data)
 		case DeviceControlIdGlobalParameterControl:
 			return GlobalParameterControlFromSysEx(data)
+		}
+	case SubIdMMCCommand:
+		switch data[2] {
+		case MMCRecordStrobe:
+			return &RecordStrobe{}
+		case MMCRecordExit:
+			return &RecordExit{}
+		case MMCEject:
+			return &Eject{}
 		}
 	}
 	return nil
