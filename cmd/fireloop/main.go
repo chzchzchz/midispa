@@ -24,7 +24,7 @@ func must(err error) {
 
 func main() {
 	kitFlag := flag.String("kit", "kit.json", "kit of devices to load")
-	midiPort := flag.String("port", "FL STUDIO FIRE MIDI 1", "midi port for akai fire")
+	midiPort := flag.String("port", "FL STUDIO FIRE Jack 1", "midi port for akai fire")
 	flag.Parse()
 
 	aseq, err := alsa.OpenSeq("fireloop")
