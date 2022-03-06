@@ -66,6 +66,10 @@ func (s *Sequencer) record(data []byte) {
 var bpm = 139
 
 func (s *Sequencer) save() error {
+	if len(s.track.Events()) == 0 {
+		log.Println("nothing to eject")
+		return nil
+	}
 	tpq := smf.MetricTicks(960)
 	msg2midi := func(data []byte) (midi.Message, error) {
 		rd := midireader.New(bytes.NewBuffer(data), func(m realtime.Message) {})
@@ -108,8 +112,17 @@ func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 		sx := sysex.Decode(ev.Data)
 		switch sx.(type) {
 		case *sysex.RecordStrobe:
-			log.Println("recording")
-			s.startRec, s.recording = time.Now(), true
+			if !s.recording {
+				log.Println("started recording")
+				s.startRec = time.Now()
+			} else {
+				log.Println("stopped recording")
+			}
+			s.recording = !s.recording
+			return nil
+		case *sysex.RecordExit:
+			log.Println("record exit")
+			s.recording = false
 			return nil
 		case *sysex.Eject:
 			return s.save()
