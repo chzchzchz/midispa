@@ -58,6 +58,13 @@ func handleSongGrid(aseq *alsa.Seq, x, y, vel int) error {
 	return songbank.ToggleMeasure(x, y)
 }
 
+func toggleAlt() error {
+	if altOn = !altOn; altOn {
+		return patbank.f.SetLed(NoteAlt, LEDYellow)
+	}
+	return patbank.f.SetLed(NoteAlt, 0)
+}
+
 func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
@@ -98,12 +105,7 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		}
 		return patbank.Jump(0)
 	case NoteAlt:
-		altOn = !altOn
-		if altOn {
-			return patbank.f.SetLed(NoteAlt, LEDYellow)
-		} else {
-			return patbank.f.SetLed(NoteAlt, 0)
-		}
+		return toggleAlt()
 	}
 	return nil
 }
@@ -111,6 +113,7 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 func handlePatternMute(n int) error {
 	if altOn {
 		patbank.ClearTrackRow(n)
+		toggleAlt()
 		return patbank.Jump(0)
 	}
 	return patbank.SelectTrackRow(n)
@@ -179,15 +182,11 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	case NotePatternDown:
 		return patbank.Jump(-1)
 	case NoteAlt:
-		altOn = !altOn
-		if !altOn {
-			return patbank.f.SetLed(NoteAlt, 0)
-		} else {
-			if shiftOn {
-				return patbank.f.Off()
-			}
-			return patbank.f.SetLed(NoteAlt, 1)
+		if !altOn && shiftOn {
+			// Turn off lights but don't activate alt.
+			return patbank.f.Off()
 		}
+		return toggleAlt()
 	case NoteMute1:
 		return handlePatternMute(1)
 	case NoteMute2:
@@ -204,6 +203,7 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		return patbank.JogSelect(dir)
 	case NotePlay:
 		if patternClipboard != nil {
+			// Copy and paste.
 			if err := patbank.SetPattern(patternClipboard); err != nil {
 				return err
 			}
@@ -216,9 +216,8 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	case NoteStop:
 		if altOn {
 			// Clear pattern.
-			altOn = false
-			patbank.f.SetLed(NoteAlt, 0)
-			return patbank.SetPattern(&Pattern{})
+			patbank.SetPattern(&Pattern{})
+			return toggleAlt()
 		}
 		if cancelPlayback != nil {
 			cancelPlayback()
