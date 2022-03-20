@@ -1,12 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/util"
 )
 
 type Assignments struct {
@@ -107,18 +106,9 @@ func (a *Assignments) InCCtoOut(in int) int {
 }
 
 func mustLoadAssignments(path string) (m []Assignments) {
-	f, err := os.Open(path)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		m = append(m, Assignments{})
-		if err := dec.Decode(&m[len(m)-1]); err != nil {
-			panic(err)
-		}
-		m[len(m)-1].setupMap()
+	m = util.MustLoadJSONFile[Assignments](path)
+	for i := range m {
+		m[i].setupMap()
 	}
 	return m
 }

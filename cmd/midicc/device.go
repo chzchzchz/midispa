@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/chzchzchz/midispa/cc"
+	"github.com/chzchzchz/midispa/util"
 )
 
 type DeviceModel struct {
@@ -15,20 +16,10 @@ type DeviceModel struct {
 }
 
 func mustLoadDeviceModels(path string) (m []DeviceModel) {
-	f, err := os.Open(path)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		m = append(m, DeviceModel{})
-		mm := &m[len(m)-1]
-		if err := dec.Decode(mm); err != nil {
-			panic(err)
-		}
-		if mm.Channel == 0 {
-			mm.Channel = 1
+	m = util.MustLoadJSONFile[DeviceModel](path)
+	for i := range m {
+		if m[i].Channel == 0 {
+			m[i].Channel = 1
 		}
 	}
 	return m

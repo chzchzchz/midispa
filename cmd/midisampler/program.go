@@ -1,9 +1,9 @@
 package main
 
 import (
-	"encoding/json"
-	"os"
 	"sort"
+
+	"github.com/chzchzchz/midispa/util"
 )
 
 type Program struct {
@@ -27,17 +27,11 @@ func (pm ProgramMap) Instruments() []string {
 
 func LoadProgramMap(path string, sb *SampleBank) (ProgramMap, error) {
 	ret := make(ProgramMap)
-	f, err := os.Open(path)
+	progs, err := util.LoadJSONFile[Program](path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		p := &Program{}
-		if err := dec.Decode(p); err != nil {
-			return nil, err
-		}
+	for i, p := range progs {
 		if p.Notes == nil {
 			// No notes, load from path.
 			p.Notes = make(map[int]*Sample)
@@ -52,7 +46,7 @@ func LoadProgramMap(path string, sb *SampleBank) (ProgramMap, error) {
 		if _, ok := ret[p.Instrument]; ok {
 			panic("instrument " + p.Instrument + " defined twice")
 		}
-		ret[p.Instrument] = p
+		ret[p.Instrument] = &progs[i]
 	}
 	return ret, nil
 }
