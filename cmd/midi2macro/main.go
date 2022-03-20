@@ -5,47 +5,19 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/util"
 )
 
 type DeviceConfig struct {
 	alsa.SeqDevice
 	Map  map[string]string
 	keys map[string][]int
-}
-
-func mustLoadFile(path string) (cfgs []DeviceConfig) {
-	f, err := os.Open(path)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		cfg := DeviceConfig{SeqDevice: alsa.SeqDevice{Port: -1}}
-		if err := dec.Decode(&cfg); err != nil {
-			panic(err)
-		}
-		cfgs = append(cfgs, cfg)
-	}
-	for i := range cfgs {
-		cfgs[i].keys = make(map[string][]int)
-		for k, v := range cfgs[i].Map {
-			mk, err := MacroKeys(v)
-			if err != nil {
-				panic(err)
-			}
-			cfgs[i].keys[k] = mk
-		}
-	}
-	return cfgs
 }
 
 // aseqdump -l | grep 'X6mini MIDI' | awk ' { print $1 } '
@@ -65,17 +37,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfgs := mustLoadFile(os.Args[1])
+	cfgs := util.MustLoadJSONFile[DeviceConfig](os.Args[1])
+	for i := range cfgs {
+		cfgs[i].keys = make(map[string][]int)
+		for k, v := range cfgs[i].Map {
+			mk, err := MacroKeys(v)
+			if err != nil {
+				panic(err)
+			}
+			cfgs[i].keys[k] = mk
+		}
+	}
 	for i, cfg := range cfgs {
 		if cfg.PortName != "" {
 			log.Println("using port name", cfg.PortName)
-			cfgs[i].Client, cfgs[i].Port, err = aseq.PortAddress(cfg.PortName)
+			cfgs[i].SeqAddr, err = aseq.PortAddress(cfg.PortName)
 			if err != nil {
 				panic(err)
 			}
 		}
-		if cfgs[i].Port > -1 {
-			log.Println("using port", cfgs[i].PortString())
+		if cfgs[i].Client != 0 {
+			log.Println("using port", cfgs[i].String())
 			if err := aseq.OpenPort(cfgs[i].Client, cfgs[i].Port); err != nil {
 				panic(err)
 			}

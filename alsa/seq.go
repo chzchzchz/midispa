@@ -81,12 +81,12 @@ func (a *Seq) CreatePort(name string) error {
 	defer C.free(unsafe.Pointer(cname))
 	if err := C.snd_seq_create_simple_port(a.seq, cname,
 		C.SND_SEQ_PORT_CAP_DUPLEX|
-		C.SND_SEQ_PORT_CAP_READ|
+			C.SND_SEQ_PORT_CAP_READ|
 			C.SND_SEQ_PORT_CAP_SUBS_READ|
 			C.SND_SEQ_PORT_CAP_WRITE|
 			C.SND_SEQ_PORT_CAP_SUBS_WRITE,
 		C.SND_SEQ_PORT_TYPE_MIDI_GENERIC|
-		C.SND_SEQ_PORT_TYPE_PORT|
+			C.SND_SEQ_PORT_TYPE_PORT|
 			C.SND_SEQ_PORT_TYPE_APPLICATION); err < 0 {
 		return snderr2error(err)
 	}
@@ -200,6 +200,20 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 			ret.Data = []byte{0xfb}
 		case C.SND_SEQ_EVENT_STOP:
 			ret.Data = []byte{0xfc}
+		case C.SND_SEQ_EVENT_PORT_SUBSCRIBED:
+			c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{
+				1,
+				byte(c.sender.client), byte(c.sender.port),
+				byte(c.dest.client), byte(c.dest.port),
+			}
+		case C.SND_SEQ_EVENT_PORT_UNSUBSCRIBED:
+			c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{
+				0,
+				byte(c.sender.client), byte(c.sender.port),
+				byte(c.dest.client), byte(c.dest.port),
+			}
 		default:
 			continue
 		}
@@ -322,8 +336,8 @@ func (a *Seq) Devices() (ret []SeqDevice, err error) {
 	return ret, nil
 }
 
-func (d *SeqAddr) PortString() string {
-	return fmt.Sprintf("%3d:%3d", d.Client, d.Port)
+func (d *SeqAddr) String() string {
+	return fmt.Sprintf("%d:%d", d.Client, d.Port)
 }
 
 func (d *SeqAddr) CAddrValues() (C.uchar, C.uchar) {

@@ -1,0 +1,10 @@
+{
+"Source" : "SE25 MIDI1",
+"Sink" : "MIDI4x4 MIDI Out 3",
+"Description" : "Volca Bass"
+}
+{
+"Source": "X6mini MIDI 1",
+"Sink" : "USB Midi 4i4o MIDI 4",
+"Description" : "S-Engine"
+}
