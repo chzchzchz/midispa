@@ -58,6 +58,9 @@ func (dt *DeviceTracker) run() {
 		case <-dt.cancelc:
 			return
 		case <-dt.updatec:
+			// Don't immediately try to reconnect.
+			log.Println("sleeping 5s waiting for device bounce")
+			time.Sleep(5 * time.Second)
 		case <-tickc:
 			tickc = nil
 		}
