@@ -23,6 +23,32 @@ type VolcaBeats struct {
 	HatGrain       int `midicc:"59"`
 }
 
+type VolcaKeys struct {
+	Portamento     int `midicc:"5"`
+	Detune         int `midicc:"42"`
+	VcoEGintensity int `midicc:"43"`
+	Expression     int `midicc:"11"`
+	// 0-12: Poly;
+	// 13-37: Unison;
+	// 38-62: Octave;
+	// 63-87: Fifth;
+	// 88-112: Unison Ring;
+	// 113-127: Poly Ring
+	Voice int `midicc:"40"`
+	// 0-21: 32'; 22-43: 16'; 44-65: 8'; 66-87: 4'; 88-109: 2'; 110-127: 1'
+	Octave         int `midicc:"41"`
+	Attack         int `midicc:"49"`
+	DecayRelease   int `midicc:"50"`
+	Sustain        int `midicc:"51"`
+	VcfCutoff      int `midicc:"44"`
+	VcfEGintensity int `midicc:"45"`
+	LfoRate        int `midicc:"46"`
+	LfoPitch       int `midicc:"47"`
+	LfoCutoff      int `midicc:"48"`
+	DelayTime      int `midicc:"52"`
+	DelayFeedback  int `midicc:"53"`
+}
+
 type WorldeEasyControl9 struct {
 	SliderAB int `midicc:"9"`
 	Slider1  int `midicc:"3"`
@@ -308,6 +334,7 @@ type GMController struct {
 
 type Model struct {
 	Model            string
+	*VolcaKeys       `json:"VolcaKeys,omitempty"`
 	*VolcaBeats      `json:"VolcaBeats,omitempty"`
 	*VolcaDrum       `json:"VolcaDrum,omitempty"`
 	*UnoSynth        `json:"UnoSynth,omitempty"`
@@ -318,6 +345,8 @@ type Model struct {
 
 func (m *Model) MidiParams() interface{} {
 	switch m.Model {
+	case "Volca Keys":
+		return m.VolcaKeys
 	case "Volca Beats":
 		return m.VolcaBeats
 	case "WorldeEasyControl9":
