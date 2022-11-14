@@ -12,7 +12,7 @@ import (
 
 type SMF struct {
 	Track
-	f	*os.File
+	f      *os.File
 	r      smf.Reader
 	readyc chan struct{}
 }
