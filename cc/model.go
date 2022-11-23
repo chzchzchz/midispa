@@ -1,5 +1,125 @@
 package cc
 
+type CraftSynth2 struct {
+	ModulationWheel int `midicc:"1"`
+	Glide           int `midicc:"5"` // 0 - 2.5 seconds, exponential
+	HeadphoneVolume int `midicc:"7"` // Silence - full volume
+	ExpressionPedal int `midicc:"11"`
+	Distortion      int `midicc:"12"` // Dry - Wet
+	Delay           int `midicc:"13"` // Dry - Wet
+
+	// No Sync: 0 - 250 milliseconds
+	// Sync: 8 steps
+	// Longest delay time possible divided down
+	DelayTime     int `midicc:"14"`
+	DelayFeedback int `midicc:"15"` // 0% - 90%
+	Osc1Wave      int `midicc:"16"`
+	Osc2Wave      int `midicc:"17"`
+	OscMix        int `midicc:"18"` // Osc1 - Osc2
+	OscModAmount  int `midicc:"19"` // 0 - Full
+
+	// 0 - 63 Unison / 64 - 70 Major / 71 - 77 Minor / 78 - 84 Major 6th
+	// / 85 - 91 Sus 4th / 92 - 98 5ths / 99 - 105 5th + Oct
+	// / 106 - 112 Oct + 1 + 2/ 113 - 119 Oct + 1 -1 / 119 - 127 Oct -1 -2
+	Spread int `midicc:"20"`
+
+	FegAttack        int `midicc:"22"` // 0 - 4 Seconds
+	FegDecay         int `midicc:"23"` // 0 - 4 Seconds
+	FegSustain       int `midicc:"24"` // 0 - 1
+	FegRelease       int `midicc:"25"` // 0 - 4 Seconds
+	AegAttack        int `midicc:"26"` // 0 - 4 Seconds
+	AegDecay         int `midicc:"27"` // 0 - 4 Seconds
+	AegSustain       int `midicc:"28"` // 0 - 1
+	AegRelease       int `midicc:"29"` // 0 - 4 Seconds
+	Osc2CourseDetune int `midicc:"30"` // +/- 4 Octaves
+	Osc2FineDetune   int `midicc:"31"` // -/+ 1 Semitone
+	FegAmount        int `midicc:"32"` // 63 (0) +/- 63
+	Morph            int `midicc:"33"` // 0 = LP / 64 = BP / 127 = HP
+	Cutoff           int `midicc:"34"` // 0Hz - 22kHz
+	Reso             int `midicc:"35"` // None - Full
+
+	/*
+		NO SYNC: 0-127 = 0.02Hz - 32Hz
+		SYNC: 0-7 = 1/16 / 8-15 = 1/8 / 16-23 = 3/16 / 24-31 = 1/4 /
+		32-39 = 3/8 / 40-47 = 1/2 / 48-55 = 3/4 / 56-63 = 1 / 64-71 = 3/2
+		/ 72-79 = 2 / 80-87 = 3 / 88-95 = 4 / 96-103 = 6 /104-111 = 8 /
+		112-119 = 12 / 120-127 = 16
+	*/
+	Lfo1Rate  int `midicc:"36"`
+	Lfo1Depth int `midicc:"37"` // 63 (0) +/- 63
+
+	//  0-32 Sine to Triangle / 33-64 - Triangle to Sawtooth
+	// / 65-96 - Sawtooth to Square / 97-127 - Square to Sample and Hold
+	Lfo1Shape  int `midicc:"39"`
+	Octave     int `midicc:"40"` // Octaves -2 to +4
+	OscModMode int `midicc:"41"` // 0 - 127 (16 Modes)
+	MegAttack  int `midicc:"43"` // 0 - 4 Seconds
+	MegDecay   int `midicc:"44"` // 0 - 4 Seconds
+	MegSustain int `midicc:"45"` // 0 - 1
+	MegRelease int `midicc:"46"` // 0 - 4 Seconds
+	Lfo2Rate   int `midicc:"47"`
+
+	/*
+		NO SYNC: 0-63 = 0-32Hz Free / 64-71 Root/8 / 72-79 Root/4 /
+		80-87 Root/2 / 88-95 Root / 96-103 Root*1.5 /104-111 Root*2 /
+		112-119 Root*2.5 / 120-127 Root*3
+		SYNC: 0-7 = 1/16 / 8-15 = 1/8 / 16-23 =1/4 / 24-31 =1/2 / 32-39
+		= 1 / 40-47 = 5/4 / 48-55 =2 / 56-63 = 4 (Cycles per beat)
+	*/
+	Lfo2Depth int `midicc:"48"` // 63 (0) +/- 63
+
+	// 0-32 Sine to Triangle / 33-64 - Triangle to Sawtooth
+	// / 65-96 - Sawtooth to Square / 97-127 - Square to Sample and Hold
+	Lfo2Shape int `midicc:"50"`
+
+	AegAmount          int `midicc:"51"`  // 63 (0) +/- 63
+	Lfo1MidiSync       int `midicc:"52"`  // 0 - 63 = OFF / 64 - 127 = ON
+	Lfo2MidiSync       int `midicc:"54"`  // 0 - 63 = OFF / 64 - 127 = ON
+	DelayMidiSync      int `midicc:"55"`  // 0 - 63 = OFF / 64 - 127 = ON
+	Lfo1Mode           int `midicc:"56"`  // 0-41 Retrig / 42-83 Free / 84-127 Single
+	Lfo2Mode           int `midicc:"57"`  // 0-41 Retrig / 42-83 Free / 84-127 Single
+	ArpStatus          int `midicc:"58"`  // 0 - 63 = OFF / 64 - 127 = ON
+	SustainPedal       int `midicc:"64"`  // 0 - 63 = OFF / 64 - 127 = ON
+	Scale              int `midicc:"73"`  // 0 - 7
+	RootNote           int `midicc:"79"`  // 0 - 127
+	AllEnvelopeAttack  int `midicc:"84"`  // 0 - 4 Seconds
+	AllEnvelopeDecay   int `midicc:"85"`  // 0 - 4 Seconds
+	AllEnvelopeSustain int `midicc:"86"`  // 0 - 1
+	AllEnvelopeRelease int `midicc:"87"`  // 0 - 4 Seconds
+	ModSlot1Depth      int `midicc:"88"`  // 63 (0) +/- 63
+	ModSlot2Depth      int `midicc:"89"`  // 63 (0) +/- 63
+	ModSlot3Depth      int `midicc:"90"`  // 63 (0) +/- 63
+	ModSlot4Depth      int `midicc:"91"`  // 63 (0) +/- 63
+	ModSlot5Depth      int `midicc:"92"`  // 63 (0) +/- 63
+	ModSlot6Depth      int `midicc:"93"`  // 63 (0) +/- 63
+	ModSlot7Depth      int `midicc:"94"`  // 63 (0) +/- 63
+	ModSlot8Depth      int `midicc:"95"`  // 63 (0) +/- 63
+	ModSlot1Dest       int `midicc:"101"` // 0 - 36
+	ModSlot2Dest       int `midicc:"102"` // 0 - 36
+	ModSlot3Dest       int `midicc:"103"` // 0 - 36
+	ModSlot4Dest       int `midicc:"104"` // 0 - 36
+	ModSlot5Dest       int `midicc:"105"` // 0 - 36
+	ModSlot6Dest       int `midicc:"106"` // 0 - 36
+	ModSlot7Dest       int `midicc:"107"` // 0 - 36
+	ModSlot8Dest       int `midicc:"108"` // 0 - 36
+	RandomisePatch     int `midicc:"121"`
+}
+
+type VolcaBass struct {
+	SlideTime         int `midicc:"5"`
+	Expression        int `midicc:"11"`
+	Octave            int `midicc:"40"`
+	LfoRate           int `midicc:"41"`
+	LfoIntensity      int `midicc:"42"`
+	VcoPitch1         int `midicc:"43"`
+	VcoPitch2         int `midicc:"44"`
+	VcoPitch3         int `midicc:"45"`
+	EgAttack          int `midicc:"46"`
+	EgDecayRelease    int `midicc:"47"`
+	CutoffEgIntensity int `midicc:"48"`
+	GateTime          int `midicc:"49"`
+}
+
 type VolcaBeats struct {
 	KickLevel      int `midicc:"40"`
 	SnareLevel     int `midicc:"41"`
@@ -49,47 +169,17 @@ type VolcaKeys struct {
 	DelayFeedback  int `midicc:"53"`
 }
 
-type WorldeEasyControl9 struct {
-	SliderAB int `midicc:"9"`
-	Slider1  int `midicc:"3"`
-	Slider2  int `midicc:"4"`
-	Slider3  int `midicc:"5"`
-	Slider4  int `midicc:"6"`
-	Slider5  int `midicc:"7"`
-	Slider6  int `midicc:"8"`
-	Slider7  int `midicc:"9"`
-	Slider8  int `midicc:"10"`
-	Slider9  int `midicc:"11"`
-
-	Knob1 int `midicc:"14"`
-	Knob2 int `midicc:"15"`
-	Knob3 int `midicc:"16"`
-	Knob4 int `midicc:"17"`
-	Knob5 int `midicc:"18"`
-	Knob6 int `midicc:"19"`
-	Knob7 int `midicc:"20"`
-	Knob8 int `midicc:"21"`
-	Knob9 int `midicc:"22"`
-
-	Button1 int `midicc:"23"`
-	Button2 int `midicc:"24"`
-	Button3 int `midicc:"25"`
-	Button4 int `midicc:"26"`
-	Button5 int `midicc:"27"`
-	Button6 int `midicc:"28"`
-	Button7 int `midicc:"29"`
-	Button8 int `midicc:"30"`
-	Button9 int `midicc:"31"`
-
-	Repeat    int `midicc:"49"`
-	Backwards int `midicc:"47"`
-	Forwards  int `midicc:"48"`
-	Stop      int `midicc:"46"`
-	Play      int `midicc:"45"`
-	Record    int `midicc:"44"`
-
-	ButtonLeftProgramKnob  int `midicc:"67"`
-	ButtonRightProgramKnob int `midicc:"64"`
+type VolcaKick struct {
+	PulseColor     int `midicc:"40"`
+	PulseLevel     int `midicc:"41"`
+	AmpAttack      int `midicc:"42"`
+	AmpDecay       int `midicc:"43"`
+	Drive          int `midicc:"44"`
+	Tone           int `midicc:"45"`
+	ResonatorPitch int `midicc:"46"`
+	ResonatorBend  int `midicc:"47"`
+	ResonatorTime  int `midicc:"48"`
+	Accent         int `midicc:"49"`
 }
 
 type VolcaDrum struct {
@@ -124,6 +214,39 @@ type VolcaDrum struct {
 	Decay          int `midicc:"117"`
 	Body           int `midicc:"118"`
 	Tune           int `midicc:"119"`
+}
+
+type MeeblipSE struct {
+	FilterResonance      int `midicc:"48"`
+	FilterCutoff         int `midicc:"49"`
+	LfoFrequency         int `midicc:"50"`
+	LfoLevel             int `midicc:"51"`
+	FilterEnvelopeAmount int `midicc:"52"`
+	Portamento           int `midicc:"53"`
+	PulseWidthPWMRate    int `midicc:"54"`
+	OscillatorDetune     int `midicc:"55"`
+	FilterDecay          int `midicc:"58"`
+	FilterAttack         int `midicc:"59"`
+	AmplitudeDecay       int `midicc:"60"`
+	AmplitudeAttack      int `midicc:"61"`
+
+	// switches; 0-63 = off, 64-127 = on
+	KnobShift         int `midicc:"64"`
+	FM                int `midicc:"65"`
+	LfoRandom         int `midicc:"66"`
+	LfoWave           int `midicc:"67"` // (Triangle/Square)
+	FilterMode        int `midicc:"68"` // (Low/High)
+	Distortion        int `midicc:"69"`
+	LfoEnable         int `midicc:"70"`
+	LfoDestination    int `midicc:"71"` // (Filter/Oscillator)
+	AntiAlias         int `midicc:"72"`
+	OscillatorBOctave int `midicc:"73"` // (Normal/Up)
+	OscillatorBEnable int `midicc:"74"`
+	OscillatorBWave   int `midicc:"75"` // (Triangle/Square)
+	EnvelopeSustain   int `midicc:"76"`
+	OscillatorANoise  int `midicc:"77"`
+	PWMSweep          int `midicc:"78"` // (Pulse/PWM)
+	OscillatorAWave   int `midicc:"79"` //(Sawtooth/PWM)
 }
 
 type UnoSynth struct {
@@ -332,35 +455,90 @@ type GMController struct {
 	ChorusSendLevel int `midicc:"93"`
 }
 
+type WorldeEasyControl9 struct {
+	SliderAB int `midicc:"9"`
+	Slider1  int `midicc:"3"`
+	Slider2  int `midicc:"4"`
+	Slider3  int `midicc:"5"`
+	Slider4  int `midicc:"6"`
+	Slider5  int `midicc:"7"`
+	Slider6  int `midicc:"8"`
+	Slider7  int `midicc:"9"`
+	Slider8  int `midicc:"10"`
+	Slider9  int `midicc:"11"`
+
+	Knob1 int `midicc:"14"`
+	Knob2 int `midicc:"15"`
+	Knob3 int `midicc:"16"`
+	Knob4 int `midicc:"17"`
+	Knob5 int `midicc:"18"`
+	Knob6 int `midicc:"19"`
+	Knob7 int `midicc:"20"`
+	Knob8 int `midicc:"21"`
+	Knob9 int `midicc:"22"`
+
+	Button1 int `midicc:"23"`
+	Button2 int `midicc:"24"`
+	Button3 int `midicc:"25"`
+	Button4 int `midicc:"26"`
+	Button5 int `midicc:"27"`
+	Button6 int `midicc:"28"`
+	Button7 int `midicc:"29"`
+	Button8 int `midicc:"30"`
+	Button9 int `midicc:"31"`
+
+	Repeat    int `midicc:"49"`
+	Backwards int `midicc:"47"`
+	Forwards  int `midicc:"48"`
+	Stop      int `midicc:"46"`
+	Play      int `midicc:"45"`
+	Record    int `midicc:"44"`
+
+	ButtonLeftProgramKnob  int `midicc:"67"`
+	ButtonRightProgramKnob int `midicc:"64"`
+}
+
 type Model struct {
 	Model            string
-	*VolcaKeys       `json:"VolcaKeys,omitempty"`
-	*VolcaBeats      `json:"VolcaBeats,omitempty"`
-	*VolcaDrum       `json:"VolcaDrum,omitempty"`
-	*UnoSynth        `json:"UnoSynth,omitempty"`
+	*GMController    `json:"GMController,omitempty"`
+	*CraftSynth2     `json:"CraftSynth2,omitempty"`
+	*MeeblipSE       `json:"MeeblipSE,omitempty"`
 	*Skulpt          `json:"Skulpt,omitempty"`
 	*SoundController `json:"SoundController,omitempty"`
-	*GMController    `json:"GMController,omitempty"`
+	*VolcaBass       `json:"VolcaBass,omitempty"`
+	*VolcaBeats      `json:"VolcaBeats,omitempty"`
+	*VolcaKeys       `json:"VolcaKeys,omitempty"`
+	*VolcaKick       `json:"VolcaKick,omitempty"`
+	*VolcaDrum       `json:"VolcaDrum,omitempty"`
+	*UnoSynth        `json:"UnoSynth,omitempty"`
 }
 
 func (m *Model) MidiParams() interface{} {
 	switch m.Model {
-	case "Volca Keys":
-		return m.VolcaKeys
-	case "Volca Beats":
-		return m.VolcaBeats
-	case "WorldeEasyControl9":
-		return &WorldeEasyControl9{}
-	case "Volca Drum":
-		return m.VolcaDrum
-	case "Uno Synth":
-		return m.UnoSynth
+	case "Craft Synth 2":
+		return m.CraftSynth2
+	case "Meeblip SE":
+		return m.MeeblipSE
 	case "Skulpt":
 		return m.Skulpt
 	case "Sound Controller":
 		return m.SoundController
+	case "Volca Bass":
+		return m.VolcaBass
+	case "Volca Beats":
+		return m.VolcaBeats
+	case "Volca Keys":
+		return m.VolcaKeys
+	case "Volca Kick":
+		return m.VolcaKick
+	case "Volca Drum":
+		return m.VolcaDrum
 	case "GM Controller":
 		return m.GMController
+	case "Uno Synth":
+		return m.UnoSynth
+	case "WorldeEasyControl9":
+		return &WorldeEasyControl9{}
 	default:
 		panic("unknown model " + m.Model)
 	}
