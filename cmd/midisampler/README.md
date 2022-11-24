@@ -17,3 +17,14 @@ double midi_to_hz(int midi_note) {
 ```sh
 for a in `./a.out`; do ffmpeg -f lavfi -i "sine=frequency=$a:duration=5" `printf "%04d" $a`.wav; done
 ```
+
+## Live sampling
+
+Connect any jack source to the sampler's jack sink to record samples.
+
+1. Hold record button to collect sample.
+2. Hold play to replay sample.
+3. Seek forward to chop beginning of sample.
+4. Seek back to chop end of sample.
+5. Press loop and the keyboard key to assign. Press stop to cancel.
+6. Press stop to reset to original sample.

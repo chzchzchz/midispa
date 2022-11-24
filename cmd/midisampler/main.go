@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"unsafe"
@@ -17,13 +18,14 @@ func main() {
 	configPath := flag.String("config-path", "./", "path to configuration")
 	spathFlag := flag.String("samples-path", "./dat/samples", "path to samples")
 	cnFlag := flag.String("client-name", "midisampler", "midi and jack client name")
+	samplingPortFlag := flag.String("sampling-port", "", "default jack source port for sampling")
 	sinkPortFlag := flag.String("sink-port", "system:playback", "jack sink port names; comma delimited")
-	midiInputPortFlag := flag.String("midi-in-port", "", "subscribe to given existing port")
+	midiInputPortFlag := flag.String("midi-in-port", "", "subscribe to given existing ports; comma separated")
 
 	// NB: Set sink server via JACK_DEFAULT_SERVER
 	flag.Parse()
 
-	// Create jack instance.
+	// Create jack port for playback.
 	var vv *Voices
 	playCallback := func(s []j.AudioSample) int {
 		// TODO: have a pipeline that copies buffers into this one
@@ -33,21 +35,56 @@ func main() {
 		}
 		return 0
 	}
-	pc := jack.PortConfig{*cnFlag, "out", strings.Split(*sinkPortFlag, ",")}
-	wp, err := jack.NewWritePort(pc, playCallback)
+	pcOut := jack.PortConfig{
+		ClientName: *cnFlag,
+		PortName:   "out",
+		MatchName:  strings.Split(*sinkPortFlag, ","),
+	}
+	wp, err := jack.NewWritePort(pcOut, playCallback)
 	if err != nil {
 		panic(err)
 	}
 	defer wp.Close()
+
+	// Create jack port for recording.
+	var sampler *Sampler
+	recCallback := func(s []j.AudioSample) int {
+		x := *(*[]float32)(unsafe.Pointer(&s))
+		if sampler != nil {
+			sampler.record(x)
+		}
+		return 0
+	}
+	pcIn := jack.PortConfig{
+		ClientName: *cnFlag + "-record",
+		PortName:   "in",
+		MatchName:  strings.Split(*samplingPortFlag, ","),
+	}
+	rp, err := jack.NewReadPort(pcIn, recCallback)
+	if err != nil {
+		panic(err)
+	}
+	defer rp.Close()
+
+	log.Printf("sampling at rate %d", rp.Client.GetSampleRate())
+	sampler = NewSampler(int(rp.Client.GetSampleRate()))
+	capturePath := filepath.Join(*spathFlag, "capture")
+	if err := os.MkdirAll(capturePath, 0755); err != nil {
+		panic("could not create \"" + capturePath + "\": " + err.Error())
+	}
 
 	// Create midi sequencer for reading events from controllers.
 	aseq, err := alsa.OpenSeq(*cnFlag)
 	if err != nil {
 		panic(err)
 	}
-	if len(*midiInputPortFlag) > 0 {
-		log.Printf("looking up input midi address %q", *midiInputPortFlag)
-		sa, err := aseq.PortAddress(*midiInputPortFlag)
+	midiInputs := strings.Split(*midiInputPortFlag, ",")
+	for _, input := range midiInputs {
+		if len(input) == 0 {
+			continue
+		}
+		log.Printf("looking up input midi address %q", input)
+		sa, err := aseq.PortAddress(input)
 		if err != nil {
 			panic(err)
 		}
@@ -57,32 +94,18 @@ func main() {
 		}
 	}
 
-	// Load directories for sample wav files.
-	log.Printf("loading sample bank from %q", *spathFlag)
-	sampBank = MustLoadSampleBank(*spathFlag)
+	storage := NewStorage(*configPath, *spathFlag)
 	sampleHz := wp.Client.GetSampleRate()
 	log.Println("resampling to", sampleHz, "sample rate and normalizing")
-	for _, s := range sampBank.slice {
+	for _, s := range storage.SampleBank().slice {
 		s.Resample(int(sampleHz))
 		s.Normalize()
 	}
 	bufferSize = int(wp.Client.GetBufferSize())
 	vv = newVoices(int(sampleHz))
 
-	log.Println("loading programs and banks from configuration path", *configPath)
-	pm, err := LoadProgramMap(filepath.Join(*configPath, "programs.json"), sampBank)
-	if err != nil {
-		log.Printf("failed to load programs.json (%v), making one from global sample bank", err)
-		p := ProgramFromSampleBank(sampBank)
-		pm = make(ProgramMap)
-		pm[p.Instrument] = p
-	}
-	bank, err := LoadBank(filepath.Join(*configPath, "banks.json"), pm)
-	if err != nil {
-		log.Println("no banks.json defined, making a bank with known programs")
-		bank = BankFromProgramMap(pm)
-	}
-	s := NewSequencer(bank)
+	s := NewSequencer(storage, vv, sampler)
+
 	log.Println("waiting on midi events")
-	s.midiLoop(aseq, vv)
+	s.midiLoop(aseq)
 }

@@ -29,3 +29,19 @@ func LoadJSONFile[T any](path string) (cfgs []T, err error) {
 	}
 	return cfgs, nil
 }
+
+func SaveMapValuesJSONFile[K comparable, V any](path string, m map[K]*V) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "\t")
+	for _, v := range m {
+		if err := enc.Encode(v); err != nil {
+			return err
+		}
+	}
+	return nil
+}

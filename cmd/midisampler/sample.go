@@ -5,16 +5,12 @@ import (
 	"log"
 	"math"
 	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-	"sync"
 	"time"
 
+	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
 
 	"github.com/chzchzchz/midispa/ladspa"
-	"github.com/chzchzchz/midispa/util"
 )
 
 type Sample struct {
@@ -25,63 +21,6 @@ type Sample struct {
 	data []float32
 	rate int
 }
-
-type SampleBank struct {
-	samples map[string]*Sample
-	slice   sampleSlice
-}
-
-func MustLoadSampleBank(libPath string) *SampleBank {
-	sb := &SampleBank{samples: make(map[string]*Sample)}
-	files := util.Walk(libPath)
-	adsr := ADSR{
-		Attack:  time.Millisecond,
-		Decay:   100 * time.Millisecond,
-		Sustain: 0.7,
-		Release: 200 * time.Millisecond,
-	}
-	var wg sync.WaitGroup
-	outc := make(chan *Sample, len(files))
-	for i := range files {
-		wg.Add(1)
-		go func(f string) {
-			defer wg.Done()
-			path := filepath.Join(libPath, f)
-			s, err := LoadSample(f, path)
-			if err != nil {
-				log.Printf("error loading %q: %v", f, err)
-			} else {
-				s.ADSR = &adsr
-				outc <- s
-			}
-		}(files[i])
-	}
-	wg.Wait()
-	close(outc)
-	for s := range outc {
-		sb.samples[s.Name], sb.slice = s, append(sb.slice, s)
-	}
-	sort.Sort(sb.slice)
-	log.Printf("loaded %d of %d samples from %q", len(sb.samples), len(files), libPath)
-
-	return sb
-}
-
-func (sb *SampleBank) ByPrefix(pfx string) (ret []*Sample) {
-	for _, v := range sb.slice {
-		if strings.HasPrefix(v.Name, pfx) {
-			ret = append(ret, v)
-		}
-	}
-	sort.Sort(sampleSlice(ret))
-	return ret
-}
-
-type sampleSlice []*Sample
-
-func (ss sampleSlice) Len() int           { return len(ss) }
-func (ss sampleSlice) Less(i, j int) bool { return ss[i].Name < ss[j].Name }
-func (ss sampleSlice) Swap(i, j int)      { ss[i], ss[j] = ss[j], ss[i] }
 
 func (s *Sample) Resample(sampleHz int) {
 	if s.rate == sampleHz {
@@ -173,4 +112,69 @@ func LoadSample(name, path string) (*Sample, error) {
 		Name:     name,
 	}
 	return s, nil
+}
+
+func NewSample(name string, rate int, data []float32) *Sample {
+	seconds := float64(len(data)) / float64(rate)
+	dur := time.Duration(seconds * float64(time.Second))
+	return &Sample{
+		Name:     name,
+		Duration: dur,
+		data:     data,
+		rate:     rate,
+	}
+}
+
+func (s *Sample) Save(path string) error {
+	w, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0755)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+	enc := wav.NewEncoder(w, s.rate, 16, 1 /* chans */, 1 /* fmt */)
+
+	// wav encoder will normalize ints to [-1.0,1.0] but won't expand back.
+	renormalizedData := make([]float32, len(s.data))
+	for i := range s.data {
+		renormalizedData[i] = s.data[i] * float32((1<<15)-1)
+	}
+
+	buf := audio.PCMBuffer{
+		Format:         &audio.Format{NumChannels: 1, SampleRate: s.rate},
+		F32:            renormalizedData,
+		DataType:       audio.DataTypeF32,
+		SourceBitDepth: 2,
+	}
+	if err := enc.Write(buf.AsIntBuffer()); err != nil {
+		return err
+	}
+	if err := enc.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Sample) Copy() *Sample {
+	data := make([]float32, len(s.data))
+	copy(data, s.data)
+	return &Sample{
+		Name:     s.Name,
+		Duration: s.Duration,
+		data:     data,
+		rate:     s.rate,
+	}
+}
+
+func (s *Sample) Chop(start, end time.Duration) {
+	startIdx := int(float64(s.rate) * start.Seconds())
+	endIdx := int(float64(s.rate) * end.Seconds())
+	if end == 0 || endIdx > len(s.data) {
+		endIdx = len(s.data)
+	}
+	if startIdx >= endIdx {
+		return
+	}
+	s.data = s.data[startIdx:endIdx]
+	seconds := float64(len(s.data)) / float64(s.rate)
+	s.Duration = time.Duration(seconds * float64(time.Second))
 }

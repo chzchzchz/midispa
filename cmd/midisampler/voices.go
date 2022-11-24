@@ -4,6 +4,7 @@ import (
 	"sync"
 )
 
+// Voices holds all actively playing voices.
 type Voices struct {
 	lastWas0 bool
 	soundOff bool
@@ -30,6 +31,8 @@ func newVoices(sampleRate int) *Voices {
 var masterVolume = float32(1.0)
 var bufferSize = 1024
 
+// play fills a sample buffer with voice sample data and advances all voices
+// by the size of the buffer.
 func (vv *Voices) play(s []float32) {
 	// Copy voices to avoid threading conflicts.
 	vv.mu.Lock()
@@ -70,6 +73,7 @@ func (vv *Voices) play(s []float32) {
 	}
 }
 
+// add a sample into the voiced playback; called at note on.
 func (vv *Voices) add(s *Sample, vel float32, fxlvl *FxLevel) {
 	var as *adsrCycleState
 	if s.ADSR != nil {
@@ -92,6 +96,8 @@ func (vv *Voices) add(s *Sample, vel float32, fxlvl *FxLevel) {
 	vv.copyVoices()
 }
 
+// stop removes a sample from playback / releases the envelope;
+// called at note off.
 func (vv *Voices) stop(s *Sample) {
 	vv.mu.Lock()
 	for vs := range vv.voices {

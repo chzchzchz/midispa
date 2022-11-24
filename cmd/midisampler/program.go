@@ -1,56 +1,18 @@
 package main
 
-import (
-	"sort"
-
-	"github.com/chzchzchz/midispa/util"
-)
-
 type Program struct {
 	Instrument string
 	Volume     float32
-	Path       string
-	// loaded from json only if using per-sample ADSRs
+
+	// Path is the subdirectory of the sample directory to search.
+	// If not defined, samples will be based on root directory.
+	Path string
+
+	// Notes are loaded from json only if using per-sample ADSRs
 	Notes map[int]*Sample
 }
 
-type ProgramMap map[string]*Program
-
-func (pm ProgramMap) Instruments() []string {
-	ret := make([]string, 0, len(pm))
-	for k := range pm {
-		ret = append(ret, k)
-	}
-	sort.Strings(ret)
-	return ret
-}
-
-func LoadProgramMap(path string, sb *SampleBank) (ProgramMap, error) {
-	ret := make(ProgramMap)
-	progs, err := util.LoadJSONFile[Program](path)
-	if err != nil {
-		return nil, err
-	}
-	for i, p := range progs {
-		if p.Notes == nil {
-			// No notes, load from path.
-			p.Notes = make(map[int]*Sample)
-			pathSamples := sb.ByPrefix(p.Path)
-			for i, s := range pathSamples {
-				note := (i + midiMiddleC) - len(pathSamples)/2
-				p.Notes[note] = s
-			}
-		} else if p.Path != "" {
-			panic("instrument " + p.Instrument + " had path and notes")
-		}
-		if _, ok := ret[p.Instrument]; ok {
-			panic("instrument " + p.Instrument + " defined twice")
-		}
-		ret[p.Instrument] = &progs[i]
-	}
-	return ret, nil
-}
-
+// ProgramMap is the set of all programs.
 const midiMiddleC = 60
 
 // ProgramFromSampleBank creates a program with all samples from a bank.
@@ -67,6 +29,5 @@ func ProgramFromSampleBank(sb *SampleBank) *Program {
 	return p
 }
 
-func (p *Program) Note2Sample(note int) *Sample {
-	return p.Notes[note]
-}
+func (p *Program) Note2Sample(note int) *Sample    { return p.Notes[note] }
+func (p *Program) StoreSample(note int, s *Sample) { p.Notes[note] = s }

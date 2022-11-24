@@ -8,8 +8,17 @@ const (
 	ReleaseTimeCC     = 72
 	ReverbSendLevelCC = 91
 	ChorusSendLevelCC = 93
-	AllSoundOffCC     = 120
-	AllNotesOffCC     = 123
+
+	AllSoundOffCC = 120
+	AllNotesOffCC = 123
+
+	// From spacline keyboard.
+	RecordCC      = 20
+	PlayCC        = 19
+	StopCC        = 18
+	SeekForwardCC = 17
+	SeekBackCC    = 16
+	RepeatCC      = 15
 )
 
 type Controls struct {

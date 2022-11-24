@@ -11,7 +11,7 @@ type Bank struct {
 	programs map[int]*Program
 }
 
-func LoadBank(path string, pm ProgramMap) (*Bank, error) {
+func LoadBank(path string, pm *ProgramMap) (*Bank, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -24,17 +24,17 @@ func LoadBank(path string, pm ProgramMap) (*Bank, error) {
 	}
 	b.programs = make(map[int]*Program)
 	for k, v := range b.Programs {
-		p := pm[v]
-		if p == nil {
+		pgm := pm.Lookup(v)
+		if pgm == nil {
 			panic("could not find program " + v)
 		}
 		// subtract 1 so json can have mapping to drum channel 10
-		b.programs[k-1] = pm[v]
+		b.programs[k-1] = pgm
 	}
 	return b, nil
 }
 
-func BankFromProgramMap(pm ProgramMap) *Bank {
+func BankFromProgramMap(pm *ProgramMap) *Bank {
 	bank := &Bank{
 		Title:    "default bank",
 		Programs: make(map[int]string),
@@ -48,7 +48,8 @@ func BankFromProgramMap(pm ProgramMap) *Bank {
 	for len(bank.Programs) < 16 {
 		oldlen := len(bank.Programs)
 		for i, pgm := range pgms {
-			bank.Programs[i+oldlen], bank.programs[i+oldlen] = pgm, pm[pgm]
+			bank.Programs[i+oldlen] = pgm
+			bank.programs[i+oldlen] = pm.Lookup(pgm)
 		}
 	}
 	return bank

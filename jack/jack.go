@@ -150,8 +150,8 @@ func (j *Port) ports(name string) (ret []*jack.Port) {
 
 func (j *Port) connectExternal(ext *jack.Port) error {
 	src, dst := j.portInternal, ext
-	if j.fl&jack.PortIsOutput != 0 {
-		dst, src = ext, j.portInternal
+	if j.fl&jack.PortIsInput == jack.PortIsInput {
+		src, dst = dst, src
 	}
 	log.Printf("connecting src=%q to dst=%q", src.GetName(), dst.GetName())
 	if code := j.Client.ConnectPorts(src, dst); code != 0 {
