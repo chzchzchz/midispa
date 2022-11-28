@@ -194,6 +194,10 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 				0x80 | byte(note.channel),
 				byte(note.note),
 				byte(note.velocity)}
+		case C.SND_SEQ_EVENT_CLOCK:
+			ret.Data = []byte{0xf8}
+		case C.SND_SEQ_EVENT_TICK:
+			ret.Data = []byte{0xf9}
 		case C.SND_SEQ_EVENT_START:
 			ret.Data = []byte{0xfa}
 		case C.SND_SEQ_EVENT_CONTINUE:
