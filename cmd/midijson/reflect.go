@@ -7,7 +7,7 @@ import (
 	"reflect"
 
 	"github.com/chzchzchz/midispa/sysex"
-	"github.com/chzchzchz/midispa/sysex/arturia"
+	"github.com/chzchzchz/midispa/sysex/keystep37"
 	"github.com/chzchzchz/midispa/sysex/sr16"
 	"github.com/chzchzchz/midispa/sysex/stanton"
 )
@@ -20,7 +20,7 @@ var reflectMap = map[string]interface{}{
 	"sysex/SysEx":                           &sysex.SysEx{},
 	"sysex/MasterBalance":                   &sysex.MasterBalance{},
 	"sysex/MasterVolume":                    &sysex.MasterVolume{},
-	"sysex/arturia/keystep37/PatternsDump":  &arturia.PatternsDump{},
+	"sysex/keystep37/PatternsDump":          &keystep37.PatternsDump{},
 	"sysex/DeviceInquiryRequest":            &sysex.DeviceInquiryRequest{DeviceId: sysex.DeviceInquiryCallAll},
 	"sysex/DeviceInquiryResponse":           &sysex.DeviceInquiryResponse{},
 	"sysex/stanton/scs3d/SlidersMode":       &stanton.SlidersMode{},

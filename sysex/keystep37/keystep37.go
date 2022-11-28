@@ -1,5 +1,5 @@
-// Package arturia provides keystep 37 sysex messages.
-package arturia
+// Package keystep37 provides Arturia keystep 37 sysex messages.
+package keystep37
 
 import (
 	"github.com/chzchzchz/midispa/sysex"
