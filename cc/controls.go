@@ -12,31 +12,46 @@ type MidiControls struct {
 	model   interface{}
 	// consistent ordering
 	ccInfos []*ccInfo
+
+	tag string
+	Cmd byte
 }
+
+type Control *int
 
 type MidiControlsMap map[string]MidiControlsSlice
 
 type MidiControlsSlice []*MidiControls
 
-func (m MidiControlsSlice) Name(cc int) string {
+func (m MidiControlsSlice) Name(cmd byte, cc int) string {
 	for _, mcs := range m {
-		if s := mcs.Name(cc); s != "" {
+		if mcs.Cmd != cmd {
+			continue
+		} else if s := mcs.Name(cc); s != "" {
 			return s
 		}
 	}
 	return ""
 }
 
-func (m MidiControlsSlice) Set(name string, val int) (int, bool) {
+func (m MidiControlsSlice) Get(name string) (*MidiControls, int) {
 	for _, mcs := range m {
 		if cc := mcs.CC(name); cc >= 0 {
-			return cc, mcs.Set(cc, val)
+			return mcs, cc
 		}
 	}
-	return -1, false
+	return nil, -1
 }
 
-// Convert a midi-tagged struct to control codes.
+func (m MidiControlsSlice) Set(name string, val int) (*MidiControls, int) {
+	for _, mcs := range m {
+		if cc := mcs.CC(name); cc >= 0 && mcs.Set(cc, val) {
+			return mcs, cc
+		}
+	}
+	return nil, -1
+}
+
 func (m MidiControlsSlice) ToControlCodes() (ret [][]byte) {
 	for _, mcs := range m {
 		ret = append(ret, mcs.ToControlCodes()...)
@@ -48,10 +63,18 @@ type ccInfo struct {
 	msb int
 	min int
 	max int
-	val int
+	val *int
 }
 
-func NewMidiControls(model interface{}) *MidiControls {
+func NewMidiControlsCC(model interface{}) *MidiControls {
+	return newMidiControls("cc", 0xb0, model)
+}
+
+func NewMidiControlsNote(model interface{}) *MidiControls {
+	return newMidiControls("note", 0x90, model)
+}
+
+func newMidiControls(tag string, cmd byte, model interface{}) *MidiControls {
 	tt := reflect.TypeOf(model).Elem()
 	n := tt.NumField()
 	ret := &MidiControls{
@@ -59,19 +82,32 @@ func NewMidiControls(model interface{}) *MidiControls {
 		cc2cc:   make(map[int]*ccInfo),
 		cc2name: make(map[int]string),
 		model:   model,
+		Cmd:     cmd,
 	}
 	for i := 0; i < n; i++ {
 		field := tt.Field(i)
-		cc := &ccInfo{msb: 0, min: 0, max: 127, val: 0}
-		cc.val = int(reflect.ValueOf(model).Elem().FieldByName(field.Name).Int())
 		// TODO: nrpns, msb/lsbs etc
-		_, err := fmt.Sscanf(field.Tag.Get("midicc"), "%d", &cc.msb)
-		if err != nil {
-			panic(err)
+		tagValue := field.Tag.Get(tag)
+		if tagValue == "" {
+			continue
+		}
+		fPtr := reflect.ValueOf(model).Elem().FieldByName(field.Name)
+		cc := &ccInfo{min: 0, max: 127}
+		if _, err := fmt.Sscanf(field.Tag.Get(tag), "%d", &cc.msb); err != nil {
+			panic("field " + field.Name +
+				" failed to parse tag " + tag +
+				": " + err.Error())
+		}
+		if !fPtr.IsZero() {
+			v := int(reflect.Indirect(fPtr).Int())
+			cc.val = &v
 		}
 		ret.name2cc[field.Name], ret.cc2cc[cc.msb] = cc, cc
 		ret.cc2name[cc.msb] = field.Name
 		ret.ccInfos = append(ret.ccInfos, cc)
+	}
+	if len(ret.ccInfos) == 0 {
+		return nil
 	}
 	return ret
 }
@@ -95,12 +131,13 @@ func (m *MidiControls) Set(cc, v int) bool {
 	if !ok {
 		return false
 	}
-	ccInfo.val = v
-	reflect.ValueOf(m.model).Elem().FieldByName(m.cc2name[cc]).SetInt(int64(v))
+	ccInfo.val = &v
+	rv := reflect.ValueOf(m.model).Elem().FieldByName(m.cc2name[cc])
+	rv.Set(reflect.ValueOf(ccInfo.val))
 	return true
 }
 
-func (m *MidiControls) Get(cc int) int {
+func (m *MidiControls) Get(cc int) *int {
 	if cc == -1 {
 		panic("bad cc")
 	}
@@ -110,7 +147,10 @@ func (m *MidiControls) Get(cc int) int {
 // Convert a midi-tagged struct to control codes.
 func (m *MidiControls) ToControlCodes() (ret [][]byte) {
 	for _, cc := range m.ccInfos {
-		ret = append(ret, []byte{0xb0, byte(cc.msb), byte(cc.val)})
+		if cc.val != nil {
+			msg := []byte{m.Cmd, byte(cc.msb), byte(*cc.val)}
+			ret = append(ret, msg)
+		}
 	}
 	return ret
 }

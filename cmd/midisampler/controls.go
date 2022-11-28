@@ -22,18 +22,18 @@ const (
 )
 
 type Controls struct {
-	Volume int `midicc:7`
+	Volume int `cc:7`
 
-	AttackTime   int `midicc:73`
-	DecayTime    int `midicc:75`
-	SustainLevel int `midicc:79` // sound control 10; no default
-	ReleaseTime  int `midicc:72`
+	AttackTime   int `cc:73`
+	DecayTime    int `cc:75`
+	SustainLevel int `cc:79` // sound control 10; no default
+	ReleaseTime  int `cc:72`
 
-	ReverbSendLevel int `midicc:91`
-	ChorusSendLevel int `midicc:93`
+	ReverbSendLevel int `cc:91`
+	ChorusSendLevel int `cc:93`
 
-	AllSoundOff int `midicc:120` // mute
-	AllNotesOff int `midicc:123` // panic
+	AllSoundOff int `cc:120` // mute
+	AllNotesOff int `cc:123` // panic
 
 	updated bool
 }

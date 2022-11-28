@@ -101,10 +101,6 @@ func (a *Assignments) InToOut(in string) (string, int) {
 	return "", -1
 }
 
-func (a *Assignments) InCCtoOut(in int) int {
-	return -1
-}
-
 func mustLoadAssignments(path string) (m []Assignments) {
 	m = util.MustLoadJSONFile[Assignments](path)
 	for i := range m {

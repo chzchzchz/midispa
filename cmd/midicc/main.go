@@ -19,7 +19,12 @@ func main() {
 	mcs := make(cc.MidiControlsMap)
 	for i, m := range dms {
 		devs[m.Device] = &dms[i]
-		mcs[m.Device] = append(mcs[m.Device], cc.NewMidiControls(m.MidiParams()))
+		if mc := cc.NewMidiControlsCC(m.MidiParams()); mc != nil {
+			mcs[m.Device] = append(mcs[m.Device], mc)
+		}
+		if mc := cc.NewMidiControlsNote(m.MidiParams()); mc != nil {
+			mcs[m.Device] = append(mcs[m.Device], mc)
+		}
 	}
 
 	assigns := mustLoadAssignments(os.Args[2])
@@ -50,8 +55,11 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		if err := aseq.OpenPort(sa.Client, sa.Port); err != nil {
+		if err := aseq.OpenPortRead(sa); err != nil {
 			panic(err)
+		}
+		if err := aseq.OpenPortWrite(sa); err != nil {
+			log.Printf("warning: could not writeback to %q", inDev)
 		}
 	}
 	log.Printf("opening output device %q", assigns[0].OutDevice)
@@ -72,6 +80,6 @@ func main() {
 	}
 	outChan := devs[assigns[0].OutDevice].Channel
 	s := Seq{aseq: aseq, savef: savef, mcs: mcs, outChan: outChan, assigns: assigns}
-	// s.applyPatches()
+	s.applyPatches()
 	s.run()
 }

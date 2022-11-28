@@ -26,6 +26,8 @@ func (s *Seq) run() {
 	}
 }
 
+const sysDevId = 0x10
+
 func (s *Seq) processEvent() error {
 	ev, err := s.aseq.Read()
 	if err != nil {
@@ -45,20 +47,25 @@ func (s *Seq) processEvent() error {
 		}
 		return nil
 	}
-	if len(ev.Data) != 3 || cmd != 0xb0 {
+	if len(ev.Data) != 3 {
 		return nil
 	}
+
 	cc, val := int(ev.Data[1]), int(ev.Data[2])
 	a := &s.assigns[s.pgm]
-	inName := s.mcs[a.InDevice].Name(cc)
+	cmdMask := cmd & 0xf0
+	isInputButton := cmdMask&0xf0 == 0x90
+	inName := s.mcs[a.InDevice].Name(cmdMask, cc)
 	if inName == "" {
-		return nil
-	} else if inName == "Record" && val == 0 {
-		s.savef()
 		return nil
 	}
 	outName, outCh := a.InToOut(inName)
-	sysDevId := 0x10
+	if inName == "Record" || outName == "Record" {
+		if cmdMask == 0x90 || val == 0 {
+			s.savef()
+			return nil
+		}
+	}
 	switch outName {
 	case "NextChannel":
 		if val > 0 {
@@ -113,19 +120,41 @@ func (s *Seq) processEvent() error {
 		if outCh <= 0 {
 			outCh = s.outChan
 		}
+		mcc := s.mcs[a.OutDevice]
+		outMC, outCC := mcc.Get(outName)
+		if isInputButton && outMC != nil {
+			// Flip value.
+			oldVal := outMC.Get(outCC)
+			if oldVal == nil || *oldVal <= 63 {
+				val = 0x7f
+			} else {
+				val = 0
+			}
+		}
 		log.Println(inName, "->", outName, "=", val, "; ch =", outCh)
-		outCC, ok := s.mcs[a.OutDevice].Set(outName, val)
-		if !ok {
-			log.Printf("missing cc=%d outName=%s on device %q\n",
-				outCC, outName, a.OutDevice)
+		if outMC == nil || !outMC.Set(outCC, val) {
+			log.Printf(
+				"failed to set outName=%s on device %q\n",
+				outName, a.OutDevice)
 			return nil
 		}
 		ch := byte(outCh - 1)
-		ev = alsa.SeqEvent{
+		evOut := alsa.SeqEvent{
 			SeqAddr: a.saOut,
-			Data:    []byte{0xb0 | ch, byte(outCC), byte(val)},
+			Data:    []byte{outMC.Cmd | ch, byte(outCC), byte(val)},
 		}
-		return s.aseq.Write(ev)
+		if err := s.aseq.Write(evOut); err != nil {
+			return err
+		}
+		if isInputButton {
+			// Input was a button; writeback out value to change lit value.
+			ev.Data[2] = byte(val)
+			if err := s.aseq.Write(ev); err != nil {
+				log.Printf("failed writeback of %+v", ev)
+				return err
+			}
+		}
+		return nil
 	}
 	if outName != "" && cc > -1 {
 		// Write input CC to output CC
@@ -158,8 +187,9 @@ func (s *Seq) applyPatches() {
 		panic("no out mcs" + s.assigns[0].OutDevice)
 	}
 	for _, msg := range outMcs.ToControlCodes() {
+		name := outMcs.Name(msg[0], int(msg[1]))
+		log.Println("initializing", name, "=", int(msg[2]))
 		msg[0] |= byte(s.outChan - 1)
-		log.Println("initializing", outMcs.Name(int(msg[1])), "=", int(msg[2]))
 		ev := alsa.SeqEvent{s.assigns[0].saOut, msg}
 		if err := s.aseq.Write(ev); err != nil {
 			panic(err)
