@@ -15,7 +15,9 @@ type Assignments struct {
 	Maps      [][2]string // in, out
 
 	in2out map[string]*Mapping
+	out2in map[string]string
 
+	saIn  alsa.SeqAddr
 	saOut alsa.SeqAddr
 }
 
@@ -31,6 +33,7 @@ type Mapping struct {
 func (a *Assignments) setupMap() {
 	mayArm, mayArmAll := make(map[string]struct{}), false
 	a.in2out = make(map[string]*Mapping)
+	a.out2in = make(map[string]string)
 	for _, v := range a.Maps {
 		slash := strings.Split(v[1], "/")
 		m := &Mapping{OutControl: v[1], Armed: true}
@@ -52,6 +55,9 @@ func (a *Assignments) setupMap() {
 			}
 		}
 		a.in2out[v[0]] = m
+		if m.OutControl != "" {
+			a.out2in[m.OutControl] = v[0]
+		}
 	}
 	for k, m := range a.in2out {
 		if mayArmAll && len(m.arms) == 0 {

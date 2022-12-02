@@ -180,18 +180,31 @@ func (s *Seq) processEvent() error {
 }
 
 func (s *Seq) applyPatches() {
+	a := s.assigns[s.pgm]
 	log.Printf("applying old patch to %q on channel %d",
-		s.assigns[0].OutDevice, s.outChan)
-	outMcs := s.mcs[s.assigns[0].OutDevice]
+		a.OutDevice, s.outChan)
+	outMcs, inMcs := s.mcs[a.OutDevice], s.mcs[a.InDevice]
 	if outMcs == nil {
-		panic("no out mcs" + s.assigns[0].OutDevice)
+		panic("no out mcs" + a.OutDevice)
 	}
 	for _, msg := range outMcs.ToControlCodes() {
-		name := outMcs.Name(msg[0], int(msg[1]))
-		log.Println("initializing", name, "=", int(msg[2]))
+		outName := outMcs.Name(msg[0], int(msg[1]))
+		log.Println("initializing", outName, "=", int(msg[2]))
 		msg[0] |= byte(s.outChan - 1)
-		ev := alsa.SeqEvent{s.assigns[0].saOut, msg}
-		if err := s.aseq.Write(ev); err != nil {
+		evOut := alsa.SeqEvent{a.saOut, msg}
+		if err := s.aseq.Write(evOut); err != nil {
+			panic(err)
+		}
+		inName, ok := a.out2in[outName]
+		if !ok {
+			continue
+		}
+		inMc, inCC := inMcs.Get(inName)
+		if inMc == nil || inMc.Cmd != 0x90 {
+			continue
+		}
+		evIn := alsa.SeqEvent{a.saIn, []byte{0x90, byte(inCC), msg[2]}}
+		if err := s.aseq.Write(evIn); err != nil {
 			panic(err)
 		}
 	}

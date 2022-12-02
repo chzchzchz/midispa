@@ -112,6 +112,13 @@ func newMidiControls(tag string, cmd byte, model interface{}) *MidiControls {
 	return ret
 }
 
+func (m *MidiControls) Names() (ret []string) {
+	for _, n := range m.cc2name {
+		ret = append(ret, n)
+	}
+	return ret
+}
+
 func (m *MidiControls) Name(cc int) string {
 	if s, ok := m.cc2name[cc]; ok {
 		return s

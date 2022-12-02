@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/cc"
@@ -49,6 +50,7 @@ func main() {
 	for _, a := range assigns {
 		inDevs[a.InDevice] = struct{}{}
 	}
+	in2sa := make(map[string]alsa.SeqAddr)
 	for inDev := range inDevs {
 		log.Printf("opening input device %q", inDev)
 		sa, err := aseq.PortAddress(inDev)
@@ -61,7 +63,9 @@ func main() {
 		if err := aseq.OpenPortWrite(sa); err != nil {
 			log.Printf("warning: could not writeback to %q", inDev)
 		}
+		in2sa[inDev] = sa
 	}
+
 	log.Printf("opening output device %q", assigns[0].OutDevice)
 	saOut, err := aseq.PortAddress(assigns[0].OutDevice)
 	if err != nil {
@@ -72,7 +76,51 @@ func main() {
 	}
 	for i := range assigns {
 		assigns[i].saOut = saOut
+		assigns[i].saIn = in2sa[assigns[i].InDevice]
 	}
+
+	turnOffButtons := func(a Assignments) {
+		for _, mc := range mcs[a.InDevice] {
+			if mc.Cmd&0xf0 != 0x90 {
+				// Only consider notes.
+				continue
+			}
+			// TODO: have input channel.
+			msg := []byte{0x90, 0, 0}
+			ev := alsa.SeqEvent{a.saIn, msg}
+			for _, name := range mc.Names() {
+				if _, ok := a.in2out[name]; !ok {
+					continue
+				}
+				cc := mc.CC(name)
+				if cc < 0 {
+					panic("did not have cc for " + name)
+				}
+				msg[1] = byte(cc)
+				if err := aseq.Write(ev); err != nil {
+					log.Printf("failed to turn off %q: %v", name, err)
+				}
+			}
+		}
+	}
+	turnOffAllButtons := func() {
+		for _, a := range assigns {
+			turnOffButtons(a)
+		}
+	}
+	sigc := make(chan os.Signal, 1)
+	go func() {
+		<-sigc
+		signal.Stop(sigc)
+		turnOffAllButtons()
+		os.Exit(0)
+	}()
+	defer func() {
+		signal.Stop(sigc)
+		close(sigc)
+		turnOffAllButtons()
+	}()
+	signal.Notify(sigc, os.Interrupt)
 
 	savef := func() {
 		log.Println("saving presets to", os.Args[1])
