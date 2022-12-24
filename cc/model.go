@@ -216,6 +216,32 @@ type VolcaDrum struct {
 	Tune           Control `cc:"119"`
 }
 
+type MeeblipTriode struct {
+	LfoRate    Control `cc:"48"`
+	LfoDepth   Control `cc:"49"`
+	Detune     Control `cc:"50"`
+	Glide      Control `cc:"51"`
+	PulseWidth Control `cc:"58"`
+
+	Resonance          Control `cc:"52"`
+	Cutoff             Control `cc:"53"`
+	FilterAccent       Control `cc:"56"`
+	EnvelopeModulation Control `cc:"57"`
+	FilterAttack       Control `cc:"59"`
+	FilterDecay        Control `cc:"54"`
+	AmplitudeDecay     Control `cc:"55"`
+	AmplitudeAttack    Control `cc:"60"`
+
+	// Buttons
+	LfoNoteRetrigger Control `cc:"70"`
+	SubOscillator    Control `cc:"65"`
+	PWMSweep         Control `cc:"66"`
+	WavePulseSaw     Control `cc:"68"`
+	Sustain          Control `cc:"64"`
+	LfoRandomize     Control `cc:"69"`
+	LfoDestination   Control `cc:"67"`
+}
+
 type MeeblipSE struct {
 	FilterResonance      Control `cc:"48"`
 	FilterCutoff         Control `cc:"49"`
@@ -571,6 +597,7 @@ type Model struct {
 	*GMController    `json:"GMController,omitempty"`
 	*CraftSynth2     `json:"CraftSynth2,omitempty"`
 	*MeeblipSE       `json:"MeeblipSE,omitempty"`
+	*MeeblipTriode   `json:"MeeblipTriode,omitempty"`
 	*Skulpt          `json:"Skulpt,omitempty"`
 	*SoundController `json:"SoundController,omitempty"`
 	*VolcaBass       `json:"VolcaBass,omitempty"`
@@ -587,6 +614,8 @@ func (m *Model) MidiParams() interface{} {
 		return m.CraftSynth2
 	case "Meeblip SE":
 		return m.MeeblipSE
+	case "Meeblip Triode":
+		return m.MeeblipTriode
 	case "MidiMix":
 		return &MidiMix{}
 	case "Skulpt":
