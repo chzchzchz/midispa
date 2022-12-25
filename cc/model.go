@@ -217,8 +217,8 @@ type VolcaDrum struct {
 }
 
 type MeeblipTriode struct {
-	LfoRate    Control `cc:"48"`
-	LfoDepth   Control `cc:"49"`
+	LfoDepth   Control `cc:"48"`
+	LfoRate    Control `cc:"49"`
 	Detune     Control `cc:"50"`
 	Glide      Control `cc:"51"`
 	PulseWidth Control `cc:"58"`
