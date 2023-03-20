@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/util"
 )
 
 func writeMidiMsgs(aseq *alsa.Seq, sa alsa.SeqAddr, msgs [][]byte) error {
@@ -44,7 +45,7 @@ func main() {
 	f := NewFire(write)
 
 	log.Println("loading kit", *kitFlag)
-	devs := mustLoadDevices(*kitFlag)
+	devs := util.MustLoadJSONFile[Device](*kitFlag)
 	for i, dev := range devs {
 		log.Printf("opening %q for writing", dev.MidiPort)
 		dsa, err := aseq.PortAddress(dev.MidiPort)
