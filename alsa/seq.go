@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"unsafe"
+
+	"github.com/chzchzchz/midispa/midi"
 )
 
 var errExpectedSysEx = errors.New("expected sysex")
@@ -147,11 +149,11 @@ func (a *Seq) ReadSysEx() (ret SeqEvent, err error) {
 		if err != nil {
 			return ret, err
 		}
-		if len(ret.Data) == 0 && ev.Data[0] != 0xf0 {
+		if len(ret.Data) == 0 && ev.Data[0] != midi.SysEx {
 			return ret, errExpectedSysEx
 		}
 		ret.SeqAddr, ret.Data = ev.SeqAddr, append(ret.Data, ev.Data...)
-		if ret.Data[len(ret.Data)-1] == 0xf7 {
+		if ret.Data[len(ret.Data)-1] == midi.EndSysEx {
 			break
 		}
 	}
@@ -173,40 +175,40 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 		case C.SND_SEQ_EVENT_CONTROLLER:
 			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
-				0xB0 | byte(ctrl.channel),
+				midi.MakeCC(int(ctrl.channel)),
 				byte(ctrl.param),
 				byte(ctrl.value),
 			}
 		case C.SND_SEQ_EVENT_PGMCHANGE:
 			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
-				0xC0 | byte(ctrl.channel),
+				midi.MakePgm(int(ctrl.channel)),
 				byte(ctrl.value)}
 		case C.SND_SEQ_EVENT_NOTEON:
 			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
-				0x90 | byte(note.channel),
+				midi.MakeNoteOn(int(note.channel)),
 				byte(note.note),
 				byte(note.velocity)}
 			if note.velocity == 0 {
-				ret.Data[0] = 0x80 | byte(note.channel)
+				ret.Data[0] = midi.MakeNoteOff(int(note.channel))
 			}
 		case C.SND_SEQ_EVENT_NOTEOFF:
 			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
-				0x80 | byte(note.channel),
+				midi.MakeNoteOff(int(note.channel)),
 				byte(note.note),
 				byte(note.velocity)}
 		case C.SND_SEQ_EVENT_CLOCK:
-			ret.Data = []byte{0xf8}
+			ret.Data = []byte{midi.Clock}
 		case C.SND_SEQ_EVENT_TICK:
-			ret.Data = []byte{0xf9}
+			ret.Data = []byte{midi.Tick}
 		case C.SND_SEQ_EVENT_START:
-			ret.Data = []byte{0xfa}
+			ret.Data = []byte{midi.Start}
 		case C.SND_SEQ_EVENT_CONTINUE:
-			ret.Data = []byte{0xfb}
+			ret.Data = []byte{midi.Continue}
 		case C.SND_SEQ_EVENT_STOP:
-			ret.Data = []byte{0xfc}
+			ret.Data = []byte{midi.Stop}
 		case C.SND_SEQ_EVENT_PORT_SUBSCRIBED:
 			c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
@@ -242,59 +244,66 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 	event.dest.client, event.dest.port = ev.CAddrValues()
 	event.queue = C.SND_SEQ_QUEUE_DIRECT
 	// event.dest.client, event.dest.port = C.SND_SEQ_ADDRESS_SUBSCRIBERS, C.SND_SEQ_ADDRESS_UNKNOWN
-	switch {
-	case ev.Data[0] == 0xf0:
+	switch midi.Message(ev.Data[0]) {
+	case midi.SysEx:
 		event._type = C.SND_SEQ_EVENT_SYSEX
 		event.flags = C.SND_SEQ_EVENT_LENGTH_VARIABLE
 		ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
 		ext.len = C.uint(len(ev.Data))
 		C.snd_seq_ev_ext_data_set(ext, (*C.uchar)(&ev.Data[0]))
-	case ev.Data[0]&0xf0 == 0xb0:
+	case midi.CC:
 		if len(ev.Data) != 3 {
 			panic("bad length")
 		}
 		event._type = C.SND_SEQ_EVENT_CONTROLLER
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
+		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.param = C.uint(ev.Data[1])
 		ctrl.value = C.int(ev.Data[2])
-	case ev.Data[0]&0xf0 == 0x80:
+	case midi.NoteOff:
 		if len(ev.Data) != 3 {
 			panic("bad length")
 		}
 		event._type = C.SND_SEQ_EVENT_NOTEOFF
 		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
+		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.note = C.uchar(ev.Data[1])
 		ctrl.velocity = C.uchar(ev.Data[2])
-	case ev.Data[0]&0xf0 == 0x90:
+	case midi.NoteOn:
 		if len(ev.Data) != 3 {
 			panic("bad length")
 		}
 		event._type = C.SND_SEQ_EVENT_NOTEON
 		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(ev.Data[0] & 0xf)
+		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.note = C.uchar(ev.Data[1])
 		ctrl.velocity = C.uchar(ev.Data[2])
-	case ev.Data[0] == 0xfa:
+	case midi.Start:
 		if len(ev.Data) != 1 {
 			panic("bad size for START")
 		}
 		event._type = C.SND_SEQ_EVENT_START
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
-	case ev.Data[0] == 0xfb:
+	case midi.Continue:
 		if len(ev.Data) != 1 {
 			panic("bad size for CONTINUE")
 		}
 		event._type = C.SND_SEQ_EVENT_CONTINUE
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
-	case ev.Data[0] == 0xfc:
+	case midi.Stop:
 		if len(ev.Data) != 1 {
 			panic("bad size for STOP")
 		}
 		event._type = C.SND_SEQ_EVENT_STOP
+		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
+		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	case midi.Clock:
+		if len(ev.Data) != 1 {
+			panic("bad size for CLOCK")
+		}
+		event._type = C.SND_SEQ_EVENT_CLOCK
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
 	default:

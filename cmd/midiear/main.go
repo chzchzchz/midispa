@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/theory"
 )
 
@@ -67,9 +68,8 @@ var kinds = []intervalKind{
 }
 
 func playPair(aseq *alsa.Seq, sa alsa.SeqAddr, midiChannel, n1, n2 int) {
-	mc := byte(midiChannel - 1)
-	msgOn := []byte{0x90 | mc, 0, 100}
-	msgOff := []byte{0x80 | mc, 0, 100}
+	msgOn := []byte{midi.MakeNoteOn(midiChannel - 1), 0, 100}
+	msgOff := []byte{midi.MakeNoteOff(midiChannel - 1), 0, 100}
 	msgOn[1], msgOff[1] = byte(n1), byte(n1)
 	if err := aseq.Write(alsa.SeqEvent{sa, msgOn}); err != nil {
 		panic(err)

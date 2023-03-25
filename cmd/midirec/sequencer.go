@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"gitlab.com/gomidi/midi"
+	gomidi "gitlab.com/gomidi/midi"
 	"gitlab.com/gomidi/midi/midimessage/meta"
 	"gitlab.com/gomidi/midi/midimessage/realtime"
 	"gitlab.com/gomidi/midi/midireader"
@@ -15,6 +15,7 @@ import (
 	"gitlab.com/gomidi/midi/smf/smfwriter"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/sysex"
 )
 
@@ -71,7 +72,7 @@ func (s *Sequencer) save() error {
 		return nil
 	}
 	tpq := smf.MetricTicks(960)
-	msg2midi := func(data []byte) (midi.Message, error) {
+	msg2midi := func(data []byte) (gomidi.Message, error) {
 		rd := midireader.New(bytes.NewBuffer(data), func(m realtime.Message) {})
 		return rd.Read()
 	}
@@ -108,7 +109,7 @@ func (s *Sequencer) save() error {
 func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 	cmd := ev.Data[0]
 	switch cmd {
-	case 0xf0:
+	case midi.SysEx:
 		sx := sysex.Decode(ev.Data)
 		switch sx.(type) {
 		case *sysex.RecordStrobe:
@@ -127,19 +128,19 @@ func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 		case *sysex.Eject:
 			return s.save()
 		}
-	case 0xfa:
+	case midi.Start:
 		s.start, s.running = time.Now(), true
 		log.Println("started")
 		return nil
-	case 0xfc:
+	case midi.Stop:
 		s.running = false
 		log.Println("stopped")
 		return nil
 	}
-	switch cmd & 0xf0 {
-	case 0xb0:
+	switch midi.Message(cmd) {
+	case midi.CC:
 		// cc
-		if cmd&0xf == 0xf {
+		if midi.Channel(cmd) == 0xf {
 			// TODO: tempo control
 			switch ev.Data[1] {
 			case CCTempoLSB:
@@ -150,11 +151,9 @@ func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 			return nil
 		}
 		s.record(ev.Data)
-	case 0x80:
-		// note off
+	case midi.NoteOff:
 		s.record(ev.Data)
-	case 0x90:
-		// note on
+	case midi.NoteOn:
 		s.record(ev.Data)
 	}
 	return nil

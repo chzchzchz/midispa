@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 )
 
 type eventProcessFunc func(*alsa.Seq, alsa.SeqEvent) error
@@ -69,13 +70,8 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
-	cmd := ev.Data[0] & 0xf0
-	if cmd == 0x80 {
-		// note-off
-		return nil
-	}
-	// cc / note on only
-	if cmd != 0x90 && cmd != 0xb0 {
+	status := ev.Data[0]
+	if midi.IsNoteOff(status) || !(midi.IsCC(status) || midi.IsNoteOn(status)) {
 		return nil
 	}
 	if x, y, ok := Note2Grid(int(ev.Data[1])); ok {
@@ -150,13 +146,8 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
-	cmd := ev.Data[0] & 0xf0
-	if cmd == 0x80 {
-		// note-off
-		return nil
-	}
-	// cc / note on only
-	if cmd != 0x90 && cmd != 0xb0 {
+	status := ev.Data[0]
+	if midi.IsNoteOff(status) || !(midi.IsCC(status) || midi.IsNoteOn(status)) {
 		return nil
 	}
 	if x, y, ok := Note2Grid(int(ev.Data[1])); ok {

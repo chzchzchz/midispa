@@ -14,6 +14,7 @@ import (
 	"gitlab.com/gomidi/midi/smf/smfreader"
 	"gitlab.com/gomidi/midi/writer"
 
+	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/track"
 )
 
@@ -58,18 +59,16 @@ func (p *Pattern) Merge(p2 *Pattern) {
 		if p.msgs[i].Tick != p.msgs[j].Tick {
 			return p.msgs[i].Tick < p.msgs[j].Tick
 		}
-		// note off = 0x8n; note on = 0x9n; put offs before ons
-		iType, jType := p.msgs[i].Raw[0]&0xf0, p.msgs[j].Raw[0]&0xf0
-		if iType == 0xb0 {
-			if jType != 0xb0 {
+		// Prioritize offs before ons.
+		iType := midi.Message(p.msgs[i].Raw[0])
+		jType := midi.Message(p.msgs[j].Raw[0])
+		if iType == midi.CC {
+			if jType != midi.CC {
 				return true
 			}
 			return p.msgs[i].Raw[1] < p.msgs[j].Raw[1]
 		}
-		if iType == 0x80 && jType == 0x90 {
-			return true
-		}
-		return false
+		return iType == midi.NoteOff && jType == midi.NoteOn
 	}
 	sort.Slice(p.msgs, lt)
 }

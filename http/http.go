@@ -3,7 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	//"fmt"
 	"net/http"
 	"os"
 	"path"
@@ -185,6 +185,8 @@ func (mh *midiHandler) getTrackDev(devId string) (*trackDev, error) {
 	if td, ok := mh.tracks[devId]; ok {
 		return td, nil
 	}
+	panic("STUB")
+	/*
 	d, err := sequencer.OpenDeviceById(devId)
 	if err != nil {
 		return nil, err
@@ -194,6 +196,7 @@ func (mh *midiHandler) getTrackDev(devId string) (*trackDev, error) {
 	td := newTrackDev(d)
 	mh.tracks[devId] = td
 	return td, nil
+	*/
 }
 
 func (mh *midiHandler) handlePattern(w http.ResponseWriter, r *http.Request) {

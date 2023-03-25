@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/sysex"
 )
 
@@ -73,7 +74,7 @@ func (s *sequencer) midiLoop(aseq *alsa.Seq) {
 }
 
 func (seq *sequencer) handleEvent(ev alsa.SeqEvent) {
-	cmd, ch := ev.Data[0]&0xf0, int(ev.Data[0]&0xf)
+	cmd, ch := midi.Message(ev.Data[0]), midi.Channel(ev.Data[0])
 	channel := seq.channels[ch]
 	pgm := channel.Program
 	if pgm == nil {
@@ -82,12 +83,11 @@ func (seq *sequencer) handleEvent(ev alsa.SeqEvent) {
 	}
 	controls := &channel.Controls
 	switch cmd {
-	case 0x80:
-		/* note off */
+	case midi.NoteOff:
 		if s := pgm.Note2Sample(int(ev.Data[1])); s != nil {
 			seq.voices.stop(s)
 		}
-	case 0x90: /* note on */
+	case midi.NoteOn:
 		note, vel := int(ev.Data[1]), int(ev.Data[2])
 		if seq.storeArmed {
 			s := seq.sampler.currentSample()
@@ -123,7 +123,7 @@ func (seq *sequencer) handleEvent(ev alsa.SeqEvent) {
 			log.Printf("adsr set to %+v on %q", *s.ADSR, s.Name)
 		}
 		seq.voices.add(s, channel.Volume*scale(vel), &channel.FxLevel)
-	case 0xb0: /* cc */
+	case midi.CC:
 		cc, val := int(ev.Data[1]), int(ev.Data[2])
 		// TODO use controls code from midicc
 		if controls.Set(cc, val) {
@@ -176,7 +176,7 @@ func (seq *sequencer) handleEvent(ev alsa.SeqEvent) {
 		default:
 			log.Printf("unrecognized control message %+v", ev)
 		}
-	case 0xf0: /* sysex */
+	case midi.SysEx:
 		s := sysex.Decode(ev.Data)
 		if s == nil {
 			log.Printf("? sysex %+v", ev)

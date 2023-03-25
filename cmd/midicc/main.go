@@ -8,6 +8,7 @@ import (
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/cc"
+	"github.com/chzchzchz/midispa/midi"
 )
 
 func main() {
@@ -81,12 +82,11 @@ func main() {
 
 	turnOffButtons := func(a Assignments) {
 		for _, mc := range mcs[a.InDevice] {
-			if mc.Cmd&0xf0 != 0x90 {
-				// Only consider notes.
+			if !midi.IsNoteOn(mc.Cmd) {
 				continue
 			}
 			// TODO: have input channel.
-			msg := []byte{0x90, 0, 0}
+			msg := []byte{midi.NoteOn, 0, 0}
 			ev := alsa.SeqEvent{a.saIn, msg}
 			for _, name := range mc.Names() {
 				if _, ok := a.in2out[name]; !ok {

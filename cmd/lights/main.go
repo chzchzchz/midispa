@@ -9,6 +9,7 @@ import (
 	"github.com/go-ble/ble/examples/lib/dev"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 )
 
 func WriteColor(c ble.Client, ch *ble.Characteristic, r, g, b int) error {
@@ -106,7 +107,6 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		cmd := ev.Data[0]
 		colors := func(note, vel byte) (int, int, int) {
 			r, g, b := 0, 0, 0
 			v := int(255 * (float64(vel) / 127.0))
@@ -124,13 +124,13 @@ func main() {
 			}
 			return r, g, b
 		}
-		if cmd&0xf0 == 0x80 {
-			// off
+		status := ev.Data[0]
+		if midi.IsNoteOff(status) {
 			ns.Off(int(ev.Data[1]))
 			note, vel := ns.Mono()
 			r, g, b := colors(byte(note), byte(vel))
 			WriteColor(c, outCh, r, g, b)
-		} else if cmd&0xf0 == 0x90 {
+		} else if midi.IsNoteOn(status) {
 			// on
 			ns.On(int(ev.Data[1]), int(ev.Data[2]))
 			r, g, b := colors(ev.Data[1], ev.Data[2])

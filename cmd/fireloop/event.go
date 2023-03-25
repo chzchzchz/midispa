@@ -1,5 +1,9 @@
 package main
 
+import (
+	"github.com/chzchzchz/midispa/midi"
+)
+
 type Event struct {
 	*Voice
 	Beat     float32
@@ -17,7 +21,7 @@ func (ev *Event) ToMidi() [][]byte {
 		panic("no midi channel on voice")
 	}
 	return [][]byte{
-		[]byte{byte(0x80 | (ch - 1)), byte(ev.Note), byte(ev.Velocity)},
-		[]byte{byte(0x90 | (ch - 1)), byte(ev.Note), 64},
+		[]byte{midi.MakeNoteOff(ch - 1), byte(ev.Note), byte(ev.Velocity)},
+		[]byte{midi.MakeNoteOn(ch - 1), byte(ev.Note), 64},
 	}
 }

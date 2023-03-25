@@ -5,6 +5,7 @@ import (
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/cc"
+	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/sysex"
 )
 
@@ -33,9 +34,8 @@ func (s *Seq) processEvent() error {
 	if err != nil {
 		return err
 	}
-	cmd := ev.Data[0] & 0xf0
-	if len(ev.Data) == 2 && cmd == 0xc0 {
-		// Change controller.
+	status := ev.Data[0]
+	if len(ev.Data) == 2 && midi.IsCC(status) {
 		if v := int(ev.Data[1]); v < len(s.assigns) {
 			s.pgm = v
 			s.assigns[s.pgm].Enable()
@@ -53,15 +53,15 @@ func (s *Seq) processEvent() error {
 
 	cc, val := int(ev.Data[1]), int(ev.Data[2])
 	a := &s.assigns[s.pgm]
-	cmdMask := cmd & 0xf0
-	isInputButton := cmdMask&0xf0 == 0x90
-	inName := s.mcs[a.InDevice].Name(cmdMask, cc)
+	msg := midi.Message(status)
+	isInputButton := msg == midi.NoteOn
+	inName := s.mcs[a.InDevice].Name(msg, cc)
 	if inName == "" {
 		return nil
 	}
 	outName, outCh := a.InToOut(inName)
 	if inName == "Record" || outName == "Record" {
-		if cmdMask == 0x90 || val == 0 {
+		if isInputButton || val == 0 {
 			s.savef()
 			return nil
 		}
@@ -200,10 +200,10 @@ func (s *Seq) applyPatches() {
 			continue
 		}
 		inMc, inCC := inMcs.Get(inName)
-		if inMc == nil || inMc.Cmd != 0x90 {
+		if inMc == nil || inMc.Cmd != midi.NoteOn {
 			continue
 		}
-		evIn := alsa.SeqEvent{a.saIn, []byte{0x90, byte(inCC), msg[2]}}
+		evIn := alsa.SeqEvent{a.saIn, []byte{midi.NoteOn, byte(inCC), msg[2]}}
 		if err := s.aseq.Write(evIn); err != nil {
 			panic(err)
 		}
