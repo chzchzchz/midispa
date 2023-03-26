@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/sysex"
 )
 
 type httpHandler struct {
@@ -40,6 +41,23 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
+	accept := req.Header.Get("Accept")
+	mediatype, isRead := "", false
+	var sysexIface interface{}
+	if accept != "" {
+		mt, params, err := mime.ParseMediaType(accept)
+		errReply(err)
+		isRead = mt == "application/json" || mt == "application/octet-stream"
+		if isRead {
+			content, ok := params["content"]
+			if !ok {
+				errReply(fmt.Errorf("no decode type given"))
+			}
+			sysexIface, err = copyTypeInterface(content)
+			errReply(err)
+		}
+		mediatype = mt
+	}
 	switch req.Method {
 	case http.MethodPost:
 		pathParts := strings.Split(req.URL.Path, "/")
@@ -54,25 +72,10 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		msg, err := bm.MarshalBinary()
 		errReply(err)
 
-		accept := req.Header.Get("Accept")
-		isRead := false
-		var sysexIface interface{}
-		if accept != "" {
-			mt, params, err := mime.ParseMediaType(accept)
-			errReply(err)
-			if isRead = mt == "application/json"; isRead {
-				content, ok := params["content"]
-				if !ok {
-					errReply(fmt.Errorf("no decode type given"))
-				}
-				sysexIface, err = copyTypeInterface(content)
-				errReply(err)
-			}
-		}
-
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		// get device, apply sysex
+
+		log.Printf("opening %q", devName)
 		sa, err := h.aseq.PortAddress(devName)
 		errReply(err)
 		errReply(h.aseq.OpenPortWrite(sa))
@@ -90,9 +93,31 @@ func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 			resp.WriteHeader(http.StatusOK)
 		}
 	case http.MethodGet:
-		d, err := alsa.Devices()
+		pathParts := strings.Split(req.URL.Path, "/")
+		if len(pathParts) < 2 {
+			d, err := alsa.Devices()
+			errReply(err)
+			errReply(replyJSON(resp, d))
+			return
+		}
+		devName := pathParts[1]
+
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		log.Printf("opening %q", devName)
+		sa, err := h.aseq.PortAddress(devName)
 		errReply(err)
-		errReply(replyJSON(resp, d))
+		errReply(h.aseq.OpenPortRead(sa))
+		defer h.aseq.ClosePortRead(sa)
+		rws := rwSysEx{h.aseq, sa, nil, sysexIface, req.URL.Path}
+		inSysEx, err := rws.read()
+		errReply(err)
+		if mediatype == "application/json" {
+			replyJSON(resp, inSysEx)
+		} else {
+			sysex := (inSysEx[0]).(*sysex.SysEx)
+			resp.Write(sysex.Data)
+		}
 	default:
 		resp.WriteHeader(http.StatusMethodNotAllowed)
 	}

@@ -19,7 +19,7 @@ type rwSysEx struct {
 	path string
 }
 
-func (rws *rwSysEx) doAllSysEx() ([]interface{}, error) {
+func (rws *rwSysEx) xfer() ([]interface{}, error) {
 	s := sysex.SysEx{Data: rws.out}
 	sp, err := s.Split()
 	if err != nil {
@@ -39,6 +39,14 @@ func (rws *rwSysEx) doAllSysEx() ([]interface{}, error) {
 			}
 			ret = append(ret, in...)
 		}
+	}
+	return ret, nil
+}
+
+func (rws *rwSysEx) doAllSysEx() ([]interface{}, error) {
+	ret, err := rws.xfer()
+	if err != nil {
+		return nil, err
 	}
 	if rws.in == nil {
 		return ret, nil
