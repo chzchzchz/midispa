@@ -14,6 +14,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"io"
 	"unsafe"
 
 	"github.com/chzchzchz/midispa/midi"
@@ -41,6 +42,17 @@ type SeqEvent struct {
 func (a *Seq) Close() {
 	C.snd_seq_close(a.seq)
 }
+
+type seqWriter struct {
+	seq *Seq
+	dst SeqAddr
+}
+
+func (a *seqWriter) Write(data []byte) (int, error) {
+	return len(data), a.seq.Write(SeqEvent{a.dst, data})
+}
+
+func (a *Seq) NewWriter(sa SeqAddr) io.Writer { return &seqWriter{a, sa} }
 
 func snderr2error(err C.int) error {
 	if err >= 0 {

@@ -6,6 +6,8 @@ const (
 	FileDumpIdHeader     = 1
 	FileDumpIdDataPacket = 2
 	FileDumpIdRequest    = 3
+
+	FileDumpMaxChunk = 112
 )
 
 type FileDumpRequest struct {
@@ -84,7 +86,7 @@ func (f *FileDumpDataPacket) MarshalBinary() ([]byte, error) {
 		SubIdFileDump, FileDumpIdDataPacket,
 		byte(f.Packet),
 	}
-	if len(f.Data) > 112 {
+	if len(f.Data) > FileDumpMaxChunk {
 		panic("too much data to send")
 	}
 	var encodedBytes []byte

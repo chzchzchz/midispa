@@ -13,6 +13,7 @@ import (
 
 func main() {
 	strFlag := flag.String("s", "", "hex message to send (e.g., \"F0 A1 2B F7\")")
+	fileFlag := flag.String("f", "", "send file using filedump")
 	portFlag := flag.String("p", "", "destination port")
 
 	flag.Parse()
@@ -48,6 +49,16 @@ func main() {
 			}
 			msg = append(msg, byte(n))
 		}
+	} else if len(*fileFlag) != 0 {
+		f, err := os.Open(*fileFlag)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		if err := fileDump(aseq, sa, f); err != nil {
+			panic(err)
+		}
+		return
 	} else {
 		m, err := io.ReadAll(os.Stdin)
 		if err != nil {
