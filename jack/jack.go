@@ -1,6 +1,7 @@
 package jack
 
 import (
+	"io"
 	"log"
 	"strings"
 	"sync"
@@ -11,7 +12,6 @@ import (
 type Port struct {
 	PortConfig
 
-	f  JackProcessCallback
 	fl uint64
 
 	Client *jack.Client
@@ -22,6 +22,8 @@ type Port struct {
 	portc      chan *jack.Port
 	connecting bool
 	wg         sync.WaitGroup
+
+	mw *midiWriter
 }
 
 type PortConfig struct {
@@ -29,6 +31,9 @@ type PortConfig struct {
 	PortName   string
 
 	MatchName []string
+
+	AudioCallback JackAudioCallback
+	MidiCallback  JackMidiCallback
 }
 
 func (pc *PortConfig) isNameMatch(s string) bool {
@@ -39,21 +44,22 @@ func (pc *PortConfig) isNameMatch(s string) bool {
 	return ret
 }
 
-type JackProcessCallback func([]jack.AudioSample) int
+type JackAudioCallback func([]jack.AudioSample) int
+type JackMidiCallback func(io.Writer)
 
-func NewReadPort(pc PortConfig, f JackProcessCallback) (*Port, error) {
-	return NewJackPort(pc, jack.PortIsInput|jack.PortIsTerminal, f)
+func NewReadPort(pc PortConfig) (*Port, error) {
+	return NewJackPort(pc, jack.PortIsInput|jack.PortIsTerminal)
 }
 
-func NewWritePort(pc PortConfig, f JackProcessCallback) (*Port, error) {
-	return NewJackPort(pc, jack.PortIsOutput|jack.PortIsTerminal, f)
+func NewWritePort(pc PortConfig) (*Port, error) {
+	return NewJackPort(pc, jack.PortIsOutput|jack.PortIsTerminal)
 }
 
 func (j *Port) GetBuffer(nf int) []jack.AudioSample {
 	return j.portInternal.GetBuffer(uint32(nf))
 }
 
-func NewJackPort(pc PortConfig, fl uint64, f JackProcessCallback) (*Port, error) {
+func NewJackPort(pc PortConfig, fl uint64) (*Port, error) {
 	client, status := jack.ClientOpen(pc.ClientName, jack.NoStartServer)
 	if status != 0 {
 		return nil, jack.StrError(status)
@@ -62,7 +68,6 @@ func NewJackPort(pc PortConfig, fl uint64, f JackProcessCallback) (*Port, error)
 		PortConfig:   pc,
 		Client:       client,
 		portExternal: make(map[string]*jack.Port),
-		f:            f,
 		fl:           fl,
 		portc:        make(chan *jack.Port, 2),
 	}
@@ -70,7 +75,14 @@ func NewJackPort(pc PortConfig, fl uint64, f JackProcessCallback) (*Port, error)
 		j.Client.Close()
 		return nil, jack.StrError(code)
 	}
-	if code := client.SetProcessCallback(j.process); code != 0 {
+	var cb jack.ProcessCallback
+	if pc.AudioCallback != nil {
+		cb = j.processAudio
+	} else {
+		cb = j.processMidi
+		j.mw = &midiWriter{port: j}
+	}
+	if code := client.SetProcessCallback(cb); code != 0 {
 		j.Client.Close()
 		return nil, jack.StrError(code)
 	}
@@ -91,7 +103,12 @@ func NewJackPort(pc PortConfig, fl uint64, f JackProcessCallback) (*Port, error)
 		}
 	}()
 
-	j.portInternal = j.Client.PortRegister(pc.PortName, jack.DEFAULT_AUDIO_TYPE, fl, 8192)
+	Type := jack.DEFAULT_AUDIO_TYPE
+	if pc.MidiCallback != nil {
+		Type = jack.DEFAULT_MIDI_TYPE
+	}
+
+	j.portInternal = j.Client.PortRegister(pc.PortName, Type, fl, 8192)
 
 	for _, mn := range j.MatchName {
 		srcs := j.ports(mn)
@@ -108,11 +125,35 @@ func NewJackPort(pc PortConfig, fl uint64, f JackProcessCallback) (*Port, error)
 	return j, nil
 }
 
-func (j *Port) process(nFrames uint32) int {
+type midiWriter struct {
+	port *Port
+	ts   uint32
+	buf  jack.MidiBuffer
+}
+
+func (mw *midiWriter) Write(msg []byte) (int, error) {
+	event := jack.MidiData{mw.ts, msg}
+	mw.ts += 1
+	if mw.port.portInternal.MidiEventWrite(&event, mw.buf) != 0 {
+		return 0, io.EOF
+	}
+	return len(msg), nil
+}
+
+func (j *Port) processMidi(nFrames uint32) int {
 	if len(j.portExternal) == 0 {
 		return 0
 	}
-	return j.f(j.portInternal.GetBuffer(nFrames))
+	j.mw.buf = j.portInternal.MidiClearBuffer(nFrames)
+	j.MidiCallback(j.mw)
+	return 0
+}
+
+func (j *Port) processAudio(nFrames uint32) int {
+	if len(j.portExternal) == 0 {
+		return 0
+	}
+	return j.AudioCallback(j.portInternal.GetBuffer(nFrames))
 }
 
 func (j *Port) portConnect(a, b jack.PortId, is_connect bool) {}
@@ -162,20 +203,20 @@ func (j *Port) connectExternal(ext *jack.Port) error {
 	return nil
 }
 
-func LogPorts() {
-	client, status := jack.ClientOpen("logports", jack.NoStartServer)
+func Ports() (ret []string, err error) {
+	client, status := jack.ClientOpen("listports", jack.NoStartServer)
 	if status != 0 {
-		panic("couldn't open jack client")
+		return nil, jack.StrError(status)
 	}
 	defer client.Close()
 	for _, port := range client.GetPorts("", "", 0) {
 		p := client.GetPortByName(port)
-		log.Println("port:", p.GetName())
+		ret = append(ret, p.GetName())
 	}
+	return ret, nil
 }
 
 func (j *Port) Close() {
-	j.Client.Deactivate()
 	j.Client.Close()
 	close(j.portc)
 	j.wg.Wait()

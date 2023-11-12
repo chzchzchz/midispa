@@ -39,8 +39,12 @@ type SeqEvent struct {
 	Data []byte
 }
 
-func (a *Seq) Close() {
-	C.snd_seq_close(a.seq)
+func (a *Seq) Close() error {
+	if err := C.snd_seq_close(a.seq); err != 0 {
+		return snderr2error(err)
+	}
+	return nil
+
 }
 
 type seqWriter struct {

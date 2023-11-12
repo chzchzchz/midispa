@@ -7,33 +7,31 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
 )
 
 func main() {
 	strFlag := flag.String("s", "", "hex message to send (e.g., \"F0 A1 2B F7\")")
 	fileFlag := flag.String("f", "", "send file using filedump")
-	portFlag := flag.String("p", "", "destination port")
+	aportFlag := flag.String("p", "", "alsa destination port")
+	jportFlag := flag.String("j", "", "jack midi destination port")
 
 	flag.Parse()
 
-	aseq, err := alsa.OpenSeq("midisend")
-	if err != nil {
-		panic(err)
+	var aw *alsaWriter
+	var w io.Writer
+	var c io.Closer
+	if len(*aportFlag) != 0 {
+		aw = newAlsaWriter(*aportFlag)
+		w, c = aw, aw
+	} else if len(*jportFlag) != 0 {
+		jw := newJackWriter(*jportFlag)
+		w, c = jw, jw
+	} else {
+		panic("expected -j or -p")
 	}
-	defer aseq.Close()
+	defer c.Close()
 
-	if len(*portFlag) == 0 {
-		panic("expected -p port flag")
-	}
-	sa, err := aseq.PortAddress(*portFlag)
-	if err != nil {
-		panic(err)
-	}
-	if err := aseq.OpenPortWrite(sa); err != nil {
-		panic(err)
-	}
 	var msg []byte
 	if len(*strFlag) != 0 {
 		for _, hexByte := range strings.Fields(*strFlag) {
@@ -50,12 +48,15 @@ func main() {
 			msg = append(msg, byte(n))
 		}
 	} else if len(*fileFlag) != 0 {
+		if aw == nil {
+			panic("file dump only works with alsa midi")
+		}
 		f, err := os.Open(*fileFlag)
 		if err != nil {
 			panic(err)
 		}
 		defer f.Close()
-		if err := fileDump(aseq, sa, f); err != nil {
+		if err := fileDump(aw.seq, aw.sa, f); err != nil {
 			panic(err)
 		}
 		return
@@ -70,7 +71,7 @@ func main() {
 		}
 
 	}
-	if err := aseq.Write(alsa.SeqEvent{sa, msg}); err != nil {
+	if _, err := w.Write(msg); err != nil {
 		panic(err)
 	}
 }

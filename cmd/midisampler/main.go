@@ -39,8 +39,9 @@ func main() {
 		ClientName: *cnFlag,
 		PortName:   "out",
 		MatchName:  strings.Split(*sinkPortFlag, ","),
+		AudioCallback: playCallback,
 	}
-	wp, err := jack.NewWritePort(pcOut, playCallback)
+	wp, err := jack.NewWritePort(pcOut)
 	if err != nil {
 		panic(err)
 	}
@@ -59,8 +60,9 @@ func main() {
 		ClientName: *cnFlag + "-record",
 		PortName:   "in",
 		MatchName:  strings.Split(*samplingPortFlag, ","),
+		AudioCallback: recCallback,
 	}
-	rp, err := jack.NewReadPort(pcIn, recCallback)
+	rp, err := jack.NewReadPort(pcIn)
 	if err != nil {
 		panic(err)
 	}
