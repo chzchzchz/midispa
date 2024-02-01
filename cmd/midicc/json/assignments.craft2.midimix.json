@@ -1,0 +1,67 @@
+{
+  "Title" : "Craft2 Parameters",
+  "InDevice" : "MIDI Mix MIDI 1",
+  "OutDevice" : "USB Midi 4i4o MIDI 4",
+  "Maps" : [
+	["Knob1x6", "Delay"],
+	["Knob1x7", "DelayTime"],
+	["Knob1x8", "DelayFeedback"],
+
+	["Knob2x6", "Morph"],
+	["Knob2x7", "Cutoff"],
+	["Knob2x8", "Reso"],
+
+	["Knob1x1", "FegAttack"],
+	["Knob1x2", "FegDecay"],
+	["Knob1x3", "FegSustain"],
+	["Knob1x4", "FegRelease"]
+	["Knob1x5", "FegAmount"],
+
+	["Knob2x1", "AegAttack"],
+	["Knob2x1", "AegDecay"],
+	["Knob2x1", "AegSustain"],
+	["Knob2x1", "AegRelease"],
+	["Knob2x1", "AegAmount"],
+
+	["Knob3x1", "MegAttack"],
+	["Knob3x2", "MegDecay"],
+	["Knob3x3", "MegSustain"],
+	["Knob3x4", "MegRelease"],
+
+	["Knob3x5", "AllEnvelopeAttack"],
+	["Knob3x6", "AllEnvelopeDecay"],
+	["Knob3x7", "AllEnvelopeSustain"],
+	["Knob3x8", "AllEnvelopeRelease"],
+
+	["Slider1", "Lfo1Rate"],
+	["Slider2", "Lfo1Depth"],
+	["Slider3", "Lfo1Shape"],
+	["Slider4", "Lfo2Rate"],
+	["Slider5", "Lfo2Depth"],
+	["Slider6", "Lfo2Shape"]
+  ]
+}
+{
+  "Title" : "Craft2 Parameters",
+  "InDevice" : "MIDI Mix MIDI 1",
+  "OutDevice" : "USB Midi 4i4o MIDI 4",
+  "Maps" : [
+	["Knob1x1", "Osc1Wave"],
+	["Knob1x2", "Osc2Wave"],
+	["Knob1x3", "OscMix"],
+	["Knob1x4", "OscModAmount"],
+	["Knob1x5", "Osc2CourseDetune"],
+	["Knob1x6", "Osc2FineDetune"],
+	["Knob1x7", "OscModMode"],
+
+
+	["Knob1x8", "Glide"],
+	["Knob2x8", "Distortion"],
+	["Knob3x8", "Spread"],
+
+	["Knob2x1", "Lfo1Mode"],
+	["Knob2x2", "Lfo2Mode"],
+	["Knob2x3", "DelayMidiSync"],
+	["Knob2x4", "Lfo1MidiSync"],
+	["Knob2x5", "Lfo2MidiSync"]
+}

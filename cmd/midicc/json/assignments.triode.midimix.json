@@ -1,0 +1,37 @@
+{
+  "Title" : "Triode Parameters",
+  "InDevice" : "MIDI Mix MIDI 1",
+  "OutDevice" : "MIDI4x4 MIDI Out 1",
+  "Maps" : [
+  	["Knob1x1", "LfoRate"],
+	["Knob2x1", "LfoDepth"],
+
+	["Mute1", "LfoNoteRetrigger"],
+	["Mute2", "LfoRandomize"],
+	["Mute3", "LfoDestination"],
+
+	["Knob1x2", "Detune"],
+	["Knob2x2", "Glide"],
+	["Knob3x2", "PulseWidth"],
+
+	["Knob1x3", "Resonance"],
+	["Knob2x3", "Cutoff"],
+	["Knob3x3", "FilterAccent"],
+
+
+	["Knob1x4", "EnvelopeModulation"],
+	["Knob2x4", "FilterAttack"],
+	["Knob3x4", "FilterDecay"],
+
+	["Knob1x5", "AmplitudeDecay"],
+	["Knob2x5", "AmplitudeAttack"],
+
+	["RecArm1", "SubOscillator"],
+	["RecArm2", "PWMSweep"],
+	["RecArm3", "WavePulseSaw"],
+	["RecArm4", "Sustain"],
+
+	["Solo", "Record"]
+
+  ]
+}

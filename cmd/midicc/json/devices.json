@@ -1,0 +1,32 @@
+{
+ "Device": "MIDI4x4 MIDI 3",
+ "Channel": 10,
+ "Model": "Volca Beats",
+ "VolcaBeats": {
+  "KickLevel": 35,
+  "SnareLevel": 33,
+  "LoTomLevel": 93,
+  "HiTomLevel": 79,
+  "ClosedHatLevel": 75,
+  "OpenHatLevel": 119,
+  "ClapLevel": 73,
+  "ClavesLevel": 109,
+  "AgogoLevel": 127,
+  "CrashLevel": 127,
+  "ClapPCMSpeed": 60,
+  "ClavesPCMSpeed": 12,
+  "AgogoPCMSpeed": 14,
+  "CrashPCMSpeed": 77,
+  "StutterTime": 97,
+  "StutterDepth": 3,
+  "TomDecay": 0,
+  "ClosedHatDecay": 82,
+  "OpenHatDecay": 127,
+  "HatGrain": 100
+ }
+}
+{
+ "Device": "WORLDE easy control MIDI 1",
+ "Channel": 1,
+ "Model": "WorldeEasyControl9"
+}

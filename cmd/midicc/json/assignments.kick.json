@@ -1,0 +1,22 @@
+{
+  "Title" : "Kick Parameters",
+  "InDevice" : "MIDI Mix MIDI 1",
+  "OutDevice" : "USB Midi 4i4o MIDI 4",
+  "Maps" : [
+	["Knob1x1", "PulseColor"],
+	["Knob2x1", "PulseLevel"],
+
+	["Knob1x2", "AmpAttack"],
+	["Knob2x2", "AmpDecay"],
+
+	["Knob1x3", "Drive"],
+	["Knob2x3", "Tone"],
+	["Knob3x3", "Accent"],
+
+	["Knob1x4", "ResonatorPitch"],
+	["Knob2x4", "ResonatorBend"],
+	["Knob3x4", "ResonatorTime"],
+
+	["Solo", "Record"]
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "Title" : "sengine",
+  "InDevice" : "WORLDE easy control MIDI 1",
+  "OutDevice" : "USB Midi 4i4o MIDI 4",
+  "Maps" : [
+    ["Knob1", "ChannelVolume"],
+    ["Knob2", "Pan"],
+    ["Slider1", "SoundVariation"],
+    ["Slider2", "FilterResonance"],
+    ["Slider3", "ReleaseTime"],
+    ["Slider4", "AttackTime"],
+    ["Slider5", "DecayTime"],
+    ["Slider6", "Brightness"],
+    ["Slider7", "VibratoRate"],
+    ["Slider8", "VibratoDelay"],
+    ["Knob7", "VibratoDepth"],
+    ["Knob3", "ReverbSendLevel"],
+    ["Knob4", "ChorusSendLevel"]
+  ]
+}

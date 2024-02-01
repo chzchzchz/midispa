@@ -1,0 +1,34 @@
+{
+ "Device": "MIDI4x4 MIDI Out 1",
+ "Name": "",
+ "Channel": 3,
+ "Model": "Meeblip Triode",
+ "MeeblipTriode": {
+  "LfoDepth": 92,
+  "LfoRate": 18,
+  "Detune": 60,
+  "Glide": 66,
+  "PulseWidth": 89,
+  "Resonance": 50,
+  "Cutoff": 61,
+  "FilterAccent": 106,
+  "EnvelopeModulation": 83,
+  "FilterAttack": 36,
+  "FilterDecay": 22,
+  "AmplitudeDecay": 21,
+  "AmplitudeAttack": 5,
+  "LfoNoteRetrigger": 0,
+  "SubOscillator": 127,
+  "PWMSweep": 127,
+  "WavePulseSaw": 0,
+  "Sustain": 127,
+  "LfoRandomize": 0,
+  "LfoDestination": 0
+ }
+}
+{
+ "Device": "MIDI Mix MIDI 1",
+ "Name": "",
+ "Channel": 1,
+ "Model": "MidiMix"
+}

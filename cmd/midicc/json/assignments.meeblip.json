@@ -1,0 +1,41 @@
+{
+  "Title" : "Meeblip Parameters",
+  "InDevice" : "MIDI Mix MIDI 1",
+  "OutDevice" : "USB Midi 4i4o MIDI 4",
+  "Maps" : [
+	["Knob1x1", "FilterResonance"],
+	["Knob2x1", "FilterCutoff"],
+
+	["Knob1x2", "FilterEnvelopeAmount"],
+	["Knob2x2", "FilterDecay"],
+	["Knob3x2", "FilterAttack"],
+
+	["Knob1x3", "LfoFrequency"],
+	["Knob2x3", "LfoLevel"],
+
+	["Knob1x4", "Portamento"],
+	["Knob2x4", "PulseWidthPWMRate"],
+	["Knob3x4", "OscillatorDetune"],
+
+	["Knob1x5", "AmplitudeDecay"],
+	["Knob2x5", "AmplitudeAttack"],
+
+	["Mute1", "LfoRandom"],
+	["Mute2", "LfoEnable"],
+	["Mute3", "FM"],
+	["Mute4", "OscillatorANoise"],
+	["Mute5", "FilterMode"],
+	["Mute6", "EnvelopeSustain"],
+	["Mute7", "OscillatorBEnable"],
+	["Mute8", "OscillatorBOctave"],
+
+	["RecArm1", "LfoWave"],
+	["RecArm2", "LfoDestination"],
+	["RecArm3", "AntiAlias"],
+	["RecArm4", "OscillatorAWave"],
+	["RecArm5", "Distortion"],
+	["RecArm6", "PWMSweep"],
+	["RecArm7", "OscillatorBWave"],
+	["Solo", "Record"]
+  ]
+}

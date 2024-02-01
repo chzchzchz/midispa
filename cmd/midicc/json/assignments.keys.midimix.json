@@ -1,0 +1,31 @@
+{
+  "Title" : "Keys Parameters",
+  "InDevice" : "MIDI Mix MIDI 1",
+  "OutDevice" : "USB Midi 4i4o MIDI 4",
+  "Maps" : [
+	["SliderMaster", "Expression"],
+
+	["Knob1x1", "Detune"],
+	["Knob2x1", "Portamento"],
+	["Knob3x1", "VcoEGintensity"],
+
+	["Knob1x2", "VcfCutoff"],
+	["Knob3x2", "VcfEGintesity"],
+
+	["Knob1x3", "LfoRate"],
+	["Knob2x3", "LfoPitch"],
+	["Knob3x3", "LfoCutoff"],
+
+	["Knob1x4", "Attack"],
+	["Knob2x4", "DecayRelease"],
+	["Knob3x4", "Sustain"],
+
+	["Knob1x5", "DelayTime"],
+	["Knob2x5", "DelayFeedback"],
+
+	["Knob1x6", "Voice"],
+	["Knob2x6", "Octave"],
+
+	["Solo", "Record"]
+  ]
+}

@@ -1,0 +1,42 @@
+{
+ "Device": "USB Midi 4i4o MIDI 4",
+ "Name": "",
+ "Channel": 6,
+ "Model": "Meeblip SE",
+ "MeeblipSE": {
+  "FilterResonance": 53,
+  "FilterCutoff": 49,
+  "LfoFrequency": 34,
+  "LfoLevel": 20,
+  "FilterEnvelopeAmount": 44,
+  "Portamento": 26,
+  "PulseWidthPWMRate": 55,
+  "OscillatorDetune": 64,
+  "FilterDecay": 29,
+  "FilterAttack": 12,
+  "AmplitudeDecay": 97,
+  "AmplitudeAttack": 16,
+  "KnobShift": null,
+  "FM": 0,
+  "LfoRandom": 0,
+  "LfoWave": 0,
+  "FilterMode": 0,
+  "Distortion": 0,
+  "LfoEnable": 127,
+  "LfoDestination": 127,
+  "AntiAlias": 127,
+  "OscillatorBOctave": 0,
+  "OscillatorBEnable": 0,
+  "OscillatorBWave": 0,
+  "EnvelopeSustain": 127,
+  "OscillatorANoise": 0,
+  "PWMSweep": 127,
+  "OscillatorAWave": 127
+ }
+}
+{
+ "Device": "MIDI Mix MIDI 1",
+ "Name": "",
+ "Channel": 1,
+ "Model": "MidiMix"
+}

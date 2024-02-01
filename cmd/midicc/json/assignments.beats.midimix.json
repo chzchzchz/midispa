@@ -1,0 +1,37 @@
+{
+  "Title" : "Beats Parameters",
+  "InDevice" : "MIDI Mix MIDI 1",
+  "OutDevice" : "USB Midi 4i4o MIDI 4",
+  "Maps" : [
+	["Slider1", "KickLevel"],
+	["Slider2", "SnareLevel"],
+
+	["Knob1x1", "StutterTime"],
+	["Knob2x1", "StutterDepth"],
+
+	["Knob1x2", "TomDecay"],
+	["Knob2x2", "LoTomLevel"],
+	["Knob3x2", "HiTomLevel"],
+
+	["Knob1x3", "ClosedHatDecay"],
+	["Knob2x3", "ClosedHatLevel"],
+	["Slider3", "HatGrain"],
+
+	["Knob1x4", "OpenHatDecay"],
+	["Knob2x4", "OpenHatLevel"],
+
+	["Knob1x5", "ClapPCMSpeed"],
+	["Knob2x5", "ClapLevel"],	
+
+	["Knob1x6", "ClavesPCMSpeed"],
+	["Knob2x6", "ClavesLevel"],
+
+	["Knob1x7", "AgogoPCMSpeed"],
+	["Knob2x7", "AgogoLevel"],
+
+	["Knob1x8", "CrashPCMSpeed"],
+	["Knob2x8", "CrashLevel"],
+
+	["Solo", "Record"]
+  ]
+}
