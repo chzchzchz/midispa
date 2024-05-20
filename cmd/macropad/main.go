@@ -21,6 +21,7 @@ var ev2key = map[int]string{
 	evdev.KEY_7: "7",
 	evdev.KEY_8: "8",
 	evdev.KEY_9: "9",
+	evdev.KEY_0: "0",
 	evdev.KEY_A: "a",
 	evdev.KEY_B: "b",
 	evdev.KEY_C: "c",
@@ -97,11 +98,34 @@ func kbd(path string) (<-chan *evdev.KeyEvent, error) {
 }
 
 type CC struct {
-	cc     int
-	data   int
-	desc   string
+	cc   int
+	data int
+}
+
+type SetCCFunc func(bool, *CC)
+
+type Key struct {
+	idx    int
+	on     bool
 	rgbOn  [3]byte
 	rgbOff [3]byte
+	desc   string
+	setCC  SetCCFunc
+
+	*CC
+	bank *Bank
+}
+
+type Bank struct {
+	keys []*Key
+}
+
+func (b *Bank) add(k *Key) {
+	if k.bank != nil {
+		panic("bank already assigned")
+	}
+	b.keys = append(b.keys, k)
+	k.bank = b
 }
 
 func off(rgb *sayo.Device) {
@@ -110,37 +134,109 @@ func off(rgb *sayo.Device) {
 	}
 }
 
-func reset(rgb *sayo.Device, ccs []CC) {
-	for i, cc := range ccs {
-		if cc.cc != 0 {
-			writeCC(rgb, &cc, i)
+func reset(rgb *sayo.Device, keys []Key) {
+	for _, k := range keys {
+		if k.CC != nil {
+			k.updateCC()
+			k.updateRGB(rgb)
 		}
 	}
 }
 
-func writeCC(rgb *sayo.Device, cc *CC, idx int) {
-	c := cc.rgbOn
-	if cc.data == 0 {
-		c = cc.rgbOff
+func (k *Key) updateCC() {
+	if k.setCC != nil {
+		k.setCC(k.on, k.CC)
+		return
 	}
-	rgb.Write(sayo.ModeSwitchOnce, idx, c[0], c[1], c[2])
+	if k.on {
+		k.data = 0x7f
+	} else {
+		k.data = 0
+	}
 }
 
-func setupCCs() []CC {
-	ccs := make([]CC, 24)
+func (k *Key) updateRGB(rgb *sayo.Device) {
+	c := k.rgbOn
+	if !k.on {
+		c = k.rgbOff
+	}
+	rgb.Write(sayo.ModeSwitchOnce, k.idx, c[0], c[1], c[2])
+}
+
+func (k *Key) toggle(rgb *sayo.Device) {
+	k.on = !k.on
+	// At most one key may be active for a bank.
+	if b := k.bank; k.on && b != nil {
+		for _, kk := range k.bank.keys {
+			if kk.on && kk != k {
+				kk.on = false
+				kk.updateCC()
+				kk.updateRGB(rgb)
+			}
+		}
+	}
+	k.updateCC()
+	k.updateRGB(rgb)
+}
+
+func setupKeys() []Key {
+	keys := make([]Key, 24)
 	red := [3]byte{0x80, 0, 0}
 	blu := [3]byte{0, 0, 0xf0}
 	blk := [3]byte{0, 0, 0}
-	ccs[0] = CC{80, 0, "percussion enable", red, blk}
-	ccs[1] = CC{81, 0, "percussion decay", red, blu}
-	ccs[2] = CC{82, 0, "percussion harmonic", red, blu}
-	ccs[3] = CC{83, 0, "percussion volume", red, blu}
-	ccs[4] = CC{64, 0, "rotary speed", red, blu}
-	ccs[5] = CC{65, 0, "overdrive enable", red, blk}
-	ccs[6] = CC{30, 0, "vibrato lower ", red, blk}
-	ccs[7] = CC{31, 0, "vibrato upper", red, blk}
+	grn := [3]byte{0, 0x80, 0}
+	rotary := &CC{102, 0} // midi.controller.upper.102=rotary.speed-select
+	keys[0] = Key{CC: &CC{80, 0}, desc: "percussion enable", rgbOn: red, rgbOff: blk}
+	keys[1] = Key{CC: &CC{81, 0}, desc: "percussion decay", rgbOn: red, rgbOff: blu}
+	keys[2] = Key{CC: &CC{82, 0}, desc: "percussion harmonic", rgbOn: red, rgbOff: blu}
+	keys[3] = Key{CC: &CC{83, 0}, desc: "percussion volume", rgbOn: red, rgbOff: blu}
+
+	mkSetHornValue := func(v int) SetCCFunc {
+		return func(on bool, cc *CC) {
+			d := (cc.data / 15) % 3
+			if on {
+				d = d + v
+			}
+			cc.data = 15 * d
+		}
+	}
+	keys[5] = Key{CC: rotary, desc: "horn chorale", rgbOn: grn, rgbOff: blk, setCC: mkSetHornValue(3)}
+	keys[6] = Key{CC: rotary, desc: "horn tremolo", rgbOn: grn, rgbOff: blk, setCC: mkSetHornValue(6)}
+	keys[7] = Key{CC: &CC{31, 0}, desc: "vibrato upper", rgbOn: red, rgbOff: blk}
+
+	mkSetDrumValue := func(v int) SetCCFunc {
+		return func(on bool, cc *CC) {
+			d := 3 * ((cc.data / 15) / 3)
+			if on {
+				d = d + v
+			}
+			cc.data = 15 * d
+		}
+	}
+	keys[10] = Key{
+		CC: rotary, desc: "drum chorale", rgbOn: grn, rgbOff: blk, setCC: mkSetDrumValue(1),
+	}
+	keys[9] = Key{
+		CC: rotary, desc: "drum tremolo", rgbOn: grn, rgbOff: blk, setCC: mkSetDrumValue(2),
+	}
+	keys[8] = Key{CC: &CC{30, 0}, desc: "vibrato lower ", rgbOn: red, rgbOff: blk}
+
+	keys[12] = Key{CC: &CC{65, 0}, desc: "overdrive enable", rgbOn: red, rgbOff: blk}
+
+	for i := range keys {
+		keys[i].idx = i
+	}
+
+	hornBank := &Bank{}
+	hornBank.add(&keys[5])
+	hornBank.add(&keys[6])
+
+	drumBank := &Bank{}
+	drumBank.add(&keys[9])
+	drumBank.add(&keys[10])
+
 	// rotary speed select is more complicated
-	return ccs
+	return keys
 }
 
 func main() {
@@ -151,14 +247,14 @@ func main() {
 	hidFlag := flag.String("hidraw", "/dev/hidraw4", "hidraw device for rgb")
 	flag.Parse()
 
-	ccs := setupCCs()
-
 	rgb, err := sayo.NewDevice(*hidFlag)
 	if err != nil {
 		panic(err)
 	}
+
+	keys := setupKeys()
 	off(rgb)
-	reset(rgb, ccs)
+	reset(rgb, keys)
 
 	ch, err := kbd(*evFlag)
 	if err != nil {
@@ -196,17 +292,10 @@ func main() {
 			continue
 		}
 		idx := key2idx[v[0]]
-		cc := &ccs[idx]
-		if cc.cc == 0 {
-			continue
+		if k := &keys[idx]; k.CC != nil {
+			k.toggle(rgb)
+			msg := []byte{ccCmd, byte(k.cc), byte(k.data)}
+			outc <- alsa.SeqEvent{Data: msg}
 		}
-		if cc.data == 0 {
-			cc.data = 0x7f
-		} else {
-			cc.data = 0
-		}
-		writeCC(rgb, cc, idx)
-		msg := []byte{ccCmd, byte(cc.cc), byte(cc.data)}
-		outc <- alsa.SeqEvent{Data: msg}
 	}
 }
