@@ -54,10 +54,10 @@ var key2idx = map[byte]int{
 	'a': 10,
 	'b': 11,
 
-	'f': 12,
-	'e': 13,
-	'd': 14,
-	'c': 15,
+	'c': 12,
+	'd': 13,
+	'e': 14,
+	'f': 15,
 
 	'g': 16,
 	'h': 17,
@@ -103,6 +103,7 @@ type CC struct {
 }
 
 type SetCCFunc func(bool, *CC)
+type SetRGBFunc func(bool, *sayo.Device)
 
 type Key struct {
 	idx    int
@@ -111,6 +112,7 @@ type Key struct {
 	rgbOff [3]byte
 	desc   string
 	setCC  SetCCFunc
+	setRGB SetRGBFunc
 
 	*CC
 	bank *Bank
@@ -163,6 +165,10 @@ func (k *Key) updateRGB(rgb *sayo.Device) {
 	rgb.Write(sayo.ModeSwitchOnce, k.idx, c[0], c[1], c[2])
 }
 
+func (k *Key) off(rgb *sayo.Device) {
+	rgb.Write(sayo.ModeSwitchOnce, k.idx, 0, 0, 0)
+}
+
 func (k *Key) toggle(rgb *sayo.Device) {
 	k.on = !k.on
 	// At most one key may be active for a bank.
@@ -177,6 +183,9 @@ func (k *Key) toggle(rgb *sayo.Device) {
 	}
 	k.updateCC()
 	k.updateRGB(rgb)
+	if k.setRGB != nil {
+		k.setRGB(k.on, rgb)
+	}
 }
 
 func setupKeys() []Key {
@@ -186,7 +195,17 @@ func setupKeys() []Key {
 	blk := [3]byte{0, 0, 0}
 	grn := [3]byte{0, 0x80, 0}
 	rotary := &CC{102, 0} // midi.controller.upper.102=rotary.speed-select
-	keys[0] = Key{CC: &CC{80, 0}, desc: "percussion enable", rgbOn: red, rgbOff: blk}
+
+	setPerc := func(on bool, rgb *sayo.Device) {
+		for i := 1; i <= 3; i++ {
+			if on {
+				keys[i].updateRGB(rgb)
+			} else {
+				keys[i].off(rgb)
+			}
+		}
+	}
+	keys[0] = Key{CC: &CC{80, 0}, desc: "percussion enable", rgbOn: red, rgbOff: blk, setRGB: setPerc}
 	keys[1] = Key{CC: &CC{81, 0}, desc: "percussion decay", rgbOn: red, rgbOff: blu}
 	keys[2] = Key{CC: &CC{82, 0}, desc: "percussion harmonic", rgbOn: red, rgbOff: blu}
 	keys[3] = Key{CC: &CC{83, 0}, desc: "percussion volume", rgbOn: red, rgbOff: blu}
@@ -221,7 +240,7 @@ func setupKeys() []Key {
 	}
 	keys[8] = Key{CC: &CC{30, 0}, desc: "vibrato lower ", rgbOn: red, rgbOff: blk}
 
-	keys[12] = Key{CC: &CC{65, 0}, desc: "overdrive enable", rgbOn: red, rgbOff: blk}
+	keys[15] = Key{CC: &CC{65, 0}, desc: "overdrive enable", rgbOn: red, rgbOff: blk}
 
 	for i := range keys {
 		keys[i].idx = i
