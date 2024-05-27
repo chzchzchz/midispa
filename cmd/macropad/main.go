@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
+	"time"
 
 	sayo "github.com/chzchzchz/sayo-rgb"
 	"github.com/gvalkov/golang-evdev"
@@ -103,7 +105,7 @@ type CC struct {
 }
 
 type SetCCFunc func(bool, *CC)
-type SetRGBFunc func(bool, *sayo.Device)
+type SetRGBFunc func(bool, *RgbQueue)
 
 type Key struct {
 	idx    int
@@ -130,13 +132,13 @@ func (b *Bank) add(k *Key) {
 	k.bank = b
 }
 
-func off(rgb *sayo.Device) {
+func off(rgb *RgbQueue) {
 	for i := 0; i < 24; i++ {
-		rgb.Write(sayo.ModeSwitchOnce, i, 0, 0, 0)
+		rgb.Write(i, [3]byte{0, 0, 0})
 	}
 }
 
-func reset(rgb *sayo.Device, keys []Key) {
+func reset(rgb *RgbQueue, keys []Key) {
 	for _, k := range keys {
 		if k.CC != nil {
 			k.updateCC()
@@ -157,23 +159,57 @@ func (k *Key) updateCC() {
 	}
 }
 
-func (k *Key) updateRGB(rgb *sayo.Device) {
+type RgbCmd struct {
+	color [3]byte
+	idx   int
+}
+
+type RgbQueue struct {
+	c     chan RgbCmd
+	donec chan struct{}
+	dev   *sayo.Device
+}
+
+func NewRgbQueue(dev *sayo.Device) *RgbQueue {
+	return &RgbQueue{c: make(chan RgbCmd, 16), donec: make(chan struct{}), dev: dev}
+}
+
+func (q *RgbQueue) Write(idx int, color [3]byte) {
+	q.c <- RgbCmd{idx: idx, color: color}
+}
+
+func (q *RgbQueue) Loop(ctx context.Context) {
+	defer close(q.donec)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case cmd := <-q.c:
+			r, g, b := cmd.color[0], cmd.color[1], cmd.color[2]
+			q.dev.Write(sayo.ModeSwitchOnce, cmd.idx, r, g, b)
+		}
+		// Macropad does not like rapid changes from bank toggles.
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (k *Key) updateRGB(rgb *RgbQueue) {
 	c := k.rgbOn
 	if !k.on {
 		c = k.rgbOff
 	}
-	rgb.Write(sayo.ModeSwitchOnce, k.idx, c[0], c[1], c[2])
+	rgb.Write(k.idx, c)
 }
 
-func (k *Key) off(rgb *sayo.Device) {
-	rgb.Write(sayo.ModeSwitchOnce, k.idx, 0, 0, 0)
+func (k *Key) off(rgb *RgbQueue) {
+	rgb.Write(k.idx, [3]byte{0, 0, 0})
 }
 
-func (k *Key) toggle(rgb *sayo.Device) {
+func (k *Key) toggle(rgb *RgbQueue) {
 	k.on = !k.on
 	// At most one key may be active for a bank.
 	if b := k.bank; k.on && b != nil {
-		for _, kk := range k.bank.keys {
+		for _, kk := range b.keys {
 			if kk.on && kk != k {
 				kk.on = false
 				kk.updateCC()
@@ -196,7 +232,7 @@ func setupKeys() []Key {
 	grn := [3]byte{0, 0x80, 0}
 	rotary := &CC{102, 0} // midi.controller.upper.102=rotary.speed-select
 
-	setPerc := func(on bool, rgb *sayo.Device) {
+	setPerc := func(on bool, rgb *RgbQueue) {
 		for i := 1; i <= 3; i++ {
 			if on {
 				keys[i].updateRGB(rgb)
@@ -270,10 +306,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	rgbq := NewRgbQueue(rgb)
+	go rgbq.Loop(context.Background())
 
 	keys := setupKeys()
-	off(rgb)
-	reset(rgb, keys)
+	off(rgbq)
+	reset(rgbq, keys)
 
 	ch, err := kbd(*evFlag)
 	if err != nil {
@@ -312,7 +350,7 @@ func main() {
 		}
 		idx := key2idx[v[0]]
 		if k := &keys[idx]; k.CC != nil {
-			k.toggle(rgb)
+			k.toggle(rgbq)
 			msg := []byte{ccCmd, byte(k.cc), byte(k.data)}
 			outc <- alsa.SeqEvent{Data: msg}
 		}
