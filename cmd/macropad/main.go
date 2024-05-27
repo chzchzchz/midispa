@@ -99,66 +99,6 @@ func kbd(path string) (<-chan *evdev.KeyEvent, error) {
 	return ch, nil
 }
 
-type CC struct {
-	cc   int
-	data int
-}
-
-type SetCCFunc func(bool, *CC)
-type SetRGBFunc func(bool, *RgbQueue)
-
-type Key struct {
-	idx    int
-	on     bool
-	rgbOn  [3]byte
-	rgbOff [3]byte
-	desc   string
-	setCC  SetCCFunc
-	setRGB SetRGBFunc
-
-	*CC
-	bank *Bank
-}
-
-type Bank struct {
-	keys []*Key
-}
-
-func (b *Bank) add(k *Key) {
-	if k.bank != nil {
-		panic("bank already assigned")
-	}
-	b.keys = append(b.keys, k)
-	k.bank = b
-}
-
-func off(rgb *RgbQueue) {
-	for i := 0; i < 24; i++ {
-		rgb.Write(i, [3]byte{0, 0, 0})
-	}
-}
-
-func reset(rgb *RgbQueue, keys []Key) {
-	for _, k := range keys {
-		if k.CC != nil {
-			k.updateCC()
-			k.updateRGB(rgb)
-		}
-	}
-}
-
-func (k *Key) updateCC() {
-	if k.setCC != nil {
-		k.setCC(k.on, k.CC)
-		return
-	}
-	if k.on {
-		k.data = 0x7f
-	} else {
-		k.data = 0
-	}
-}
-
 type RgbCmd struct {
 	color [3]byte
 	idx   int
@@ -193,39 +133,10 @@ func (q *RgbQueue) Loop(ctx context.Context) {
 	}
 }
 
-func (k *Key) updateRGB(rgb *RgbQueue) {
-	c := k.rgbOn
-	if !k.on {
-		c = k.rgbOff
-	}
-	rgb.Write(k.idx, c)
-}
+var disableLightsIdx = 23
 
-func (k *Key) off(rgb *RgbQueue) {
-	rgb.Write(k.idx, [3]byte{0, 0, 0})
-}
-
-func (k *Key) toggle(rgb *RgbQueue) {
-	k.on = !k.on
-	// At most one key may be active for a bank.
-	if b := k.bank; k.on && b != nil {
-		for _, kk := range b.keys {
-			if kk.on && kk != k {
-				kk.on = false
-				kk.updateCC()
-				kk.updateRGB(rgb)
-			}
-		}
-	}
-	k.updateCC()
-	k.updateRGB(rgb)
-	if k.setRGB != nil {
-		k.setRGB(k.on, rgb)
-	}
-}
-
-func setupKeys() []Key {
-	keys := make([]Key, 24)
+func setupKeys() []*Key {
+	keys := make([]*Key, 24)
 	red := [3]byte{0x80, 0, 0}
 	blu := [3]byte{0, 0, 0xf0}
 	blk := [3]byte{0, 0, 0}
@@ -234,17 +145,20 @@ func setupKeys() []Key {
 
 	setPerc := func(on bool, rgb *RgbQueue) {
 		for i := 1; i <= 3; i++ {
+			k := keys[i]
 			if on {
-				keys[i].updateRGB(rgb)
+				k.rgbOn, k.rgbOff = red, blu
 			} else {
-				keys[i].off(rgb)
+				k.rgbOn, k.rgbOff = blk, blk
 			}
+			k.updateRGB(rgb)
 		}
 	}
-	keys[0] = Key{CC: &CC{80, 0}, desc: "percussion enable", rgbOn: red, rgbOff: blk, setRGB: setPerc}
-	keys[1] = Key{CC: &CC{81, 0}, desc: "percussion decay", rgbOn: red, rgbOff: blu}
-	keys[2] = Key{CC: &CC{82, 0}, desc: "percussion harmonic", rgbOn: red, rgbOff: blu}
-	keys[3] = Key{CC: &CC{83, 0}, desc: "percussion volume", rgbOn: red, rgbOff: blu}
+	keys[0] = &Key{CC: &CC{80, 0}, desc: "percussion enable", rgbOn: red, rgbOff: blk, setRGB: setPerc}
+	// Start perc options as off since they'll be turned on by perc enable.
+	keys[1] = &Key{CC: &CC{81, 0}, desc: "percussion decay", rgbOn: blk, rgbOff: blk}
+	keys[2] = &Key{CC: &CC{82, 0}, desc: "percussion harmonic", rgbOn: blk, rgbOff: blk}
+	keys[3] = &Key{CC: &CC{83, 0}, desc: "percussion volume", rgbOn: blk, rgbOff: blk}
 
 	mkSetHornValue := func(v int) SetCCFunc {
 		return func(on bool, cc *CC) {
@@ -255,9 +169,9 @@ func setupKeys() []Key {
 			cc.data = 15 * d
 		}
 	}
-	keys[5] = Key{CC: rotary, desc: "horn chorale", rgbOn: grn, rgbOff: blk, setCC: mkSetHornValue(3)}
-	keys[6] = Key{CC: rotary, desc: "horn tremolo", rgbOn: grn, rgbOff: blk, setCC: mkSetHornValue(6)}
-	keys[7] = Key{CC: &CC{31, 0}, desc: "vibrato upper", rgbOn: red, rgbOff: blk}
+	keys[5] = &Key{CC: rotary, desc: "horn chorale", rgbOn: grn, rgbOff: blk, setCC: mkSetHornValue(3)}
+	keys[6] = &Key{CC: rotary, desc: "horn tremolo", rgbOn: grn, rgbOff: blk, setCC: mkSetHornValue(6)}
+	keys[7] = &Key{CC: &CC{31, 0}, desc: "vibrato upper", rgbOn: red, rgbOff: blk}
 
 	mkSetDrumValue := func(v int) SetCCFunc {
 		return func(on bool, cc *CC) {
@@ -268,27 +182,43 @@ func setupKeys() []Key {
 			cc.data = 15 * d
 		}
 	}
-	keys[10] = Key{
+	keys[10] = &Key{
 		CC: rotary, desc: "drum chorale", rgbOn: grn, rgbOff: blk, setCC: mkSetDrumValue(1),
 	}
-	keys[9] = Key{
+	keys[9] = &Key{
 		CC: rotary, desc: "drum tremolo", rgbOn: grn, rgbOff: blk, setCC: mkSetDrumValue(2),
 	}
-	keys[8] = Key{CC: &CC{30, 0}, desc: "vibrato lower ", rgbOn: red, rgbOff: blk}
+	keys[8] = &Key{CC: &CC{30, 0}, desc: "vibrato lower ", rgbOn: red, rgbOff: blk}
 
-	keys[15] = Key{CC: &CC{65, 0}, desc: "overdrive enable", rgbOn: red, rgbOff: blk}
+	keys[15] = &Key{CC: &CC{65, 0}, desc: "overdrive enable", rgbOn: red, rgbOff: blk}
 
-	for i := range keys {
-		keys[i].idx = i
+	togglePadLEDs := func(on bool, rgb *RgbQueue) {
+		if on {
+			reset(rgb, keys)
+		} else {
+			off(rgb)
+		}
+	}
+	keys[disableLightsIdx] = &Key{
+		desc:  "light enable",
+		rgbOn: blk, rgbOff: blk,
+		setCC:  func(bool, *CC) {},
+		setRGB: togglePadLEDs,
+	}
+
+	for i, k := range keys {
+		if k != nil {
+			k.idx = i
+		}
 	}
 
 	hornBank := &Bank{}
-	hornBank.add(&keys[5])
-	hornBank.add(&keys[6])
+	hornBank.add(keys[5])
+	hornBank.add(keys[6])
 
 	drumBank := &Bank{}
-	drumBank.add(&keys[9])
-	drumBank.add(&keys[10])
+	drumBank.add(keys[9])
+	drumBank.add(keys[10])
 
 	// rotary speed select is more complicated
 	return keys
@@ -341,6 +271,8 @@ func main() {
 		}
 	}()
 
+	disableLightsKey := keys[disableLightsIdx]
+
 	midiChannel := 0
 	ccCmd := midi.MakeCC(midiChannel)
 	for ev := range ch {
@@ -349,10 +281,15 @@ func main() {
 			continue
 		}
 		idx := key2idx[v[0]]
-		if k := &keys[idx]; k.CC != nil {
+		if k := keys[idx]; k != nil {
+			if k != disableLightsKey && !disableLightsKey.on {
+				disableLightsKey.toggle(rgbq)
+			}
 			k.toggle(rgbq)
-			msg := []byte{ccCmd, byte(k.cc), byte(k.data)}
-			outc <- alsa.SeqEvent{Data: msg}
+			if k.CC != nil {
+				msg := []byte{ccCmd, byte(k.cc), byte(k.data)}
+				outc <- alsa.SeqEvent{Data: msg}
+			}
 		}
 	}
 }
