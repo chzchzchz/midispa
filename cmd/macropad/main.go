@@ -265,9 +265,26 @@ func main() {
 	}()
 	go func() {
 		for {
-			if _, err := aseq.Read(); err != nil {
+			ev, err := aseq.Read()
+			if err != nil {
 				return
 			}
+			if len(ev.Data) != 3 {
+				continue
+			}
+			status := ev.Data[0]
+			if !midi.IsCC(status) {
+				continue
+			}
+			cc, val := ev.Data[1], ev.Data[2]
+			if cc >= 24 {
+				// cc = key index
+				continue
+			}
+			// TODO: how to use one spare bit?
+			r, g, b := val&0x3, (val>>2)&0x3, (val>>4)&0x3
+			r, g, b = r*(255/3), g*(255/3), b*(255/3)
+			rgbq.Write(int(cc), [3]byte{r, g, b})
 		}
 	}()
 
