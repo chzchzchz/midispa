@@ -6,9 +6,15 @@ import (
 )
 
 func abc2midi(in, out string) error {
-	// TODO: check dates / existence to avoid regen
+	sInput, err := os.Stat(in)
+	if err != nil {
+		return err
+	}
+	sOutput, errOut := os.Stat(out)
+	if errOut == nil && sInput.ModTime().Before(sOutput.ModTime()) {
+		return nil
+	}
 	cmd := exec.Command("abc2midi", in, "-o", out)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	err := cmd.Run()
-	return err
+	return cmd.Run()
 }
