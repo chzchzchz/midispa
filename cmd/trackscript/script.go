@@ -2,6 +2,8 @@ package main
 
 import (
 	"io"
+	"os"
+	"strings"
 
 	"github.com/chzchzchz/midispa/track"
 	"gitlab.com/gomidi/midi/smf"
@@ -44,4 +46,35 @@ func (s *Script) WriteSMF(dest io.Writer) error {
 	}
 	writer.FinishPlanned(wr)
 	return nil
+}
+
+func (s *Script) AddPattern(id, fname string) *track.Pattern {
+	_, ok := s.patterns[id]
+	if ok {
+		panic("already defined pattern: " + id)
+	}
+	midiPath := fname
+	if strings.HasSuffix(fname, ".abc") {
+		midiPath = fname[:len(fname)-3] + "mid"
+		if err := abc2midi(fname, midiPath); err != nil {
+			panic("could not generate " + fname + ": " + err.Error())
+		}
+	}
+	p, err := track.NewPattern(midiPath)
+	if err != nil {
+		panic("pattern error: \"" + err.Error() + "\" on " + id)
+	}
+	s.patterns[id] = p
+	return p
+}
+
+func (s *Script) findPattern(id string) *track.Pattern {
+	if p := s.patterns[id]; p != nil {
+		return p
+	} else if _, err := os.Stat(id + ".abc"); err == nil {
+		return s.AddPattern(id, id+".abc")
+	} else if _, err := os.Stat(id + ".mid"); err == nil {
+		return s.AddPattern(id, id+".mid")
+	}
+	panic("could not find pattern " + id)
 }

@@ -3,7 +3,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/chzchzchz/midispa/track"
 )
@@ -65,31 +64,13 @@ func (g *Grammar) setBPM() {
 func (g *Grammar) addPosition() { fmt.Println("stub: add position") }
 
 func (g *Grammar) addPattern() {
-	_, ok := g.script.patterns[g.id]
-	if ok {
-		panic("already defined pattern: " + g.id)
-	}
-	midiPath := g.str
-	if strings.HasSuffix(g.str, ".abc") {
-		midiPath = g.str[:len(g.str)-3] + "mid"
-		if err := abc2midi(g.str, midiPath); err != nil {
-			panic("could not generate " + g.str + ": " + err.Error())
-		}
-	}
-	p, err := track.NewPattern(midiPath)
-	if err != nil {
-		panic("pattern error: \"" + err.Error() + "\" on " + g.id)
-	}
-	g.script.patterns[g.id] = p
+	g.script.AddPattern(g.id, g.str)
 }
 
 func (g *Grammar) addPlay() {
 	pl := &PlayLine{}
 	for _, id := range g.idList {
-		p := g.script.patterns[id]
-		if p == nil {
-			panic("could not find pattern " + id)
-		}
+		p := g.script.findPattern(id)
 		pl.patterns = append(pl.patterns, p)
 	}
 	if g.curPhrase == nil {
