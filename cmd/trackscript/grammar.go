@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/chzchzchz/midispa/track"
 )
@@ -68,7 +69,14 @@ func (g *Grammar) addPattern() {
 	if ok {
 		panic("already defined pattern: " + g.id)
 	}
-	p, err := track.NewPattern(g.str)
+	midiPath := g.str
+	if strings.HasSuffix(g.str, ".abc") {
+		midiPath = g.str[:len(g.str)-3] + "mid"
+		if err := abc2midi(g.str, midiPath); err != nil {
+			panic("could not generate " + g.str + ": " + err.Error())
+		}
+	}
+	p, err := track.NewPattern(midiPath)
 	if err != nil {
 		panic("pattern error: \"" + err.Error() + "\" on " + g.id)
 	}
