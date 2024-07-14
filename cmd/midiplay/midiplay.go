@@ -52,10 +52,9 @@ func main() {
 		time.Sleep(sleepTime)
 		tick = t
 	}
-	patDur := time.Duration(pat.LastTick) * tickDur
 	if *verbose {
 		fmt.Printf("bpm: %v (%v); tpb: %v\n", pat.BPM, beatdur, pat.TicksPerBeat)
-		fmt.Printf("pat duration: %v\n", patDur)
+		fmt.Printf("pat duration: %v\n", pat.Duration())
 	}
 	for i := 0; i < *loop; i++ {
 		if *verbose {
@@ -66,6 +65,6 @@ func main() {
 			must(aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: m.Raw}))
 		}
 		wait(int(pat.LastTick))
-		start, tick = start.Add(patDur), 0
+		start, tick = start.Add(pat.Duration()), 0
 	}
 }

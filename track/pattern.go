@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"sort"
+	"time"
 
 	"gitlab.com/gomidi/midi/midimessage/channel"
 	"gitlab.com/gomidi/midi/midimessage/meta"
@@ -41,6 +42,10 @@ func NewPattern(path string) (*Pattern, error) {
 }
 
 func EmptyPattern() *Pattern { return &Pattern{} }
+
+func (p *Pattern) Duration() time.Duration {
+	return time.Duration(p.LastTick) * p.TickDuration()
+}
 
 func (p *Pattern) Merge(p2 *Pattern) {
 	if p.TicksPerBeat == 0 {

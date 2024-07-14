@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/chzchzchz/midispa/track"
 	"gitlab.com/gomidi/midi/smf"
@@ -16,6 +17,14 @@ type Script struct {
 	// NOTE: phrases are compiled into patterns
 	patterns map[string]*track.Pattern
 	song     []*track.Pattern
+}
+
+func (s *Script) Duration() time.Duration {
+	d := time.Duration(0)
+	for _, p := range s.song {
+		d += p.Duration()
+	}
+	return d
 }
 
 func (s *Script) WriteSMF(dest io.Writer) error {

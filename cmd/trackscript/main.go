@@ -23,7 +23,7 @@ func main() {
 	}
 	//g.PrintSyntaxTree()
 	g.Execute()
-	fmt.Println("done parsing")
+	fmt.Println("parsing OK: ", g.script.Duration())
 
 	output, err := os.OpenFile("out.mid", os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
