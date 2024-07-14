@@ -8,7 +8,9 @@ type Grammar Peg {
         id string
 	str string
 	num int
-	idList []string
+
+	curPlayLine PlayLine
+	playStack []PlayLine
 }
 
 Grammar <- _wsnl? ((stmt / _comment) _ws? _comment? _wsnl?)* !.
@@ -22,9 +24,12 @@ bpm <- 'bpm' _ws num { p.setBPM() }
 device <- 'dev' _ws id _ws str { p.addDevice() }
 pattern <- 'pat' _ws id _ws str { p.addPattern() }
 position <- id ':' { p.addPosition() }
-play <- id { p.idList = []string{p.id} }
-	(_ws? '|' _ws? id { p.idList = append(p.idList, p.id)} )*
-	{ p.addPlay() }
+play <- play_expr { p.addPlay() }
+play_expr  <-  play_line { p.pushPlay() } _ws? ';' _ws? play_line { p.playOpConcat() } /
+	    play_line { p.pushPlay() } _ws? '|' _ws? play_line { p.playOpParallel() } /
+	    play_line 
+play_line <- (id { p.addToIdList(p.id) }  / '(' _ws? play_expr _ws? ')')
+	     (_ws? '*' _ws? num { p.playOpRepeat(p.num) })?
 
 num <- <('-'? [0-9]+)> { fmt.Sscanf(text, "%d", &p.num)  }
 id <- <[a-zA-Z_][a-zA-Z0-9_]+> { p.id = text }

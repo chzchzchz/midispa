@@ -24,3 +24,10 @@ phrase ba { b b a a }
 ac ac ac ac
 ba ba ba ba
 ```
+
+Replicate a pattern or phrase:
+```
+phrase ac { a*2 c*2}
+ac*4
+(b;b;a;a)*4
+```
