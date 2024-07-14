@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 
+	"github.com/chzchzchz/midispa/track"
 	"gitlab.com/gomidi/midi/smf"
 	"gitlab.com/gomidi/midi/smf/smfwriter"
 	"gitlab.com/gomidi/midi/writer"
@@ -11,8 +12,8 @@ import (
 type Script struct {
 	bpm int
 	// NOTE: phrases are compiled into patterns
-	patterns map[string]*Pattern
-	song     []*Pattern
+	patterns map[string]*track.Pattern
+	song     []*track.Pattern
 }
 
 func (s *Script) WriteSMF(dest io.Writer) error {
@@ -33,7 +34,7 @@ func (s *Script) WriteSMF(dest io.Writer) error {
 	}
 	wr.SetDelta(0)
 	for _, p := range s.song {
-		if err := p.write(wr); err != nil {
+		if err := p.Write(wr); err != nil {
 			return err
 		}
 	}

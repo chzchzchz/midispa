@@ -55,7 +55,7 @@ type trackReq struct {
 
 func newTrackDev(d *amidi.Device) *trackDev {
 	ctx, cancel := context.WithCancel(context.TODO())
-	pat := track.NewPattern(ctx)
+	pat := track.NewPatternStream(ctx)
 	outc := make(chan track.TickMessage, 10)
 	seq := sequencer.NewDevice(outc, d)
 	c := sequencer.NewClocker(pat.Chan(), outc, &seq.Sequencer)
@@ -187,15 +187,15 @@ func (mh *midiHandler) getTrackDev(devId string) (*trackDev, error) {
 	}
 	panic("STUB")
 	/*
-	d, err := sequencer.OpenDeviceById(devId)
-	if err != nil {
-		return nil, err
-	} else if d != nil {
-		return nil, fmt.Errorf("could not find device id %s", devId)
-	}
-	td := newTrackDev(d)
-	mh.tracks[devId] = td
-	return td, nil
+		d, err := sequencer.OpenDeviceById(devId)
+		if err != nil {
+			return nil, err
+		} else if d != nil {
+			return nil, fmt.Errorf("could not find device id %s", devId)
+		}
+		td := newTrackDev(d)
+		mh.tracks[devId] = td
+		return td, nil
 	*/
 }
 

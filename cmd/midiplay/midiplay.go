@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/track"
 )
 
 func must(err error) {
@@ -21,7 +22,7 @@ func main() {
 	verbose := flag.Bool("verbose", false, "verbose mode")
 	flag.Parse()
 
-	pat, err := NewPattern(*fname)
+	pat, err := track.NewPattern(*fname)
 	if err != nil {
 		panic(err)
 	}
@@ -51,7 +52,7 @@ func main() {
 		time.Sleep(sleepTime)
 		tick = t
 	}
-	patDur := time.Duration(pat.lastTick) * tickDur
+	patDur := time.Duration(pat.LastTick) * tickDur
 	if *verbose {
 		fmt.Printf("bpm: %v (%v); tpb: %v\n", pat.BPM, beatdur, pat.TicksPerBeat)
 		fmt.Printf("pat duration: %v\n", patDur)
@@ -60,11 +61,11 @@ func main() {
 		if *verbose {
 			fmt.Println("loop", i, start)
 		}
-		for _, m := range pat.msgs {
+		for _, m := range pat.Msgs {
 			wait(m.Tick)
 			must(aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: m.Raw}))
 		}
-		wait(int(pat.lastTick))
+		wait(int(pat.LastTick))
 		start, tick = start.Add(patDur), 0
 	}
 }

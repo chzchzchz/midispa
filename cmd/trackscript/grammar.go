@@ -1,15 +1,19 @@
 //go:generate peg grammar.peg
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/chzchzchz/midispa/track"
+)
 
 // PlayLine is a list of patterns to be played in parallel.
 type PlayLine struct {
-	patterns []*Pattern
+	patterns []*track.Pattern
 }
 
-func (pl *PlayLine) ToPattern() *Pattern {
-	newPattern := EmptyPattern()
+func (pl *PlayLine) ToPattern() *track.Pattern {
+	newPattern := track.EmptyPattern()
 	for _, p := range pl.patterns {
 		newPattern.Merge(p)
 	}
@@ -27,7 +31,7 @@ func NewGrammar(in string) *Grammar {
 		Buffer: in,
 		script: Script{
 			bpm:      0,
-			patterns: make(map[string]*Pattern),
+			patterns: make(map[string]*track.Pattern),
 		},
 	}
 }
@@ -41,7 +45,7 @@ func (g *Grammar) startPhrase() {
 
 func (g *Grammar) endPhrase() {
 	fmt.Println("ending phrase", g.curPhrase.name)
-	p := EmptyPattern()
+	p := track.EmptyPattern()
 	for _, pl := range g.curPhrase.lines {
 		p.Append(pl.ToPattern())
 	}
@@ -64,7 +68,7 @@ func (g *Grammar) addPattern() {
 	if ok {
 		panic("already defined pattern: " + g.id)
 	}
-	p, err := NewPattern(g.str)
+	p, err := track.NewPattern(g.str)
 	if err != nil {
 		panic("pattern error: \"" + err.Error() + "\" on " + g.id)
 	}
