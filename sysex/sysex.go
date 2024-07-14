@@ -1,5 +1,9 @@
 package sysex
 
+import (
+	"github.com/chzchzchz/midispa/midi"
+)
+
 const (
 	// add vendor id's when supported
 
@@ -8,7 +12,7 @@ const (
 )
 
 func Decode(data []byte) interface{} {
-	if len(data) <= 4 || data[0] != 0xf0 || data[len(data)-1] != 0xf7 {
+	if len(data) <= 4 || data[0] != midi.SysEx || data[len(data)-1] != midi.EndSysEx {
 		return nil
 	}
 	switch data[1] {
@@ -100,10 +104,10 @@ func encode7bitInt(v, w int) []byte {
 type SysEx struct{ Data []byte }
 
 func (se *SysEx) UnmarshalBinary(data []byte) error {
-	if len(data) < 2 || data[0] != 0xf0 {
+	if len(data) < 2 || data[0] != midi.SysEx {
 		return ErrBadHeader
 	}
-	if data[len(data)-1] != 0xf7 {
+	if data[len(data)-1] != midi.EndSysEx {
 		return ErrNoEox
 	}
 	se.Data = data
@@ -114,12 +118,12 @@ func (se *SysEx) UnmarshalBinary(data []byte) error {
 func (se *SysEx) Split() (ret []SysEx, err error) {
 	i := 0
 	for i < len(se.Data) {
-		if se.Data[i] != 0xf0 {
+		if se.Data[i] != midi.SysEx {
 			return nil, ErrBadHeader
 		}
 		j := i + 1
 		for j < len(se.Data) {
-			if se.Data[j] == 0xf7 {
+			if se.Data[j] == midi.EndSysEx {
 				break
 			}
 			j++

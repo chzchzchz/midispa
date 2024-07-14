@@ -22,6 +22,11 @@ import (
 
 var errExpectedSysEx = errors.New("expected sysex")
 
+const (
+	EvPortSubscribed   = 0
+	EvPortUnsubscribed = 1
+)
+
 type Seq struct {
 	seq *C.snd_seq_t
 	SeqAddr
@@ -228,14 +233,14 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 		case C.SND_SEQ_EVENT_PORT_SUBSCRIBED:
 			c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
-				1,
+				EvPortSubscribed,
 				byte(c.sender.client), byte(c.sender.port),
 				byte(c.dest.client), byte(c.dest.port),
 			}
 		case C.SND_SEQ_EVENT_PORT_UNSUBSCRIBED:
 			c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
-				0,
+				EvPortUnsubscribed,
 				byte(c.sender.client), byte(c.sender.port),
 				byte(c.dest.client), byte(c.dest.port),
 			}
