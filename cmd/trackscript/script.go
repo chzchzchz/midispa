@@ -1,12 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/chzchzchz/midispa/track"
+	"gitlab.com/gomidi/midi/midimessage/meta"
 	"gitlab.com/gomidi/midi/smf"
 	"gitlab.com/gomidi/midi/smf/smfwriter"
 	"gitlab.com/gomidi/midi/writer"
@@ -45,6 +47,11 @@ func (s *Script) WriteSMF(dest io.Writer) error {
 	}
 	wr.SetDelta(0)
 	for _, p := range s.song {
+		if p.Name != "" {
+			s := fmt.Sprintf("info:%s.%d", p.Name, int(p.Beats()))
+			txt := meta.Text(s)
+			wr.Write(&txt)
+		}
 		if err := p.Write(wr); err != nil {
 			return err
 		}

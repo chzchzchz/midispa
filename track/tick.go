@@ -7,6 +7,11 @@ import (
 type MidiTimeSig struct {
 	TicksPerBeat int // clocks per metronome click
 	BPM          int
+
+	// e.g., 2/4, 4/4, 3/3
+
+	Numerator   int
+	Denominator int
 }
 
 func (m *MidiTimeSig) TickDuration() time.Duration {

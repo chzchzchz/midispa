@@ -21,8 +21,10 @@ import (
 // Patterns have midi data.
 type Pattern struct {
 	MidiTimeSig
+
 	LastTick uint32
 	Msgs     []TickMessage
+	Name     string
 	size     int
 }
 
@@ -45,6 +47,14 @@ func EmptyPattern() *Pattern { return &Pattern{} }
 
 func (p *Pattern) Duration() time.Duration {
 	return time.Duration(p.LastTick) * p.TickDuration()
+}
+
+func (p *Pattern) Beats() float64 {
+	return float64(p.LastTick) / float64(p.TicksPerBeat)
+}
+
+func (p *Pattern) Bars() float64 {
+	return (p.Beats() * (float64(p.Denominator) / float64(p.Numerator))) / 4.0
 }
 
 func (p *Pattern) Merge(p2 *Pattern) {
@@ -108,6 +118,8 @@ func (p *Pattern) read(r smf.Reader) error {
 		switch msg := m.(type) {
 		case meta.TimeSig:
 			p.TicksPerBeat = int(msg.ClocksPerClick)
+			p.Numerator = int(msg.Numerator)
+			p.Denominator = int(msg.Denominator)
 		case meta.Tempo:
 			p.BPM = int(msg.BPM())
 		case channel.ControlChange:
@@ -143,7 +155,7 @@ func (p *Pattern) Write(w *writer.SMF) error {
 	// Convert back to messages.
 	buf := bytes.NewBuffer(make([]byte, p.size))
 	r := midireader.New(buf, func(m realtime.Message) {})
-	LastTick := uint32(0)
+	lastTick := uint32(0)
 	for _, tickmsg := range p.Msgs {
 		if _, err := buf.Write(tickmsg.Raw); err != nil {
 			panic(err)
@@ -152,21 +164,21 @@ func (p *Pattern) Write(w *writer.SMF) error {
 		if err != nil {
 			panic(err)
 		}
-		if uint32(tickmsg.Tick) < LastTick {
+		if uint32(tickmsg.Tick) < lastTick {
 			panic("out of order delta")
 		}
-		delta := uint32(tickmsg.Tick) - LastTick
+		delta := uint32(tickmsg.Tick) - lastTick
 		//fmt.Printf("got %s: %+v; delta=%d; tick=%d\n", msg, msg.Raw(), delta, tickmsg.Tick)
 		delta = (delta * w.Ticks4th()) / uint32(p.TicksPerBeat)
 		if delta > 0 {
 			w.SetDelta(delta)
 		}
 		w.Write(msg)
-		LastTick = uint32(tickmsg.Tick)
+		lastTick = uint32(tickmsg.Tick)
 	}
 	// Append any empty time.
-	if LastTick < p.LastTick {
-		delta := p.LastTick - LastTick
+	if lastTick < p.LastTick {
+		delta := p.LastTick - lastTick
 		w.SetDelta((delta * w.Ticks4th()) / uint32(p.TicksPerBeat))
 	}
 	return nil

@@ -24,7 +24,7 @@ bpm <- 'bpm' _ws num { p.setBPM() }
 device <- 'dev' _ws id _ws str { p.addDevice() }
 pattern <- 'pat' _ws id _ws str { p.addPattern() }
 position <- id ':' { p.addPosition() }
-play <- play_expr { p.addPlay() }
+play <- <play_expr> { p.str = text; p.addPlay() }
 play_expr  <-  play_line { p.pushPlay() } _ws? ';' _ws? play_line { p.playOpConcat() } /
 	    play_line { p.pushPlay() } _ws? '|' _ws? play_line { p.playOpParallel() } /
 	    play_line 

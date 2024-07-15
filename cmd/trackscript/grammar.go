@@ -44,7 +44,6 @@ func (g *Grammar) startPhrase() {
 }
 
 func (g *Grammar) endPhrase() {
-	fmt.Println("ending phrase", g.curPhrase.name)
 	p := track.EmptyPattern()
 	for _, pl := range g.curPhrase.lines {
 		p.Append(pl.ToPattern())
@@ -104,7 +103,10 @@ func (g *Grammar) pushPlay() {
 func (g *Grammar) addPlay() {
 	pl := g.curPlayLine
 	if g.curPhrase == nil {
-		g.script.song = append(g.script.song, pl.ToPattern())
+		p := pl.ToPattern()
+		p.Name = g.str
+		fmt.Printf("%s [%d bars; %d beats]\n", g.str, int(p.Bars()), int(p.Beats()))
+		g.script.song = append(g.script.song, p)
 	} else {
 		g.curPhrase.lines = append(g.curPhrase.lines, &pl)
 	}
