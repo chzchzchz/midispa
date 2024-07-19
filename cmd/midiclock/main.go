@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -40,8 +42,13 @@ func (ce *ClockEvents) Add(t time.Time) {
 // pulse per quarter note
 const PPQN = 24.0
 
+const CcBpmMsb = 16
+const CcBpmLsb = 16 + 32
+
 func main() {
 	cnFlag := flag.String("name", "midiclock", "midi client name")
+	bpmFlag := flag.Float64("bpm", 120.0, "send clock signals at given bpm")
+
 	flag.Parse()
 	// Create midi sequencer for reading/writing events.
 	aseq, err := alsa.OpenSeq(*cnFlag)
@@ -76,14 +83,59 @@ func main() {
 			c = 0
 		}
 	}()
-	for {
-		ev, err := aseq.Read()
-		if err != nil {
-			panic(err)
-		}
-		cmd := ev.Data[0]
-		if cmd == midi.Clock {
-			outc <- ev
-		}
+
+	curBpmInt := int(*bpmFlag * 64.0)
+
+	var clockDur int64
+	updateClockDur := func() {
+		cps := ((float64(curBpmInt) / 64.0) / 60.0) * PPQN
+		dur := time.Duration(float64(time.Second) / cps)
+		atomic.StoreInt64(&clockDur, int64(dur))
+		fmt.Printf("bpm = %v\n", float64(curBpmInt)/64.0)
 	}
+	updateClockDur()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			ev, err := aseq.Read()
+			if err != nil {
+				panic(err)
+			}
+			cmd := ev.Data[0]
+			if cmd == midi.Clock {
+				outc <- ev
+			} else if midi.IsCC(ev.Data[0]) {
+				cc, v := ev.Data[1], ev.Data[2]
+				if cc == CcBpmLsb {
+					curBpmInt = ((curBpmInt >> 7) << 7) | int(v)
+					updateClockDur()
+				} else if cc == CcBpmMsb {
+					curBpmInt = (curBpmInt & 0x7f) | (int(v) << 7)
+					updateClockDur()
+				}
+			}
+		}
+	}()
+
+	if bpmFlag != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			evClock := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{midi.Clock}}
+			nextClock := time.Now()
+			for {
+				err := aseq.Write(evClock)
+				if err != nil {
+					panic(err)
+				}
+				nextDur := time.Duration(atomic.LoadInt64(&clockDur))
+				nextClock = nextClock.Add(nextDur)
+				time.Sleep(time.Until(nextClock))
+			}
+		}()
+	}
+	wg.Wait()
 }
