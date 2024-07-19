@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,7 @@ const CcBpmLsb = 16 + 32
 func main() {
 	cnFlag := flag.String("name", "midiclock", "midi client name")
 	bpmFlag := flag.Float64("bpm", 120.0, "send clock signals at given bpm")
+	randPctFlag := flag.Float64("randpct", 0.0, "percentage to swing the clock")
 
 	flag.Parse()
 	// Create midi sequencer for reading/writing events.
@@ -120,6 +122,7 @@ func main() {
 		}
 	}()
 
+	randCoef := *randPctFlag / 100.0
 	if bpmFlag != nil {
 		wg.Add(1)
 		go func() {
@@ -132,8 +135,13 @@ func main() {
 					panic(err)
 				}
 				nextDur := time.Duration(atomic.LoadInt64(&clockDur))
+
+				swing := randCoef * (2.0 * (rand.Float64() - 0.5))
+				nextDurSwing := time.Duration(swing * float64(nextDur))
+				nextClockSwing := nextClock.Add(nextDurSwing)
 				nextClock = nextClock.Add(nextDur)
-				time.Sleep(time.Until(nextClock))
+				//fmt.Println(nextDur, nextDurSwing)
+				time.Sleep(time.Until(nextClockSwing))
 			}
 		}()
 	}
