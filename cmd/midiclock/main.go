@@ -102,6 +102,9 @@ func main() {
 
 	clockDur := int64(0)
 	updateClockDur := func() {
+		if curBpmInt < 64 {
+			return
+		}
 		cps := ((float64(curBpmInt) / 64.0) / 60.0) * PPQN
 		dur := time.Duration(float64(time.Second) / cps)
 		atomic.StoreInt64(&clockDur, int64(dur))
