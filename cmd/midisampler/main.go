@@ -36,9 +36,9 @@ func main() {
 		return 0
 	}
 	pcOut := jack.PortConfig{
-		ClientName: *cnFlag,
-		PortName:   "out",
-		MatchName:  strings.Split(*sinkPortFlag, ","),
+		ClientName:    *cnFlag,
+		PortName:      "out",
+		MatchName:     strings.Split(*sinkPortFlag, ","),
 		AudioCallback: playCallback,
 	}
 	wp, err := jack.NewWritePort(pcOut)
@@ -57,9 +57,9 @@ func main() {
 		return 0
 	}
 	pcIn := jack.PortConfig{
-		ClientName: *cnFlag + "-record",
-		PortName:   "in",
-		MatchName:  strings.Split(*samplingPortFlag, ","),
+		ClientName:    *cnFlag + "-record",
+		PortName:      "in",
+		MatchName:     strings.Split(*samplingPortFlag, ","),
 		AudioCallback: recCallback,
 	}
 	rp, err := jack.NewReadPort(pcIn)

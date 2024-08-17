@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
 
 	"github.com/chzchzchz/midispa/ladspa"
+	mwav "github.com/chzchzchz/midispa/wav"
 )
 
 type Sample struct {
@@ -125,34 +125,7 @@ func NewSample(name string, rate int, data []float32) *Sample {
 	}
 }
 
-func (s *Sample) Save(path string) error {
-	w, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0755)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
-	enc := wav.NewEncoder(w, s.rate, 16, 1 /* chans */, 1 /* fmt */)
-
-	// wav encoder will normalize ints to [-1.0,1.0] but won't expand back.
-	renormalizedData := make([]float32, len(s.data))
-	for i := range s.data {
-		renormalizedData[i] = s.data[i] * float32((1<<15)-1)
-	}
-
-	buf := audio.PCMBuffer{
-		Format:         &audio.Format{NumChannels: 1, SampleRate: s.rate},
-		F32:            renormalizedData,
-		DataType:       audio.DataTypeF32,
-		SourceBitDepth: 2,
-	}
-	if err := enc.Write(buf.AsIntBuffer()); err != nil {
-		return err
-	}
-	if err := enc.Close(); err != nil {
-		return err
-	}
-	return nil
-}
+func (s *Sample) Save(path string) error { return mwav.WriteFile(path, s.data, s.rate) }
 
 func (s *Sample) Copy() *Sample {
 	data := make([]float32, len(s.data))
