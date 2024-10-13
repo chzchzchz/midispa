@@ -327,6 +327,27 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 		event._type = C.SND_SEQ_EVENT_CLOCK
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	case midi.Pgm:
+		if len(ev.Data) != 2 {
+			panic("bad size for PGM")
+		}
+		event._type = C.SND_SEQ_EVENT_PGMCHANGE
+		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
+		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	case midi.SongPosition:
+		if len(ev.Data) != 3 {
+			panic("bad size for SONGPOS")
+		}
+		event._type = C.SND_SEQ_EVENT_SONGPOS
+		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
+		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	case midi.SongSelect:
+		if len(ev.Data) != 2 {
+			panic("bad size for SONGSEL")
+		}
+		event._type = C.SND_SEQ_EVENT_SONGSEL
+		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
+		qc.queue = C.SND_SEQ_QUEUE_DIRECT
 	default:
 		panic("unknown midi data")
 	}
