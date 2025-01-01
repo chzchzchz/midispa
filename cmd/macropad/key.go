@@ -1,12 +1,16 @@
 package main
 
+import (
+	"github.com/chzchzchz/midispa/ui"
+)
+
 type CC struct {
 	cc   int
 	data int
 }
 
 type SetCCFunc func(bool, *CC)
-type SetRGBFunc func(bool, *RgbQueue)
+type SetRGBFunc func(bool, *ui.Sayo)
 
 type Key struct {
 	idx    int
@@ -45,7 +49,7 @@ func (k *Key) updateCC() {
 	}
 }
 
-func (k *Key) updateRGB(rgb *RgbQueue) {
+func (k *Key) updateRGB(rgb *ui.Sayo) {
 	c := k.rgbOn
 	if !k.on {
 		c = k.rgbOff
@@ -53,11 +57,11 @@ func (k *Key) updateRGB(rgb *RgbQueue) {
 	rgb.Write(k.idx, c)
 }
 
-func (k *Key) off(rgb *RgbQueue) {
+func (k *Key) off(rgb *ui.Sayo) {
 	rgb.Write(k.idx, [3]byte{0, 0, 0})
 }
 
-func (k *Key) toggle(rgb *RgbQueue) {
+func (k *Key) toggle(rgb *ui.Sayo) {
 	k.on = !k.on
 	// At most one key may be active for a bank.
 	if b := k.bank; k.on && b != nil {
@@ -76,13 +80,7 @@ func (k *Key) toggle(rgb *RgbQueue) {
 	}
 }
 
-func off(rgb *RgbQueue) {
-	for i := 0; i < 24; i++ {
-		rgb.Write(i, [3]byte{0, 0, 0})
-	}
-}
-
-func reset(rgb *RgbQueue, keys []*Key) {
+func reset(rgb *ui.Sayo, keys []*Key) {
 	for _, k := range keys {
 		if k != nil {
 			k.updateRGB(rgb)
