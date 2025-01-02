@@ -1,18 +1,11 @@
 package main
 
 import (
-	"bytes"
-	"io"
 	"log"
+	"os"
 	"path/filepath"
+	"strconv"
 	"time"
-
-	gomidi "gitlab.com/gomidi/midi"
-	"gitlab.com/gomidi/midi/midimessage/meta"
-	"gitlab.com/gomidi/midi/midimessage/realtime"
-	"gitlab.com/gomidi/midi/midireader"
-	"gitlab.com/gomidi/midi/smf"
-	"gitlab.com/gomidi/midi/smf/smfwriter"
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
@@ -22,19 +15,22 @@ import (
 type Sequencer struct {
 	aseq      *alsa.Seq
 	outdir    string
-	playback  io.Writer
 	start     time.Time
 	startRec  time.Time
 	running   bool
 	recording bool
+	pgm       [16]int
 
 	track Track
+	bpm   int
 }
 
 func NewSequencer(aseq *alsa.Seq, outdir string) *Sequencer {
 	return &Sequencer{
 		aseq:   aseq,
 		outdir: outdir,
+		bpm:    120,
+		track:  Track{bpm: 120},
 	}
 }
 
@@ -58,52 +54,48 @@ const (
 )
 
 func (s *Sequencer) record(data []byte) {
-	if s.recording && s.running {
-		s.track.Add(Event{time.Since(s.start), data})
-		log.Printf("recorded %+v", data)
+	if s.recording {
+		t := s.startRec
+		if s.running {
+			t = s.start
+		}
+		s.track.Add(Event{time.Since(t), data})
+		// log.Printf("recorded %+v", data)
 	}
 }
 
-var bpm = 139
+func (s *Sequencer) updatePgmLink(midipath string) {
+	ch := s.track.channel
+	if ch < 0 || ch > 16 {
+		return
+	}
+	pgm := s.pgm[ch]
+	log.Printf("relinking channel %d, pgm %d", ch, pgm)
+	chS, pgmS := strconv.Itoa(ch), strconv.Itoa(pgm)
+	os.Mkdir(filepath.Join(s.outdir, chS), 0755)
+	linkPath := filepath.Join(s.outdir, chS, pgmS+".mid")
+	os.Remove(linkPath)
+	hardPath := filepath.Join("..", filepath.Base(midipath))
+	os.Symlink(hardPath, linkPath)
+}
 
-func (s *Sequencer) save() error {
+func (s *Sequencer) stopAndSave() error {
 	if len(s.track.Events()) == 0 {
-		log.Println("nothing to eject")
+		log.Println("nothing to save")
 		return nil
 	}
-	tpq := smf.MetricTicks(960)
-	msg2midi := func(data []byte) (gomidi.Message, error) {
-		rd := midireader.New(bytes.NewBuffer(data), func(m realtime.Message) {})
-		return rd.Read()
-	}
-	writeMIDI := func(wr smf.Writer) {
-		// Microseconds per quarter note.
-		sig := meta.TimeSig{Numerator: 4, Denominator: 3, ClocksPerClick: 24, DemiSemiQuaverPerQuarter: 8}
-		must(wr.Write(sig))
-		must(wr.Write(meta.Tempo(uint32((60.0 / float64(bpm)) * 1e6))))
-		lastClock := time.Duration(0)
-		evs := s.track.Events()
-		for _, ev := range evs {
-			wr.SetDelta(tpq.Ticks(uint32(bpm), ev.clock-lastClock))
-			mm, err := msg2midi(ev.data)
-			must(err)
-			must(wr.Write(mm))
-			lastClock = ev.clock
-		}
-		log.Printf("wrote %d events", len(evs))
-		wr.Write(meta.EndOfTrack)
-	}
+	// TODO: insert stop event so save() has trailing silence
 	t := time.Now()
 	tf := t.Format("2006-01-02-03:04:05")
 	midipath := filepath.Join(s.outdir, tf+".mid")
-	log.Printf("ejected to %q", midipath)
-	err := smfwriter.WriteFile(
-		midipath, writeMIDI, smfwriter.NumTracks(1), smfwriter.TimeFormat(tpq))
-	if err != smf.ErrFinished {
-		return err
+	log.Printf("saving to %q", midipath)
+	err := s.track.save(midipath)
+	if err == nil {
+		s.updatePgmLink(midipath)
 	}
-	s.track = Track{}
-	return nil
+	s.track = Track{bpm: s.bpm}
+	s.recording = false
+	return err
 }
 
 func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
@@ -116,8 +108,10 @@ func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 			if !s.recording {
 				log.Println("started recording")
 				s.startRec = time.Now()
+				// TODO: insert start event
 			} else {
 				log.Println("stopped recording")
+				// TODO: remove start event if only one event
 			}
 			s.recording = !s.recording
 			return nil
@@ -125,8 +119,8 @@ func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 			log.Println("record exit")
 			s.recording = false
 			return nil
-		case *sysex.Eject:
-			return s.save()
+		case *sysex.Eject, *sysex.Stop:
+			return s.stopAndSave()
 		}
 	case midi.Start:
 		s.start, s.running = time.Now(), true
@@ -155,6 +149,8 @@ func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 		s.record(ev.Data)
 	case midi.NoteOn:
 		s.record(ev.Data)
+	case midi.Pgm:
+		s.pgm[midi.Channel(cmd)] = int(ev.Data[1])
 	}
 	return nil
 }

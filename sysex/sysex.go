@@ -39,6 +39,14 @@ func DecodeRealTime(dd []byte) interface{} {
 		}
 	case SubIdMMCCommand:
 		switch data[2] {
+		case MMCStop:
+			return &Stop{}
+		case MMCPlay:
+			return &Play{}
+		case MMCRewind:
+			return &Rewind{}
+		case MMCFastForward:
+			return &FastForward{}
 		case MMCRecordStrobe:
 			return &RecordStrobe{}
 		case MMCRecordExit:
