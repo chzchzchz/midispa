@@ -17,6 +17,12 @@ const (
 	Pgm               = 0xc0
 )
 
+// Control codes.
+const (
+	AllSoundOff = 120
+	AllNotesOff = 123
+)
+
 func IsMessage(b byte) bool { return b&0x80 == 0x80 }
 func IsNoteOn(b byte) bool  { return Message(b) == NoteOn }
 func IsNoteOff(b byte) bool { return Message(b) == NoteOff }

@@ -3,9 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/track"
 )
 
@@ -56,6 +60,35 @@ func main() {
 		fmt.Printf("bpm: %v (%v); tpb: %v\n", pat.BPM, beatdur, pat.TicksPerBeat)
 		fmt.Printf("pat duration: %v\n", pat.Duration())
 	}
+
+	var usedChannels [16]bool
+	for _, m := range pat.Msgs {
+		cmd := m.Raw[0]
+		if midi.Message(cmd) == midi.NoteOn {
+			usedChannels[midi.Channel(cmd)] = true
+		}
+	}
+
+	sigc := make(chan os.Signal, 1)
+	defer close(sigc)
+	signal.Notify(sigc,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+	go func() {
+		if _, ok := <-sigc; !ok {
+			return
+		}
+		for i := 0; i < 16; i++ {
+			if usedChannels[i] {
+				msg := []byte{midi.MakeCC(i), midi.AllNotesOff, 0x7f}
+				aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: msg})
+			}
+		}
+		os.Exit(1)
+	}()
+
 	for i := 0; i < *loop; i++ {
 		if *verbose {
 			fmt.Println("loop", i, start)
