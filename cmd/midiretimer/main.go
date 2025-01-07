@@ -15,6 +15,8 @@ import (
 
 // pulse per quarter note
 const PPQN = 24.0
+const OutputBufferSize = 16
+const InputBufferSize = 64
 
 func must(err error) {
 	if err != nil {
@@ -22,8 +24,8 @@ func must(err error) {
 	}
 }
 
-func makeMsgChannel(aseq *alsa.Seq, input io.Reader) chan []byte {
-	msgc := make(chan []byte, 64)
+func makeInputChannel(aseq *alsa.Seq, input io.Reader) chan []byte {
+	inc := make(chan []byte, InputBufferSize)
 	go func() {
 		rbuf := make([]byte, 512)
 		framebuf := make([]byte, 0, 512)
@@ -36,7 +38,7 @@ func makeMsgChannel(aseq *alsa.Seq, input io.Reader) chan []byte {
 			msgs, nbytes := midi.Frame(framebuf)
 			framebuf = framebuf[nbytes:]
 			for _, msg := range msgs {
-				msgc <- msg
+				inc <- msg
 			}
 		}
 	}()
@@ -44,10 +46,10 @@ func makeMsgChannel(aseq *alsa.Seq, input io.Reader) chan []byte {
 		for {
 			ev, err := aseq.Read()
 			must(err)
-			msgc <- ev.Data
+			inc <- ev.Data
 		}
 	}()
-	return msgc
+	return inc
 }
 
 func main() {
@@ -57,6 +59,7 @@ func main() {
 
 	bpmFlag := flag.Float64("bpm", 120.0, "retime clock signals at given bpm")
 	outFlag := flag.String("out-port", "?", "output midi port name")
+	replyClocksFlag := flag.Bool("reply-clocks", false, "reply to clocks")
 
 	flag.Parse()
 
@@ -79,20 +82,37 @@ func main() {
 		log.Printf("bpm = %v\n", float64(curBpmInt)/64.0)
 	}
 	updateClockDur()
-	msgc := makeMsgChannel(aseq, os.Stdin)
+	inc := makeInputChannel(aseq, os.Stdin)
 
+	clockMsg := []byte{midi.Clock}
+
+	// Write output midi messages to stdout
+	outc := make(chan []byte, OutputBufferSize)
+	if *replyClocksFlag {
+		go func() {
+			for msgs := range outc {
+				// NB: unbuffered
+				os.Stdout.Write(msgs)
+			}
+		}()
+	}
+
+	// Read in midi messages from stdin, wait and forward.
 	var wg sync.WaitGroup
 	wg.Add(2)
 	contc := make(chan struct{}, 1)
 	go func() {
 		defer wg.Done()
-		for msg := range msgc {
+		for msg := range inc {
 			cmd := msg[0]
 			if cmd == midi.Clock {
-				if len(msgc) < 32 {
+				if len(inc) < InputBufferSize/2 {
 					<-contc
 				} else {
 					log.Println("skipping clock")
+				}
+				if *replyClocksFlag {
+					outc <- clockMsg
 				}
 			} else {
 				ev := alsa.SeqEvent{alsa.SubsSeqAddr, msg}
@@ -100,6 +120,7 @@ func main() {
 			}
 		}
 	}()
+	// Retime clocks.
 	go func() {
 		defer wg.Done()
 		nextClock := time.Now()
