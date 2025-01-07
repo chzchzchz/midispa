@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<script src="wasm_exec.js"></script>
+<script>
+function websocket_url() {
+	var url_string = window.location.href;
+	var url = new URL(url_string);
+	var wsurl = url.searchParams.get("wsurl");
+	if (!wsurl) {
+		wsurl = "ws://localhost:8081"
+	}
+	document.getElementById("wsurl").innerText = wsurl;
+}
+const go = new Go();
+WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
+	go.run(result.instance);
+});
+</script>
+</head>
+<body onload="websocket_url()">
+<h1>webmidi over websockets 🎹📡</h1>
+<hr/>
+<div>Connect to: <span id="wsurl"></span></div>
+<div>Select MIDI input device: <span id="chooser">???</span></div>
+<div>Messages sent: <span id="counter">0</span></div>
+<div id="status"></div>
+</body>
+</html>

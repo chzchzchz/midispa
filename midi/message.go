@@ -2,19 +2,23 @@ package midi
 
 // First byte of a message.
 const (
-	SysEx        byte = 0xf0
-	SongPosition      = 0xf2
-	SongSelect        = 0xf3
-	EndSysEx          = 0xf7
-	Clock             = 0xf8
-	Tick              = 0xf9
-	Start             = 0xfa
-	Continue          = 0xfb
-	Stop              = 0xfc
-	NoteOn            = 0x90
-	NoteOff           = 0x80
-	CC                = 0xb0
-	Pgm               = 0xc0
+	SysEx             byte = 0xf0
+	QuarterFrame           = 0xf1
+	SongPosition           = 0xf2
+	SongSelect             = 0xf3
+	EndSysEx               = 0xf7
+	Clock                  = 0xf8
+	Tick                   = 0xf9
+	Start                  = 0xfa
+	Continue               = 0xfb
+	Stop                   = 0xfc
+	NoteOff                = 0x80
+	NoteOn                 = 0x90
+	KeyAftertouch          = 0xa0
+	CC                     = 0xb0
+	Pgm                    = 0xc0
+	ChannelAftertouch      = 0xd0
+	Pitch                  = 0xe0
 )
 
 // Control codes.
@@ -27,6 +31,8 @@ func IsMessage(b byte) bool { return b&0x80 == 0x80 }
 func IsNoteOn(b byte) bool  { return Message(b) == NoteOn }
 func IsNoteOff(b byte) bool { return Message(b) == NoteOff }
 func IsCC(b byte) bool      { return Message(b) == CC }
+func IsPitch(b byte) bool   { return Message(b) == Pitch }
+func IsPgm(b byte) bool     { return Message(b) == Pgm }
 func Channel(b byte) int    { return int(b & 0x0f) }
 
 func IsRealtime(b byte) bool       { return b&0xf0 == 0xf0 }
