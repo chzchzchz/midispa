@@ -6,20 +6,18 @@ package main
 import (
 	"fmt"
 	"math"
-	"sync"
 	"syscall/js"
 )
 
 type WebMidi struct {
 	inputsJS  js.Value
 	outputsJS js.Value
-	err       error
 }
 
 func newWebMidi() (*WebMidi, error) {
 	jsDoc := js.Global().Get("navigator")
 	if !jsDoc.Truthy() {
-		return nil, fmt.Errorf("Unable to get navigator object")
+		return nil, fmt.Errorf("unable to get navigator object")
 	}
 
 	opts := map[string]interface{}{"sysex": "false"}
@@ -31,25 +29,22 @@ func newWebMidi() (*WebMidi, error) {
 	}
 
 	d := &WebMidi{}
-	var wg sync.WaitGroup
+	errc := make(chan error, 1)
 	success := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if len(args) != 1 {
 			return "wrong number of arguments"
 		}
 		d.inputsJS = args[0].Get("inputs")
 		d.outputsJS = args[0].Get("outputs")
-		wg.Done()
+		errc <- nil
 		return nil
 	})
 	failed := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		d.err = fmt.Errorf("Could not access the MIDI devices.")
-		wg.Done()
+		errc <- fmt.Errorf("failed accessing MIDI devices")
 		return nil
 	})
-	wg.Add(1)
 	midiaccess.Call("then", success, failed)
-	wg.Wait()
-	return d, d.err
+	return d, <-errc
 }
 
 func (d *WebMidi) ports(v js.Value) (p []*webmidiPort, err error) {

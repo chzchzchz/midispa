@@ -4,6 +4,7 @@
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 <script src="wasm_exec.js"></script>
 <script>
+const go = new Go();
 function websocket_url() {
 	var url_string = window.location.href;
 	var url = new URL(url_string);
@@ -13,13 +14,16 @@ function websocket_url() {
 	}
 	document.getElementById("wsurl").innerText = wsurl;
 }
-const go = new Go();
-WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
-	go.run(result.instance);
-});
+
+function do_load() {
+	websocket_url()
+	WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
+		go.run(result.instance);
+	});
+}
 </script>
 </head>
-<body onload="websocket_url()">
+<body onload="do_load()">
 <h1>webmidi over websockets 🎹📡</h1>
 <hr/>
 <div>Connect to: <span id="wsurl"></span></div>
