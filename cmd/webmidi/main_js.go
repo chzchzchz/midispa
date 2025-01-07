@@ -104,30 +104,39 @@ var keyMap = map[string]byte{
 	// "'" : 73,
 }
 var kbdChannel = int(2)
-var downMap = make(map[string]struct{})
+var kbdDownMap = make(map[string]byte)
+var kbdOctave = 0
 
 func setupKeyboard(outc chan<- []byte) {
 	document := js.Global().Get("document")
 	down := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		k := args[0].Get("key").String()
-		if _, ok := downMap[k]; ok {
+		if _, ok := kbdDownMap[k]; ok {
 			return nil
-		}
-		downMap[k] = struct{}{}
-		if len(k) != 1 {
+		} else if len(k) != 1 {
 			return nil
 		} else if n, ok := keyMap[k]; ok {
+			n += byte(12 * kbdOctave)
+			kbdDownMap[k] = n
 			outc <- []byte{midi.MakeNoteOn(kbdChannel), n, 100}
 		} else if k[0] >= '0' && k[0] <= '9' {
 			kbdChannel = int(k[0] - '0')
+		} else if k[0] == '[' && kbdOctave > -4 {
+			kbdDownMap[k] = 0
+			kbdOctave--
+		} else if k[0] == ']' && kbdOctave < 4 {
+			kbdDownMap[k] = 0
+			kbdOctave++
 		}
 		return nil
 	})
 	up := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		k := args[0].Get("key").String()
-		delete(downMap, k)
-		if n, ok := keyMap[k]; ok {
-			outc <- []byte{midi.MakeNoteOff(kbdChannel), n, 0x7f}
+		if n, ok := kbdDownMap[k]; ok {
+			delete(kbdDownMap, k)
+			if n > 0 {
+				outc <- []byte{midi.MakeNoteOff(kbdChannel), n, 0x7f}
+			}
 		}
 		return nil
 	})
