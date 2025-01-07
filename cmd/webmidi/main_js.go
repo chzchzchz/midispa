@@ -16,6 +16,8 @@ import (
 	"github.com/coder/websocket"
 )
 
+const inputBufferSize = 16
+
 func log(msg string) {
 	document := js.Global().Get("document")
 	p := document.Call("createElement", "p")
@@ -81,6 +83,58 @@ func writeChooser(ins []*webmidiPort) {
 	writeElement("chooser", bf.String())
 }
 
+var keyMap = map[string]byte{
+	"a": 56,
+	"z": 57,
+	"s": 58,
+	"x": 59,
+	"c": 60,
+	"f": 61,
+	"v": 62,
+	"g": 63,
+	"b": 64,
+	"n": 65,
+	"j": 66,
+	"m": 67,
+	"k": 68,
+	",": 69,
+	"l": 70,
+	".": 71,
+	// "/" : 72,
+	// "'" : 73,
+}
+var kbdChannel = int(2)
+var downMap = make(map[string]struct{})
+
+func setupKeyboard(outc chan<- []byte) {
+	document := js.Global().Get("document")
+	down := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		k := args[0].Get("key").String()
+		if _, ok := downMap[k]; ok {
+			return nil
+		}
+		downMap[k] = struct{}{}
+		if len(k) != 1 {
+			return nil
+		} else if n, ok := keyMap[k]; ok {
+			outc <- []byte{midi.MakeNoteOn(kbdChannel), n, 100}
+		} else if k[0] >= '0' && k[0] <= '9' {
+			kbdChannel = int(k[0] - '0')
+		}
+		return nil
+	})
+	up := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		k := args[0].Get("key").String()
+		delete(downMap, k)
+		if n, ok := keyMap[k]; ok {
+			outc <- []byte{midi.MakeNoteOff(kbdChannel), n, 0x7f}
+		}
+		return nil
+	})
+	document.Call("addEventListener", "keyup", up)
+	document.Call("addEventListener", "keydown", down)
+}
+
 var PPQN = 24.0
 var BPM = 120.0
 
@@ -95,10 +149,13 @@ func main() {
 	logElement("status", "🫴🏿Selected midi port <b>"+fmt.Sprintf("%s (%d)", ins[idx], idx)+"</b>")
 
 	// Send midi messages over msgc channel.
-	msgc := make(chan []byte, 16)
+	msgc := make(chan []byte, inputBufferSize)
 	cb := func(msg []byte, ms int32) { msgc <- msg }
 	err = ins[idx].Listen(cb)
 	e(err)
+
+	// Send virtual midi keyboard events over msgc.
+	setupKeyboard(msgc)
 
 	// Periodically send clocks.
 	go func() {
