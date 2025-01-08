@@ -20,7 +20,7 @@ func newWebMidi() (*WebMidi, error) {
 		return nil, fmt.Errorf("unable to get navigator object")
 	}
 
-	opts := map[string]interface{}{"sysex": "false"}
+	opts := map[string]interface{}{"sysex": false}
 	jsOpts := js.ValueOf(opts)
 
 	midiaccess := jsDoc.Call("requestMIDIAccess", jsOpts)
