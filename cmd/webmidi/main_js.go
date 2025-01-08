@@ -25,6 +25,8 @@ func log(msg string) {
 	document.Get("body").Call("appendChild", p)
 }
 
+func status(msg string) { logElement("status", msg) }
+
 func logElement(id, msg string) {
 	document := js.Global().Get("document")
 	p := document.Call("createElement", "p")
@@ -78,6 +80,7 @@ func writeChooser(ins []*webmidiPort) {
 	for i, in := range ins {
 		fmt.Fprintf(&bf, "<option value=\"%d\">%v<br/>\n", i, in)
 	}
+	fmt.Fprintf(&bf, "<option value=\"-1\">Computer Keyboard<br/>\n")
 	fmt.Fprintf(&bf, "</select>\n")
 	fmt.Fprintf(&bf, "<button type=\"button\" id=\"choose_button\">Select</button>")
 	writeElement("chooser", bf.String())
@@ -149,19 +152,29 @@ var BPM = 120.0
 
 func main() {
 	wm, err := newWebMidi()
-	e(err)
-	ins, err := wm.Ins()
-	e(err)
+	var ins []*webmidiPort
+	if err != nil {
+		status("🙌🏿 Could not start MIDI: " + err.Error())
+		writeChooser(nil)
+	} else {
+		ins, err = wm.Ins()
+		e(err)
+	}
 	writeChooser(ins)
 	ch := handleChoose()
 	idx := <-ch
-	logElement("status", "🫴🏿Selected midi port <b>"+fmt.Sprintf("%s (%d)", ins[idx], idx)+"</b>")
 
 	// Send midi messages over msgc channel.
 	msgc := make(chan []byte, inputBufferSize)
-	cb := func(msg []byte, ms int32) { msgc <- msg }
-	err = ins[idx].Listen(cb)
-	e(err)
+
+	if idx >= 0 {
+		status("👋🫴🏿Selected midi port <b>" + fmt.Sprintf("%s (%d)", ins[idx], idx) + "</b>")
+		cb := func(msg []byte, ms int32) { msgc <- msg }
+		err = ins[idx].Listen(cb)
+		e(err)
+	} else {
+		status("🫴🏿Using keyboard for midi (c is c; [ and ] for octaves)")
+	}
 
 	// Send virtual midi keyboard events over msgc.
 	setupKeyboard(msgc)
@@ -183,9 +196,9 @@ func main() {
 	ctx := context.Background()
 	wsURL := getString("wsurl")
 	wsc, _, err := websocket.Dial(ctx, wsURL, nil)
-	logElement("status", fmt.Sprintf("👋🏿 Connecting to <b>%q</b>", wsURL))
+	status(fmt.Sprintf("👋🏿 Connecting to <b>%q</b>", wsURL))
 	e(err)
-	logElement("status", fmt.Sprintf("👍🏿 Connected to <b>%q</b>", wsURL))
+	status(fmt.Sprintf("👍🏿 Connected to <b>%q</b>", wsURL))
 	defer wsc.CloseNow()
 	msgs := 0
 	for msg := range msgc {
