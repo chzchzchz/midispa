@@ -46,7 +46,9 @@ func makeInputChannel(aseq *alsa.Seq, input io.Reader) chan []byte {
 		for {
 			ev, err := aseq.Read()
 			must(err)
-			inc <- ev.Data
+			if !ev.IsControl() {
+				inc <- ev.Data
+			}
 		}
 	}()
 	return inc

@@ -52,6 +52,10 @@ func (a *Seq) Close() error {
 
 }
 
+func (ev *SeqEvent) IsControl() bool {
+	return ev.Data[0]&0x80 == 0
+}
+
 type seqWriter struct {
 	seq *Seq
 	dst SeqAddr
@@ -349,7 +353,7 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
 	default:
-		panic("unknown midi data")
+		panic("unknown midi data: " + fmt.Sprintf("%+v", event))
 	}
 	return snderr2error(C.snd_seq_event_output_direct(a.seq, &event))
 }
