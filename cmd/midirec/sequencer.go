@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 type Sequencer struct {
 	aseq      *alsa.Seq
 	outdir    string
+	outfile   string
 	start     time.Time
 	startRec  time.Time
 	running   bool
@@ -34,6 +36,18 @@ func NewSequencer(aseq *alsa.Seq, outdir string) *Sequencer {
 	}
 }
 
+func NewSingleShotSequencer(aseq *alsa.Seq, outfile string) *Sequencer {
+	s := &Sequencer{
+		aseq:    aseq,
+		outfile: outfile,
+		bpm:     120,
+		track:   Track{bpm: 120},
+	}
+	s.startRunning()
+	s.startRec, s.recording = time.Now(), true
+	return s
+}
+
 func (s *Sequencer) processEvents() error {
 	for {
 		ev, err := s.aseq.Read()
@@ -41,6 +55,9 @@ func (s *Sequencer) processEvents() error {
 			return err
 		}
 		if err := s.processEvent(ev); err != nil {
+			if s.outfile != "" && err == io.EOF {
+				return nil
+			}
 			return err
 		}
 	}
@@ -90,12 +107,17 @@ func (s *Sequencer) stopAndSave() error {
 	midipath := filepath.Join(s.outdir, tf+".mid")
 	log.Printf("saving to %q", midipath)
 	err := s.track.save(midipath)
-	if err == nil {
+	if err == nil && s.outdir != "" {
 		s.updatePgmLink(midipath)
 	}
 	s.track = Track{bpm: s.bpm}
 	s.recording = false
 	return err
+}
+
+func (s *Sequencer) startRunning() {
+	s.start, s.running = time.Now(), true
+	log.Println("started")
 }
 
 func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
@@ -123,12 +145,15 @@ func (s *Sequencer) processEvent(ev alsa.SeqEvent) error {
 			return s.stopAndSave()
 		}
 	case midi.Start:
-		s.start, s.running = time.Now(), true
-		log.Println("started")
+		s.startRunning()
 		return nil
 	case midi.Stop:
 		s.running = false
 		log.Println("stopped")
+		if s.outfile != "" {
+			s.track.save(s.outfile)
+			return io.EOF
+		}
 		return nil
 	}
 	switch midi.Message(cmd) {

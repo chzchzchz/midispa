@@ -3,8 +3,12 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 )
 
 func must(err error) {
@@ -15,8 +19,9 @@ func must(err error) {
 
 func main() {
 	inFlag := flag.String("i", "", "midi port for recording")
+	ssFlag := flag.Bool("s", false, "single shot mode (record to file)")
 	mFlag := flag.String("m", "", "midi port for clock master")
-	outdirFlag := flag.String("o", "", "output directory")
+	outdirFlag := flag.String("o", "", "output directory or file")
 	// todo midi output port for playback
 
 	flag.Parse()
@@ -41,6 +46,25 @@ func main() {
 		must(aseq.OpenPortRead(sa))
 	}
 
-	s := NewSequencer(aseq, *outdirFlag)
+	var s *Sequencer
+	if *ssFlag {
+		sigc := make(chan os.Signal, 1)
+		defer close(sigc)
+		signal.Notify(sigc,
+			syscall.SIGHUP,
+			syscall.SIGINT,
+			syscall.SIGTERM,
+			syscall.SIGQUIT)
+		go func() {
+			if _, ok := <-sigc; !ok {
+				return
+			}
+			ev := alsa.SeqEvent{aseq.SeqAddr, []byte{midi.Stop}}
+			aseq.Write(ev)
+		}()
+		s = NewSingleShotSequencer(aseq, *outdirFlag)
+	} else {
+		s = NewSequencer(aseq, *outdirFlag)
+	}
 	must(s.processEvents())
 }
