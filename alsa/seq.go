@@ -352,6 +352,15 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 		event._type = C.SND_SEQ_EVENT_SONGSEL
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+	case midi.KeyAftertouch:
+		if len(ev.Data) != 3 {
+			panic("bad size for aftertouch")
+		}
+		event._type = C.SND_SEQ_EVENT_KEYPRESS
+		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
+		ctrl.note = C.uchar(ev.Data[1])
+		ctrl.velocity = C.uchar(ev.Data[2])
 	default:
 		panic("unknown midi data: " + fmt.Sprintf("%+v", event))
 	}
