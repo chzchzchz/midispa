@@ -11,43 +11,6 @@ import (
 
 // Filters midi clocks and more
 
-// F0 00 30 33 00 CH CC CC PP F7
-func isRouteSysEx(data []byte) bool {
-	if len(data) != 10 {
-		return false
-	}
-	if data[0] != midi.SysEx {
-		return false
-	}
-	if data[1] != 0 || data[2] != 0x30 || data[3] != 0x33 {
-		// Wrong vendor
-		return false
-	}
-	if data[4] != 0 {
-		// command byte: 0 = route channel
-		return false
-	}
-	if data[9] != midi.EndSysEx {
-		return false
-	}
-	return true
-}
-
-type Route struct {
-	dst         alsa.SeqAddr
-	midiChannel int
-}
-
-func decodeRouteSysEx(data []byte) *Route {
-	channel := int(data[5])
-	if channel > 15 || channel < 0 {
-		return nil
-	}
-	client := (int(data[6]) << 7) | int(data[7])
-	port := int(data[8])
-	return &Route{alsa.SeqAddr{client, port}, channel}
-}
-
 func evPortToSeqAddrs(data []byte) (alsa.SeqAddr, alsa.SeqAddr) {
 	sender := alsa.SeqAddr{int(data[1]), int(data[2])}
 	rxer := alsa.SeqAddr{int(data[3]), int(data[4])}
@@ -98,6 +61,23 @@ func newFilterSeq(aseq *alsa.Seq) *FilterSeq {
 	}
 }
 
+func (f *FilterSeq) handleRoute(ev alsa.SeqEvent) {
+	r := decodeRouteSysEx(ev.Data)
+	if r == nil {
+		log.Println("rejecting bad route:", r)
+		return
+	}
+	fmt.Println("arming route:", r)
+	if oldr := f.routes[r.midiChannel]; oldr != nil {
+		log.Println("kicking out old route on", r.midiChannel)
+		f.routing--
+		go func() { oldr.Close() }()
+	}
+	f.routes[r.midiChannel] = makeWriter(f.aseq, r.dst)
+	f.routing++
+	return
+}
+
 func (f *FilterSeq) handleEvent() error {
 	ev, err := f.aseq.Read()
 	if err != nil {
@@ -115,22 +95,10 @@ func (f *FilterSeq) handleEvent() error {
 			log.Println("unsubscribed", sender, "->", rxer)
 		}
 		return nil
-	} else if midi.IsClock(cmd) {
-		return nil
 	} else if isRouteSysEx(ev.Data) {
-		r := decodeRouteSysEx(ev.Data)
-		if r == nil {
-			log.Println("rejecting bad route:", r)
-			return nil
-		}
-		fmt.Println("arming route:", r)
-		if oldr := f.routes[r.midiChannel]; oldr != nil {
-			log.Println("kicking out old route on", r.midiChannel)
-			f.routing--
-			go func() { oldr.Close() }()
-		}
-		f.routes[r.midiChannel] = makeWriter(f.aseq, r.dst)
-		f.routing++
+		f.handleRoute(ev)
+		return nil
+	} else if handlePolicy(ev.Data) {
 		return nil
 	}
 	outc := f.bcast.outc
@@ -158,6 +126,7 @@ func (f *FilterSeq) Close() {
 
 func main() {
 	cnFlag := flag.String("name", "midifilter", "midi client name")
+	policyFlag := flag.String("bpf", defaultPolicyPath, "bpf elf path")
 	flag.Parse()
 	// Create midi sequencer for reading/writing events.
 	aseq, err := alsa.OpenSeq(*cnFlag)
@@ -165,6 +134,7 @@ func main() {
 		panic(err)
 	}
 	fmt.Printf("%q: %+v\n", *cnFlag, aseq.SeqAddr)
+	initPolicy(*policyFlag)
 	f := newFilterSeq(aseq)
 	defer f.Close()
 	for {

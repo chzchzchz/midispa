@@ -1,5 +1,17 @@
 # midifilter
 
+midi filtering with bpf and sysex configurable routing.
+
+## BPF filters
+
+Build BPF support using the bpf tag (needs ubpf installed):
+
+```go
+go build -tags bpf
+```
+
+midi packets will be modified using the bpf filter specified by `--bpf <path>`. See examples/ for filters.
+
 ## Routing
 
 NB: routing turns off broadcasting
