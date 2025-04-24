@@ -55,10 +55,9 @@ struct ubpf_vm* load_bpf(const char* s)
 
 int run_bpf(struct ubpf_vm* vm, void* mem, int len) {
 	uint64_t ret;
-	uint64_t ret_val;
-	int rc = ubpf_exec(vm, mem, len, &ret_val);
+	int rc = ubpf_exec(vm, mem, len, &ret);
 	assert (rc == 0);
-	return (int)ret_val;
+	return (int)ret;
 }
 
 typedef struct ubpf_vm ubpf_vm;
@@ -89,6 +88,6 @@ func NewBPF(p string) *BPF {
 }
 
 func (bpf *BPF) Run(dat []byte) int {
-	v := C.run_bpf(bpf.vm, unsafe.Pointer(&dat), C.int(len(dat)))
+	v := C.run_bpf(bpf.vm, C.CBytes(dat), C.int(len(dat)))
 	return int(v)
 }
