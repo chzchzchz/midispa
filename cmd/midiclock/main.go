@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -40,6 +40,41 @@ func (ce *ClockEvents) Add(t time.Time) {
 	ce.start = (ce.start + 1) % len(ce.t)
 }
 
+func (ce *ClockEvents) Read(inc <-chan alsa.SeqEvent) {
+	lastMean := ce.Mean()
+	c := 0
+	// Drain any messages that were queued up.
+	for {
+		<-inc
+		time.Sleep(time.Millisecond)
+		if len(inc) == 0 {
+			break
+		}
+	}
+	// Read messages as they apepar.
+	for ev := range inc {
+		cmd := ev.Data[0]
+		if cmd == midi.Stop || cmd == midi.Start {
+			c = 0
+		}
+		if cmd != midi.Clock {
+			continue
+		}
+		ce.Add(time.Now())
+		newMean := ce.Mean()
+		c++
+		if c != 24 {
+			continue
+		}
+		if newMean != lastMean {
+			bpm := (60.0 / newMean.Seconds()) / PPQN
+			log.Printf("input bpm = %g (%v)\n", bpm, newMean)
+			lastMean = newMean
+		}
+		c = 0
+	}
+}
+
 // pulse per quarter note
 const PPQN = 24.0
 
@@ -61,7 +96,7 @@ func main() {
 	flag.Parse()
 
 	if !runFlag {
-		fmt.Printf("beginning in %q stopped mode\n", cnFlag)
+		log.Printf("started %q in stopped mode\n", cnFlag)
 	}
 
 	// Create midi sequencer for reading/writing events.
@@ -70,32 +105,10 @@ func main() {
 		panic(err)
 	}
 	outc := make(chan alsa.SeqEvent, 16)
-	ce := &ClockEvents{}
 	go func() {
 		defer close(outc)
-		lastMean := ce.Mean()
-		c := 0
-		for {
-			<-outc
-			time.Sleep(time.Millisecond)
-			if len(outc) == 0 {
-				break
-			}
-		}
-		for range outc {
-			ce.Add(time.Now())
-			newMean := ce.Mean()
-			c++
-			if c != 24 {
-				continue
-			}
-			if newMean != lastMean {
-				bpm := (60.0 / newMean.Seconds()) / PPQN
-				fmt.Printf("bpm = %g (%v)\n", bpm, newMean)
-				lastMean = newMean
-			}
-			c = 0
-		}
+		ce := &ClockEvents{}
+		ce.Read(outc)
 	}()
 
 	curBpmInt := int(*bpmFlag * 64.0)
@@ -108,7 +121,7 @@ func main() {
 		cps := ((float64(curBpmInt) / 64.0) / 60.0) * PPQN
 		dur := time.Duration(float64(time.Second) / cps)
 		atomic.StoreInt64(&clockDur, int64(dur))
-		fmt.Printf("bpm = %v\n", float64(curBpmInt)/64.0)
+		log.Printf("output bpm = %v\n", float64(curBpmInt)/64.0)
 	}
 	if runFlag {
 		updateClockDur()
@@ -129,12 +142,16 @@ func main() {
 				outc <- ev
 			} else if cmd == midi.Stop {
 				atomic.StoreInt64(&clockDur, int64(0))
-			} else if cmd == midi.Continue {
+				outc <- ev
+				aseq.Write(alsa.MakeEvent(ev.Data))
+			} else if cmd == midi.Continue || cmd == midi.Start {
+				aseq.Write(alsa.MakeEvent(ev.Data))
 				updateClockDur()
 				select {
 				case contc <- struct{}{}:
 				default:
 				}
+				outc <- ev
 			} else if midi.IsCC(cmd) {
 				cc, v := ev.Data[1], ev.Data[2]
 				if cc == CcBpmLsb {
@@ -151,7 +168,7 @@ func main() {
 	randCoef := *randPctFlag / 100.0
 	clockWriter := func() {
 		defer wg.Done()
-		evClock := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{midi.Clock}}
+		evClock := alsa.MakeEvent([]byte{midi.Clock})
 		nextClock := time.Now()
 		for {
 			err := aseq.Write(evClock)

@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -eou pipefail
 x=`bc -l <<< "$1 * 64"`
 lsb=`python -c "print(int($x) & 0x7f)"`
 msb=`python -c "print(int($x) >> 7)"`

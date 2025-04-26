@@ -44,6 +44,10 @@ type SeqEvent struct {
 	Data []byte
 }
 
+func MakeEvent(data []byte) SeqEvent {
+	return SeqEvent{SeqAddr: SubsSeqAddr, Data: data}
+}
+
 func (a *Seq) Close() error {
 	if err := C.snd_seq_close(a.seq); err != 0 {
 		return snderr2error(err)
