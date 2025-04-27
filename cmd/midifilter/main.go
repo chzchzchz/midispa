@@ -9,6 +9,12 @@ import (
 	"github.com/chzchzchz/midispa/midi"
 )
 
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
 // Filters midi clocks and more
 
 func evPortToSeqAddrs(data []byte) (alsa.SeqAddr, alsa.SeqAddr) {
@@ -127,14 +133,23 @@ func (f *FilterSeq) Close() {
 func main() {
 	cnFlag := flag.String("name", "midifilter", "midi client name")
 	policyFlag := flag.String("bpf", defaultPolicyPath, "bpf elf path")
+	inputFlag := flag.String("i", "", "input midi port (optional)")
+
 	flag.Parse()
 	// Create midi sequencer for reading/writing events.
 	aseq, err := alsa.OpenSeq(*cnFlag)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("%q: %+v\n", *cnFlag, aseq.SeqAddr)
-	initPolicy(*policyFlag)
+
+	if *inputFlag != "" {
+		sa, err := aseq.PortAddress(*inputFlag)
+		must(err)
+		must(aseq.OpenPortRead(sa))
+	}
+
+	log.Printf("%q: %+v", *cnFlag, aseq.SeqAddr)
+	initPolicy(*policyFlag, aseq.NewWriter(alsa.SubsSeqAddr))
 	f := newFilterSeq(aseq)
 	defer f.Close()
 	for {

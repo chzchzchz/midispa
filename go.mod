@@ -6,6 +6,7 @@ require (
 	github.com/bendahl/uinput v1.7.0
 	github.com/chzchzchz/sayo-rgb v0.0.0-20240518084937-82b8f8feda7a
 	github.com/coder/websocket v1.8.12
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-audio/audio v1.0.0
 	github.com/go-audio/wav v1.1.0
 	github.com/go-ble/ble v0.0.0-20240122180141-8c5522f54333
@@ -27,5 +28,5 @@ require (
 	github.com/raff/goble v0.0.0-20190909174656-72afc67d6a99 // indirect
 	github.com/sirupsen/logrus v1.5.0 // indirect
 	github.com/sstallion/go-hid v0.14.1 // indirect
-	golang.org/x/sys v0.8.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
 )

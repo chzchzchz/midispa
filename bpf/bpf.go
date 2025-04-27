@@ -1,6 +1,7 @@
 package bpf
 
 import (
+	"io"
 	"runtime"
 	"unsafe"
 )
@@ -17,6 +18,7 @@ import (
 #include <unistd.h>
 #include <inttypes.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void* open_elf(const char* path, off_t* len) {
 	struct stat s;
@@ -32,12 +34,23 @@ static void* open_elf(const char* path, off_t* len) {
 	return ret != MAP_FAILED ? ret : NULL;
 }
 
+void midi_write(uint8_t* data, size_t bytes, uint64_t, uint64_t, uint64_t, uint8_t* mem) {
+	uint8_t* len = &mem[-2];
+	uint8_t* pkt = &mem[*len];
+	pkt[0] = bytes;
+	memcpy(pkt + 1, data, bytes);
+	*len += bytes + 1;
+}
+
 struct ubpf_vm* load_bpf(const char* s)
 {
 	struct ubpf_vm* vm;
 	int rc;
 	vm = ubpf_create();
 	assert(vm);
+
+	// idx 0 will optimize as undefined behavior with -O2, so begin with idx 1
+	ubpf_register(vm, 1, "midi_write", as_external_function_t(midi_write));
 
 	off_t len = 0;
 	void* elf = open_elf(s, &len);
@@ -55,7 +68,8 @@ struct ubpf_vm* load_bpf(const char* s)
 
 int run_bpf(struct ubpf_vm* vm, void* mem, int len) {
 	uint64_t ret;
-	int rc = ubpf_exec(vm, mem, len, &ret);
+	uint8_t *mem8 = mem;
+	int rc = ubpf_exec(vm, mem8 + 2, len - 2, &ret);
 	assert (rc == 0);
 	return (int)ret;
 }
@@ -70,24 +84,57 @@ const (
 	DONE
 )
 
+const MaxMessageBytes = 64
+const BufBytes = 256
+
 type BPF struct {
 	path string
 	vm   *C.ubpf_vm
+	w    io.Writer
+	buf  []byte
 }
 
-func NewBPF(p string) *BPF {
+func NewBPF(p string, w io.Writer) *BPF {
 	cs := C.CString(p)
 	vm := C.load_bpf(cs)
 	C.free(unsafe.Pointer(cs))
 	if vm == nil {
 		return nil
 	}
-	ret := &BPF{p, vm}
+	ret := &BPF{p, vm, w, make([]byte, BufBytes)}
 	runtime.AddCleanup(ret, func(vm *C.ubpf_vm) { C.ubpf_destroy(vm) }, vm)
 	return ret
 }
 
 func (bpf *BPF) Run(dat []byte) int {
-	v := C.run_bpf(bpf.vm, C.CBytes(dat), C.int(len(dat)))
+	if len(dat) >= MaxMessageBytes {
+		return PASS
+	}
+
+	// Adding [0] to the pointer should give the next place to write.
+	bpf.buf[0] = byte(len(dat)) + 2
+	// The first byte is used for the message length.
+	bpf.buf[1] = byte(len(dat))
+	// The message follows the message length byte.
+	copy(bpf.buf[2:], dat)
+
+	v := C.run_bpf(bpf.vm, unsafe.Pointer(&bpf.buf[0]), C.int(BufBytes))
+
+	// Set mutated message and skip over it.
+	copy(dat, bpf.buf[2:len(dat)+2])
+	idx := 2 + bpf.buf[1]
+	remaining := int(bpf.buf[0] - idx)
+
+	// Write enqueued data, if any.
+	for remaining > 0 {
+		l := bpf.buf[idx]
+		msg := bpf.buf[idx+1 : idx+1+l]
+		if _, err := bpf.w.Write(msg); err != nil {
+			panic(err)
+		}
+		remaining -= int(1 + l)
+		idx += 1 + bpf.buf[idx]
+	}
+
 	return int(v)
 }

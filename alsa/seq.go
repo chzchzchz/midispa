@@ -340,8 +340,9 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 			panic("bad size for PGM")
 		}
 		event._type = C.SND_SEQ_EVENT_PGMCHANGE
-		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
-		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
+		ctrl.value = C.int(ev.Data[1])
 	case midi.SongPosition:
 		if len(ev.Data) != 3 {
 			panic("bad size for SONGPOS")
@@ -354,8 +355,8 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 			panic("bad size for SONGSEL")
 		}
 		event._type = C.SND_SEQ_EVENT_SONGSEL
-		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
-		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ctrl.value = C.int(ev.Data[1])
 	case midi.KeyAftertouch:
 		if len(ev.Data) != 3 {
 			panic("bad size for aftertouch")
