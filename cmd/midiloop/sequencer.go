@@ -46,11 +46,17 @@ func (s *Sequencer) next() {
 func (s *Sequencer) clock() {
 	evs, err := s.reader.Read()
 	if err == io.EOF {
+		for i := range s.used {
+			s.used[i] = false
+		}
 		s.next()
 		evs, err = s.reader.Read()
 		must(err)
 	}
 	for _, ev := range evs {
+		if midi.IsNoteOn(ev.Raw[0]) {
+			s.used[midi.Channel(ev.Raw[0])] = true
+		}
 		must(s.aseq.Write(alsa.MakeEvent(ev.Raw)))
 	}
 	s.clockTicks++
@@ -81,6 +87,14 @@ func (s *Sequencer) Run() error {
 			s.next()
 		case cmd == midi.Stop:
 			s.pausedReader = s.reader
+			for i := 0; i < 16; i++ {
+				if !s.used[i] {
+					continue
+				}
+				s.used[i] = false
+				s.aseq.Write(alsa.MakeEvent(
+					[]byte{midi.MakeCC(i), midi.AllNotesOff, 0}))
+			}
 			s.reader = emptyReader()
 		case cmd == midi.Continue:
 			s.reader, s.pausedReader = s.pausedReader, nil
