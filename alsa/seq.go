@@ -201,6 +201,9 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 			ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
 			data := C.snd_seq_ev_ext_data(ext)
 			ret.Data = C.GoBytes(unsafe.Pointer(data), C.int(ext.len))
+		case C.SND_SEQ_EVENT_SONGSEL:
+			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{midi.SongSelect, byte(ctrl.value)}
 		case C.SND_SEQ_EVENT_CONTROLLER:
 			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{

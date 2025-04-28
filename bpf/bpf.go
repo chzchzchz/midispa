@@ -35,11 +35,11 @@ static void* open_elf(const char* path, off_t* len) {
 }
 
 void midi_write(uint8_t* data, size_t bytes, uint64_t, uint64_t, uint64_t, uint8_t* mem) {
-	uint8_t* len = &mem[-2];
-	uint8_t* pkt = &mem[*len];
+	uint8_t* end = &mem[-2];
+	uint8_t* pkt = &mem[*end - 2];
 	pkt[0] = bytes;
 	memcpy(pkt + 1, data, bytes);
-	*len += bytes + 1;
+	*end += bytes + 1;
 }
 
 struct ubpf_vm* load_bpf(const char* s)

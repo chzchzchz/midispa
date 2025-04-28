@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"log"
+	"slices"
 	"sort"
 	"time"
 
+	"github.com/chzchzchz/midispa/midi"
+
 	gomidi "gitlab.com/gomidi/midi"
 
-	"gitlab.com/gomidi/midi/midimessage/channel"
 	"gitlab.com/gomidi/midi/midimessage/meta"
 	"gitlab.com/gomidi/midi/midimessage/realtime"
 	"gitlab.com/gomidi/midi/midireader"
@@ -17,14 +19,49 @@ import (
 )
 
 type Track struct {
-	events  [][]Event // indexed by second offset
-	bpm     int
-	channel int
+	events [][]Event // indexed by second offset
+	bpm    int
 }
 
 type Event struct {
 	clock time.Duration // time since start of song
 	data  []byte
+}
+
+func (t *Track) Channels() []int {
+	used := make(map[int]struct{})
+	for _, evs := range t.events {
+		for _, ev := range evs {
+			if midi.IsNoteOn(ev.data[0]) {
+				ch := midi.Channel(ev.data[0])
+				used[ch] = struct{}{}
+			}
+		}
+	}
+	out := make([]int, 0, 16)
+	for a := range used {
+		out = append(out, a)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func (t *Track) First() Event {
+	for _, evs := range t.events {
+		if len(evs) > 0 {
+			return evs[0]
+		}
+	}
+	panic("no events")
+}
+
+func (t *Track) Last() Event {
+	for i := len(t.events) - 1; i >= 0; i-- {
+		if last := t.events[i]; len(last) > 0 {
+			return last[len(last)-1]
+		}
+	}
+	panic("no events")
 }
 
 func (t *Track) Events() (ret []Event) {
@@ -35,6 +72,8 @@ func (t *Track) Events() (ret []Event) {
 	}
 	return ret
 }
+
+func (t *Track) Empty() bool { return len(t.events) == 0 }
 
 func (t *Track) Add(ev Event) {
 	idx := int(ev.clock.Seconds())
@@ -48,12 +87,24 @@ func (t *Track) Add(ev Event) {
 	t.events[idx] = evs
 }
 
+func (t *Track) ShiftTime(d time.Duration) {
+	evs := t.Events()
+	t.events = nil
+	for _, ev := range evs {
+		ev.clock += d
+		t.Add(ev)
+	}
+}
+
 func (t *Track) Erase(start time.Duration, end time.Duration) {
 	if int(start.Seconds()) >= len(t.events) {
 		return
 	}
 	if int(end.Seconds()) >= len(t.events) {
 		end = time.Second * time.Duration(len(t.events)-1)
+	}
+	if start < 0 || start > end {
+		return
 	}
 	ssecs, esecs := start.Seconds(), end.Seconds()
 	// Partial beginning second.
@@ -80,7 +131,6 @@ func (t *Track) save(midipath string) error {
 		rd := midireader.New(bytes.NewBuffer(data), func(m realtime.Message) {})
 		return rd.Read()
 	}
-	t.channel = -1
 	writeMIDI := func(wr smf.Writer) {
 		// Microseconds per quarter note.
 		sig := meta.TimeSig{Numerator: 4, Denominator: 3, ClocksPerClick: 24, DemiSemiQuaverPerQuarter: 8}
@@ -92,16 +142,10 @@ func (t *Track) save(midipath string) error {
 			wr.SetDelta(tpq.Ticks(uint32(t.bpm), ev.clock-lastClock))
 			mm, err := msg2midi(ev.data)
 			must(err)
-			if t.channel < 0 {
-				noteOn, ok := mm.(channel.NoteOn)
-				if ok {
-					t.channel = int(noteOn.Channel())
-				}
-			}
 			must(wr.Write(mm))
 			lastClock = ev.clock
 		}
-		log.Printf("wrote %d events", len(evs))
+		log.Printf("wrote %d events; last clock %v", len(evs), lastClock)
 		wr.Write(meta.EndOfTrack)
 	}
 	err := smfwriter.WriteFile(

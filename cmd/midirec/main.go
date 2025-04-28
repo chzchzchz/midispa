@@ -21,6 +21,7 @@ func main() {
 	inFlag := flag.String("i", "", "midi port for recording")
 	ssFlag := flag.Bool("s", false, "single shot mode (record to file)")
 	mFlag := flag.String("m", "", "midi port for clock master")
+	qFlag := flag.Bool("q", false, "quantize to match measure start")
 	outdirFlag := flag.String("o", "", "output directory or file")
 	// todo midi output port for playback
 
@@ -66,5 +67,6 @@ func main() {
 	} else {
 		s = NewSequencer(aseq, *outdirFlag)
 	}
+	s.matchMeasure = *qFlag
 	must(s.processEvents())
 }
