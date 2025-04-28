@@ -28,7 +28,7 @@ func (s *Sequencer) UpdateClock() {
 	cps := ((float64(s.curBpmInt) / 64.0) / 60.0) * PPQN
 	dur := time.Duration(float64(time.Second) / cps)
 	atomic.StoreInt64(&s.clockDur, int64(dur))
-	log.Printf("output bpm = %v\n", float64(s.curBpmInt)/64.0)
+	log.Printf("midiclock output bpm = %v\n", float64(s.curBpmInt)/64.0)
 }
 
 func (s *Sequencer) ClockWriter(randpct float64) {
@@ -69,6 +69,13 @@ func (s *Sequencer) start(ev alsa.SeqEvent) {
 	s.outc <- ev
 }
 
+func (s *Sequencer) stop(ev alsa.SeqEvent) {
+	log.Println("midiclock stopping")
+	atomic.StoreInt64(&s.clockDur, int64(0))
+	s.outc <- ev
+	s.aseq.Write(alsa.MakeEvent(ev.Data))
+}
+
 func (s *Sequencer) Read() {
 	ev, err := s.aseq.Read()
 	if err != nil {
@@ -79,16 +86,18 @@ func (s *Sequencer) Read() {
 	case midi.Clock:
 		s.outc <- ev
 	case midi.Stop:
-		atomic.StoreInt64(&s.clockDur, int64(0))
-		s.outc <- ev
-		s.aseq.Write(alsa.MakeEvent(ev.Data))
+		s.stop(ev)
 	case midi.Continue, midi.Start:
 		s.start(ev)
 	case midi.SysEx:
 		v := sysex.Decode(ev.Data)
-		if _, ok := v.(*sysex.Play); ok {
+		switch v.(type) {
+		case *sysex.Play:
 			ev.Data = []byte{midi.Start}
 			s.start(ev)
+		case *sysex.Stop:
+			ev.Data = []byte{midi.Stop}
+			s.stop(ev)
 		}
 	default:
 		if midi.IsCC(cmd) {
