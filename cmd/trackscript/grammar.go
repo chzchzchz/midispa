@@ -29,10 +29,7 @@ type Phrase struct {
 func NewGrammar(in string) *Grammar {
 	return &Grammar{
 		Buffer: in,
-		script: Script{
-			bpm:      0,
-			patterns: make(map[string]*track.Pattern),
-		},
+		script: NewScript(),
 	}
 }
 
@@ -40,6 +37,7 @@ func (g *Grammar) startPhrase() {
 	if _, ok := g.script.patterns[g.id]; ok {
 		panic("already declared pattern/phrase " + g.id)
 	}
+	g.lastPatternId = g.id
 	g.curPhrase = &Phrase{name: g.id}
 }
 
@@ -52,8 +50,6 @@ func (g *Grammar) endPhrase() {
 	g.curPhrase = nil
 }
 
-func (g *Grammar) addDevice() { panic("stub") }
-
 func (g *Grammar) setBPM() {
 	if g.script.bpm != 0 {
 		panic("set bpm twice")
@@ -64,6 +60,7 @@ func (g *Grammar) addPosition() { fmt.Println("stub: add position") }
 
 func (g *Grammar) addPattern() {
 	g.script.AddPattern(g.id, g.str)
+	g.lastPatternId = g.id
 }
 
 func (g *Grammar) addToIdList(id string) {
@@ -111,4 +108,55 @@ func (g *Grammar) addPlay() {
 		g.curPhrase.lines = append(g.curPhrase.lines, &pl)
 	}
 	g.curPlayLine.patterns = nil
+}
+
+func (g *Grammar) addFilter() {
+	g.script.filters[g.id] = &Filter{path: g.str}
+}
+
+func (g *Grammar) addFilterArg() {
+	arg := g.str
+	f, ok := g.script.filters[g.id]
+	if !ok {
+		// Anonymous filter.
+		g.str = g.id + ".c"
+		g.id = fmt.Sprintf("%s_tmp_%d", g.id, len(g.script.filters))
+		g.addFilter()
+		f = g.script.filters[g.id]
+	}
+	if f.f != nil {
+		panic("adding args to filter " + g.id + " but already compiled")
+	}
+	if arg[0] == '-' {
+		panic("filter arguments will automatically prefix -D")
+	}
+	f.args = append(f.args, "-D"+arg)
+}
+
+func (g *Grammar) applyFilter() {
+	f, ok := g.script.filters[g.id]
+	if !ok {
+		panic("filter " + g.id + " not found when applying to " + g.lastPatternId)
+	}
+	pat, ok := g.script.patterns[g.lastPatternId]
+	if !ok {
+		panic("pattern " + g.lastPatternId + " not found when applying filter " + g.id)
+	}
+	// Rebuild pattern using BPF filtered messages.
+	newPat := track.EmptyPattern()
+	newPat.MidiTimeSig, newPat.Name = pat.MidiTimeSig, pat.Name
+	for _, oldMsg := range pat.Msgs {
+		rawMsgs := f.Apply(oldMsg.Raw)
+		for _, raw := range rawMsgs {
+			msg := track.TickMessage{Tick: oldMsg.Tick, Raw: raw}
+			newPat.AppendMessage(msg)
+		}
+	}
+	// Keep pattern length the same.
+	if newPat.LastTick > pat.LastTick {
+		panic("filtered pattern " + pat.Name + " tick greater than original pattern")
+	}
+	newPat.LastTick = pat.LastTick
+
+	g.script.patterns[g.lastPatternId] = newPat
 }

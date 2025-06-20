@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/track"
+
 	"gitlab.com/gomidi/midi/midimessage/meta"
 	"gitlab.com/gomidi/midi/smf"
 	"gitlab.com/gomidi/midi/smf/smfwriter"
@@ -19,6 +20,15 @@ type Script struct {
 	// NOTE: phrases are compiled into patterns
 	patterns map[string]*track.Pattern
 	song     []*track.Pattern
+	filters  map[string]*Filter
+}
+
+func NewScript() *Script {
+	return &Script{
+		bpm:      0,
+		patterns: make(map[string]*track.Pattern),
+		filters:  make(map[string]*Filter),
+	}
 }
 
 func (s *Script) Duration() time.Duration {

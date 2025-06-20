@@ -1,3 +1,5 @@
+//go:build bpf
+
 package bpf
 
 import (

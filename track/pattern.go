@@ -103,6 +103,15 @@ func (p *Pattern) Append(p2 *Pattern) {
 	p.size += p2.size
 }
 
+func (p *Pattern) AppendMessage(msg TickMessage) {
+	if msg.Tick < int(p.LastTick) {
+		panic("append message tick too early")
+	}
+	p.LastTick = uint32(msg.Tick)
+	p.Msgs = append(p.Msgs, msg)
+	p.size += len(msg.Raw)
+}
+
 func (p *Pattern) read(r smf.Reader) error {
 	hdr, dsum := r.Header(), uint32(0)
 	for {
