@@ -7,17 +7,10 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	"github.com/chzchzchz/midispa/jack"
 )
 
 type startModel struct {
-	ProjectName   string
-	RecordPort    string
-	PlaybackPorts []string
-
-	width  int
-	height int
+	ProjectConfig
 
 	projectNameInput textinput.Model
 	playbackList     list.Model
@@ -38,28 +31,29 @@ const (
 )
 
 var (
-	projectStyle  = lipgloss.NewStyle().Foreground(lipgloss.BrightBlue).Bold(true)
-	playbackStyle = lipgloss.NewStyle().Foreground(lipgloss.BrightGreen).Bold(true)
-	recordStyle   = lipgloss.NewStyle().Foreground(lipgloss.BrightRed).Bold(true)
-	createStyle   = lipgloss.NewStyle().Foreground(lipgloss.BrightMagenta).Bold(true)
+	createButtonStyle = lipgloss.NewStyle().Background(lipgloss.BrightBlue)
+	infoStyle         = lipgloss.NewStyle().Foreground(lipgloss.Green)
+	projectStyle      = lipgloss.NewStyle().Foreground(lipgloss.BrightBlue).Bold(true)
+	playbackStyle     = lipgloss.NewStyle().Foreground(lipgloss.BrightGreen).Bold(true)
+	recordStyle       = lipgloss.NewStyle().Foreground(lipgloss.BrightRed).Bold(true)
+	createStyle       = lipgloss.NewStyle().Foreground(lipgloss.BrightMagenta).Bold(true)
+	focusedBorder     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.BrightWhite)
 )
 
-func initStartModel() *startModel {
-	// Get JACK ports
-	ports, err := jack.Ports()
-	if err != nil {
-		ports = []string{"Error getting ports"}
-	}
+func (m *startModel) ready() bool {
+	return m.projectNameInput.Value() != "" &&
+		m.LeftPlayback != "" &&
+		m.RightPlayback != "" &&
+		m.RecordPort != ""
+}
 
+func initStartModel(ports []string) *startModel {
 	m := &startModel{
 		jackPorts: ports,
-		width:     80,
-		height:    24,
 	}
 
 	// Initialize project name input
 	m.projectNameInput = textinput.New()
-	m.projectNameInput.Placeholder = "Enter project name..."
 	m.projectNameInput.Focus()
 	m.projectNameInput.CharLimit = 32
 
@@ -101,35 +95,63 @@ func (m *startModel) Init() tea.Cmd {
 	return nil
 }
 
+func (m *startModel) config() string {
+	var s strings.Builder
+	s.WriteString(infoStyle.Render("Project: "+m.projectNameInput.Value()) + "\n")
+
+	l, r := "(none)", "(none)"
+	if m.LeftPlayback != "" {
+		l = m.LeftPlayback
+	}
+	if m.RightPlayback != "" {
+		r = m.RightPlayback
+	}
+	s.WriteString(infoStyle.Render("Playback: L:"+l+", R:"+r) + "\n")
+	s.WriteString(infoStyle.Render("Record: " + m.RecordPort))
+	return focusedBorder.Render(s.String())
+}
+
+func (m *startModel) next() {
+	m.focused++
+	if !m.ready() && m.focused == focusedCreate {
+		m.next()
+	}
+	if m.focused > focusedCreate {
+		m.focused = focusedProjectName
+	}
+}
+
+func (m *startModel) prev() {
+	m.focused--
+	if !m.ready() && m.focused == focusedCreate {
+		m.prev()
+		return
+	}
+	if m.focused < focusedProjectName {
+		m.focused = focusedCreate
+	}
+}
+
 func (m *startModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	enter := false
+	kpStr := ""
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc", "ctrl+c":
+		kpStr = msg.String()
+		switch kpStr {
+		case "ctrl+c":
 			return m, tea.Quit
 		case "tab":
-			m.focused++
-			if m.focused > focusedCreate {
-				m.focused = focusedProjectName
-			}
+			m.next()
 			return m, nil
 		case "shift+tab":
-			m.focused--
-			if m.focused < focusedProjectName {
-				m.focused = focusedCreate
-			}
+			m.prev()
 			return m, nil
 		case "enter":
-			enter = true
-			if m.focused == focusedCreate {
+			if m.focused == focusedCreate && m.ready() {
+				m.ProjectName = m.projectNameInput.Value()
 				return m, tea.Quit
 			}
 		}
-
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
 	}
 
 	var cmd tea.Cmd
@@ -137,124 +159,94 @@ func (m *startModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.focused {
 	case focusedProjectName:
 		m.projectNameInput, cmd = m.projectNameInput.Update(msg)
-		return m, cmd
 	case focusedPlayback:
-		m.playbackList, cmd = m.playbackList.Update(msg)
-		if enter && m.playbackList.GlobalIndex() >= 0 {
+		// Intercept l/r keys before list processes them
+		if m.playbackList.GlobalIndex() < 0 {
+			break
+		}
+		filtering := m.playbackList.FilterState() == list.Filtering
+		if !filtering {
 			port := m.jackPorts[m.playbackList.GlobalIndex()]
-			if !sliceContains(m.PlaybackPorts, port) && len(m.PlaybackPorts) < 2 {
-				m.PlaybackPorts = append(m.PlaybackPorts, port)
+			if kpStr == "l" {
+				if m.LeftPlayback == port {
+					m.LeftPlayback = ""
+				} else {
+					m.LeftPlayback = port
+				}
+				break
+			} else if kpStr == "r" {
+				if m.RightPlayback == port {
+					m.RightPlayback = ""
+				} else {
+					m.RightPlayback = port
+				}
+				break
 			}
 		}
-		return m, cmd
+		m.playbackList, cmd = m.playbackList.Update(msg)
+		if filtering {
+			return m, cmd
+		}
 	case focusedRecord:
 		m.recordList, cmd = m.recordList.Update(msg)
-		if enter && m.recordList.GlobalIndex() >= 0 {
-			m.RecordPort = m.jackPorts[m.recordList.GlobalIndex()]
+		if m.recordList.GlobalIndex() < 0 {
+			break
 		}
-		return m, cmd
+		if kpStr == "space" || kpStr == "enter" {
+			port := m.jackPorts[m.recordList.GlobalIndex()]
+			if m.RecordPort == port {
+				m.RecordPort = ""
+			} else {
+				m.RecordPort = port
+			}
+		}
 	}
 
-	return m, nil
-}
-
-func renderFocusStyle(v string) string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Render(v)
-}
-
-func renderNoFocusStyle(v string) string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.BrightBlack).
-		Render(v)
+	if kpStr == "enter" {
+		m.next()
+	}
+	return m, cmd
 }
 
 func (m *startModel) View() tea.View {
 	var view strings.Builder
 
-	view.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.BrightWhite).Render("Project Setup") + "\n")
+	view.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.BrightWhite).Render("Project Setup") + "\n\n")
 
-	projectInput := m.projectNameInput.View()
-	if m.focused == focusedProjectName {
-		projectInput = renderFocusStyle(projectInput)
-	} else {
-		projectInput = renderNoFocusStyle(projectInput)
-	}
-	view.WriteString(projectStyle.Render("Project Name:") + "\n" + projectInput + "\n")
+	switch m.focused {
+	case focusedProjectName:
+		projectInput := m.projectNameInput.View()
+		view.WriteString(projectStyle.Render("Project Name:") + "\n")
+		view.WriteString(focusedBorder.Render(projectInput) + "\n\n")
+		view.WriteString(m.config() + "\n\n")
 
-	playbackList := m.playbackList.View()
-	if m.focused == focusedPlayback {
-		playbackList = renderFocusStyle(playbackList)
-	} else {
-		playbackList = renderNoFocusStyle(playbackList)
-	}
-	view.WriteString(playbackStyle.Render("Playback Ports:") + "\n")
-	view.WriteString(playbackList + "\n")
+	case focusedPlayback:
+		playbackList := m.playbackList.View()
+		view.WriteString(playbackStyle.Render("Playback Ports:") + "\n")
+		view.WriteString(focusedBorder.Render(playbackList) + "\n\n")
+		view.WriteString(m.config() + "\n\n")
 
-	// Display selected playback ports
-	if len(m.PlaybackPorts) > 0 {
-		view.WriteString(playbackStyle.Render("Selected:"))
-		for i, port := range m.PlaybackPorts {
-			if i > 0 {
-				view.WriteString(", ")
-			}
-			view.WriteString(lipgloss.NewStyle().Foreground(lipgloss.BrightGreen).Render(port))
-		}
-		view.WriteString("\n")
+	case focusedRecord:
+		recordList := m.recordList.View()
+		view.WriteString(recordStyle.Render("Record Port:") + "\n")
+		view.WriteString(focusedBorder.Render(recordList) + "\n\n")
+		view.WriteString(m.config() + "\n\n")
+
+	case focusedCreate:
+		view.WriteString(m.config() + "\n\n")
+		view.WriteString(createButtonStyle.Render("  Create  ") + "\n\n")
 	}
 
-	// Record list
-	recordList := m.recordList.View()
-	if m.focused == focusedRecord {
-		recordList = renderFocusStyle(recordList)
-	} else {
-		recordList = renderNoFocusStyle(recordList)
-	}
-	view.WriteString(recordStyle.Render("Record Port: ") + "\n")
-	view.WriteString(recordList + "\n")
+	view.WriteString(lipgloss.NewStyle().Faint(true).Render("Tab: next  L/R: select left/right  Enter: confirm/next  Ctrl+C: quit"))
 
-	// Display selected record port
-	if m.RecordPort != "" {
-		view.WriteString(recordStyle.Render("Selected: "))
-		view.WriteString(lipgloss.NewStyle().Foreground(lipgloss.BrightRed).Render(m.RecordPort) + "\n\n")
-	}
-
-	// Create button
-	createButton := "  Create  "
-	if m.focused == focusedCreate {
-		createButton = lipgloss.NewStyle().Background(lipgloss.BrightBlue).Render(createButton)
-	} else {
-		createButton = lipgloss.NewStyle().Foreground(lipgloss.BrightMagenta).Render(createButton)
-	}
-	view.WriteString(createStyle.Render("Create: ") + createButton + "\n\n")
-
-	// Instructions
-	instructions := "Tab to navigate, Enter to select, Esc to cancel"
-	view.WriteString(lipgloss.NewStyle().Faint(true).Render(instructions))
-
-	v := tea.NewView(view.String())
-	v.AltScreen = true
-	return v
+	return tea.NewView(view.String())
 }
 
-func sliceContains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-func Start() *startModel {
-	model := initStartModel()
-
-	p := tea.NewProgram(model /*, tea.WithAltScreen(), tea.WithMouseCellMotion()*/)
+func Start(ports []string) *startModel {
+	model := initStartModel(ports)
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		panic(err)
 	}
-
 	return model
 }
