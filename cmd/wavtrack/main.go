@@ -1,6 +1,7 @@
 package main
 
 import (
+	"time"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -42,4 +43,8 @@ func main() {
 
 	s := &State{cfg: m.ProjectConfig}
 	TrackUI(s)
+
+	rec.Start("abc.wav")
+
+	time.Sleep(10 *time.Second)
 }

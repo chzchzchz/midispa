@@ -1,16 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"context"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
-	"github.com/chzchzchz/midispa/jack"
+	"github.com/xthexder/go-jack"
+
+	mjack "github.com/chzchzchz/midispa/jack"
+	mwav "github.com/chzchzchz/midispa/wav"
 )
 
 type Record struct {
-	Port        jack.Port
+	Port        *mjack.Port
 	running     atomic.Bool
 	buffers     sync.Pool
 	bufc        chan []jack.AudioSample
@@ -20,6 +25,8 @@ type Record struct {
 
 	recCtx    context.Context
 	recCancel context.CancelFunc
+	writer    mwav.WriteFunc
+	werr      error
 	donec     chan struct{}
 }
 
@@ -30,57 +37,80 @@ func NewRecord(portName string) (*Record, error) {
 		bufc:  make(chan []jack.AudioSample, BufferPoolSize),
 		donec: make(chan struct{}, 1),
 	}
-	pc := jack.PortConfig{
+	pc := mjack.PortConfig{
 		ClientName:    "wavtrack",
 		PortName:      portName,
 		AudioCallback: r.callback,
 	}
-	if r.Port, err := jack.NewReadPort(pc); err != nil {
+	var err error
+	if r.Port, err = mjack.NewReadPort(pc); err != nil {
 		return nil, err
 	}
 
 	bufSize := r.Port.Client.GetBufferSize()
-	r.sampleRate := r.Port.Client.GetSampleRate()
+	r.sampleRate = int(r.Port.Client.GetSampleRate())
 	for i := 0; i < BufferPoolSize; i++ {
 		r.buffers.Put(make([]jack.AudioSample, bufSize))
 	}
 
-	r.bufDuration = time.Duration((float32(bufSize) / float32(sampleRate)) * time.Second)
+	r.bufDuration = time.Duration((float32(bufSize) / float32(r.sampleRate)) * float32(time.Second))
 	return r, nil
 }
 
 func (r *Record) callback(in []jack.AudioSample) int {
-	if !atomic.Load(&r.running) {
+	if !r.running.Load() {
 		return 0
 	}
 	if buf := r.buffers.Get(); buf != nil {
-		copy(buf, in)
-		r.bufc <- buf
+		copy(buf.([]jack.AudioSample), in)
+		r.bufc <- buf.([]jack.AudioSample)
 	}
 	return 0
 }
 
-func (r *Record) Start(f string) {
+func (r *Record) Start(f string) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.recCancel != nil {
-		return
+		return nil
 	}
-	atomic.Store(&r.running, true)
-	r.recCtx, r.recCancel := context.WithCancel(context.Background())
+	if r.writer, err = mwav.OpenWriter(f, r.sampleRate); err != nil {
+		return err
+	}
+	r.werr = nil
+	r.running.Store(true)
+	r.recCtx, r.recCancel = context.WithCancel(context.Background())
 	go r.record()
+	return nil
 }
 
 func (r *Record) record() {
 	defer func() {
-		donec <- struct{}{}
+		r.writer(nil)
+		r.donec <- struct{}{}
 	}()
 	for {
 		select {
 		case <-r.recCtx.Done():
 			return
 		case buf := <-r.bufc:
+			bb := (*[]float32)(unsafe.Pointer(&buf))
+			r.werr = r.writer(*bb)
+			min, max := float32(-100000), float32(100000.0)
+			for _, v := range *bb {
+				if v > max {
+					max = v
+				}
+				if v < min {
+					min = v
+				}
+			}
+			fmt.Println(min, max)
 			r.buffers.Put(buf)
+			if r.werr != nil {
+				r.running.Store(false)
+				return
+			}
 		}
 	}
 }
@@ -90,9 +120,9 @@ func (r *Record) Stop() error {
 	defer r.mu.Unlock()
 
 	// Stop callback.
-	atomic.Store(&r.running, false)
+	r.running.Store(false)
 	if r.recCancel == nil {
-		return
+		return nil
 	}
 	// Wait for record()
 	r.recCancel()
@@ -100,15 +130,15 @@ func (r *Record) Stop() error {
 	<-r.donec
 	// Drain.
 	after := time.After(r.bufDuration * 2)
-	wait := time.Now().Add(r.bufDuration * 2)
-	for time.Now() < wait {
+	begin := time.Now()
+	for time.Since(begin) < (2 * r.bufDuration) {
 		select {
 		case buf := <-r.bufc:
 			r.buffers.Put(buf)
 		case <-after:
 		}
 	}
-	return nil
+	return r.werr
 }
 
 func (r *Record) Close() {
