@@ -29,3 +29,18 @@ func (p *ProjectConfig) Save() error {
 	}
 	return os.WriteFile(filepath.Join(p.Dir(), "project.json"), cfgBytes, 0644)
 }
+
+func LoadProject(baseDir, projectName string) (*ProjectConfig, error) {
+	p := &ProjectConfig{
+		BaseDir:     baseDir,
+		ProjectName: projectName,
+	}
+	cfgBytes, err := os.ReadFile(filepath.Join(p.Dir(), "project.json"))
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(cfgBytes, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
