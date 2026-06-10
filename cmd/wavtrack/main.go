@@ -28,8 +28,18 @@ func main() {
 	wavtrackDir := getBaseDir()
 
 	m := Start(ports)
+	m.ProjectConfig.BaseDir = wavtrackDir
 
-	if err := m.ProjectConfig.Save(wavtrackDir); err != nil {
+	rec, err := NewRecord(m.ProjectConfig.RecordPort)
+	if err != nil {
+		panic("couldn't record:" + err.Error())
+	}
+	m.ProjectConfig.SampleRate = int(rec.Port.Client.GetSampleRate())
+
+	if err := m.ProjectConfig.Save(); err != nil {
 		panic("error saving project: " + err.Error())
 	}
+
+	s := &State{cfg: m.ProjectConfig}
+	TrackUI(s)
 }
