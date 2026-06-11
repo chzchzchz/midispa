@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,7 +38,8 @@ func NewRecord(portName string) (*Record, error) {
 	}
 	pc := mjack.PortConfig{
 		ClientName:    "wavtrack",
-		PortName:      portName,
+		PortName:      "rec",
+		ExactName:     []string{portName},
 		AudioCallback: r.callback,
 	}
 	var err error
@@ -96,16 +96,6 @@ func (r *Record) record() {
 		case buf := <-r.bufc:
 			bb := (*[]float32)(unsafe.Pointer(&buf))
 			r.werr = r.writer(*bb)
-			min, max := float32(-100000), float32(100000.0)
-			for _, v := range *bb {
-				if v > max {
-					max = v
-				}
-				if v < min {
-					min = v
-				}
-			}
-			fmt.Println(min, max)
 			r.buffers.Put(buf)
 			if r.werr != nil {
 				r.running.Store(false)

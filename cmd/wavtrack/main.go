@@ -64,6 +64,7 @@ func main() {
 	if err != nil {
 		panic("couldn't record:" + err.Error())
 	}
+	defer rec.Close()
 	rec.Start("abc.wav")
 	time.Sleep(10 * time.Second)
 }

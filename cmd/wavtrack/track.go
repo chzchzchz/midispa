@@ -3,6 +3,7 @@ package main
 type Track struct {
 	name     string
 	segments []TrackSegment
+	mute     bool
 }
 
 type TrackSegment struct {
