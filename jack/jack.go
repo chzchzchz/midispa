@@ -32,17 +32,24 @@ type PortConfig struct {
 	PortName   string
 
 	MatchName []string
+	ExactName []string
 
 	AudioCallback JackAudioCallback
 	MidiCallback  JackMidiCallback
 }
 
 func (pc *PortConfig) isNameMatch(s string) bool {
-	ret := false
 	for _, mn := range pc.MatchName {
-		ret = ret || strings.Contains(s, mn)
+		if strings.Contains(s, mn) {
+			return true
+		}
 	}
-	return ret
+	for _, mn := range pc.ExactName {
+		if s == mn {
+			return true
+		}
+	}
+	return false
 }
 
 type JackAudioCallback func([]jack.AudioSample) int
@@ -112,7 +119,8 @@ func NewJackPort(pc PortConfig, fl uint64) (*Port, error) {
 
 	j.portInternal = j.Client.PortRegister(pc.PortName, Type, fl, 8192)
 
-	for _, mn := range j.MatchName {
+	names := append(slices.Clone(j.MatchName), j.ExactName...)
+	for _, mn := range names {
 		srcs := j.ports(mn)
 		for _, src := range srcs {
 			if err := j.connectExternal(src); err != nil {
