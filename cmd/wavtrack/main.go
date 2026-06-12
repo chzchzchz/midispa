@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"time"
+	//	"time"
 
 	"github.com/chzchzchz/midispa/jack"
 )
@@ -59,12 +59,15 @@ func main() {
 
 	s := &State{cfg: *cfg}
 	TrackUI(s)
+	/*
+	   rec, err := NewRecord(cfg.RecordPort)
 
-	rec, err := NewRecord(cfg.RecordPort)
-	if err != nil {
-		panic("couldn't record:" + err.Error())
-	}
-	defer rec.Close()
-	rec.Start("abc.wav")
-	time.Sleep(10 * time.Second)
+	   	if err != nil {
+	   		panic("couldn't record:" + err.Error())
+	   	}
+
+	   defer rec.Close()
+	   rec.Start("abc.wav")
+	   time.Sleep(10 * time.Second)
+	*/
 }
