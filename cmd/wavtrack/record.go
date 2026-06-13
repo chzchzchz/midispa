@@ -137,3 +137,5 @@ func (r *Record) Close() {
 	close(r.donec)
 	r.Port.Close()
 }
+
+func (r *Record) Running() bool { return r.running.Load() }

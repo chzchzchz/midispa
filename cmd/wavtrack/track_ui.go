@@ -161,7 +161,7 @@ func (m *trackUIModel) confirmInput() {
 	}
 	switch m.inputMode {
 	case inputNewTrack:
-		m.addTrackIfNew(name)
+		m.state.addTrack(name)
 	case inputEditName:
 		m.renameTrackIfValid(name)
 	}
@@ -175,27 +175,12 @@ func (m *trackUIModel) cancelInput() {
 	m.nameInput.Reset()
 }
 
-func (m *trackUIModel) addTrackIfNew(name string) {
-	for _, t := range m.state.Tracks {
-		if t.name == name {
-			return
-		}
-	}
-	m.state.Tracks = append(m.state.Tracks, Track{name: name})
-	m.refreshList()
-}
-
 func (m *trackUIModel) renameTrackIfValid(name string) {
 	idx := m.list.Index()
 	if idx < 0 || idx >= len(m.state.Tracks) {
 		return
 	}
-	for i, t := range m.state.Tracks {
-		if i != idx && t.name == name {
-			return
-		}
-	}
-	m.state.Tracks[idx].name = name
+	m.state.renameTrack(m.state.Tracks[idx].name, name)
 }
 
 func (m *trackUIModel) togglePlayback() {

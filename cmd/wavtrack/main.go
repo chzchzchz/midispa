@@ -57,7 +57,7 @@ func main() {
 		cfg = &m.ProjectConfig
 	}
 
-	s := &State{cfg: *cfg}
+	s := &State{cfg: *cfg, basePath: wavtrackDir}
 	TrackUI(s)
 	/*
 	   rec, err := NewRecord(cfg.RecordPort)
