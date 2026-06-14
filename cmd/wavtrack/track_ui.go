@@ -204,67 +204,56 @@ func (m *trackUIModel) positionHome() {
 
 func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	kpStr := msg.String()
+
+	if m.inputMode != inputNone {
+		switch kpStr {
+		case "esc":
+			m.cancelInput()
+		}
+		return m, nil
+	}
+
 	switch kpStr {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc":
-		if m.inputMode != inputNone {
-			m.cancelInput()
-			return m, nil
-		}
 		m.focused = focusTracks
 	case "n":
-		if m.inputMode == inputNone {
-			m.startInput(inputNewTrack)
-			return m, nil
+		m.startInput(inputNewTrack)
+		return m, nil
+	case "p":
+		m.togglePlayback()
+		if m.ticking {
+			return m, m.tick()
 		}
-	case "e":
-		if m.inputMode == inputNone && m.focused == focusTracks {
+		return m, nil
+	case "tab":
+		if m.focused == focusTracks {
+			m.focused = focusPosition
+		} else {
+			m.focused = focusTracks
+		}
+		return m, nil
+	}
+
+	if m.focused == focusTracks {
+		switch kpStr {
+		case "e":
 			m.startInput(inputEditName)
 			m.editIndex = m.list.Index()
-			return m, nil
-		}
-	case "r":
-		if m.inputMode == inputNone && m.focused == focusTracks {
+		case "r":
 			m.toggleRecord()
-			return m, nil
-		}
-	case "m":
-		if m.inputMode == inputNone && m.focused == focusTracks {
+		case "m":
 			m.toggleMute()
-			return m, nil
 		}
-	case "p":
-		if m.inputMode == inputNone {
-			m.togglePlayback()
-			if m.ticking {
-				return m, m.tick()
-			}
-			return m, nil
-		}
-	case "tab":
-		if m.inputMode == inputNone {
-			if m.focused == focusTracks {
-				m.focused = focusPosition
-			} else {
-				m.focused = focusTracks
-			}
-			return m, nil
-		}
-	case "left":
-		if m.inputMode == inputNone && m.focused == focusPosition {
+	} else if m.focused == focusPosition {
+		switch kpStr {
+		case "left":
 			m.positionLeft()
-			return m, nil
-		}
-	case "right":
-		if m.inputMode == inputNone && m.focused == focusPosition {
+		case "right":
 			m.positionRight()
-			return m, nil
-		}
-	case "home":
-		if m.inputMode == inputNone && m.focused == focusPosition {
+		case "home":
 			m.positionHome()
-			return m, nil
 		}
 	}
 	return m, nil
