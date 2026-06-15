@@ -1,39 +1,44 @@
 package main
 
+import (
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+)
+
 type State struct {
-	cfg         ProjectConfig
-	basePath    string
-	running     bool
-	position    SampleTick
-	Tracks      []Track
-	Markers     []Marker
-	RecordTrack *Track
-	rec         *Record
+	cfg            ProjectConfig
+	running        bool
+	tracks         Tracks
+	Markers        []Marker
+	RecordTrack    *Track
+	rec            *Record
+	clock          Clock
+	currentRecPath string
 }
 
-func (s *State) addTrack(name string) bool {
-	for _, t := range s.Tracks {
-		if t.name == name {
-			return false
-		}
+func NewState(cfg *ProjectConfig) *State {
+	return &State{
+		cfg:    *cfg,
+		tracks: Tracks{baseDir: cfg.Dir()},
+		clock:  Clock{rate: float64(cfg.SampleRate)},
 	}
-	s.Tracks = append(s.Tracks, Track{name: name})
-	return true
+
 }
 
-func (s *State) renameTrack(oldName, newName string) bool {
-	idx := -1
-	for i, t := range s.Tracks {
-		if t.name == newName {
-			return false
-		}
-		if t.name == oldName {
-			idx = i
-		}
+func (s *State) Recording() bool { return s.rec.Running() }
+
+func (s *State) getRecordingPath() string {
+	track := s.RecordTrack
+	if track == nil {
+		return ""
 	}
-	if idx == -1 {
-		return false
+	trackDir := s.tracks.dir(track)
+	if err := os.MkdirAll(trackDir, 0755); err != nil {
+		log.Printf("error creating track directory: %v", err)
+		return ""
 	}
-	s.Tracks[idx].name = newName
-	return true
+	segmentNum := track.SegmentCount() + 1
+	return filepath.Join(trackDir, fmt.Sprintf("%06d.wav", segmentNum))
 }

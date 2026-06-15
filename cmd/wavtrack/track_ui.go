@@ -68,10 +68,10 @@ func (i trackItem) FilterValue() string {
 }
 
 func buildListItems(s *State) []list.Item {
-	items := make([]list.Item, len(s.Tracks))
-	for i := range s.Tracks {
-		isRecord := s.RecordTrack != nil && &s.Tracks[i] == s.RecordTrack
-		items[i] = trackItem{track: &s.Tracks[i], isRecord: isRecord}
+	items := make([]list.Item, len(s.tracks.tracks))
+	for i := range s.tracks.tracks {
+		isRecord := s.RecordTrack != nil && &s.tracks.tracks[i] == s.RecordTrack
+		items[i] = trackItem{track: &s.tracks.tracks[i], isRecord: isRecord}
 	}
 	return items
 }
@@ -119,23 +119,57 @@ func (m *trackUIModel) refreshList() {
 
 func (m *trackUIModel) toggleMute() {
 	idx := m.list.Index()
-	if idx >= 0 && idx < len(m.state.Tracks) {
-		m.state.Tracks[idx].mute = !m.state.Tracks[idx].mute
+	if idx >= 0 && idx < len(m.state.tracks.tracks) {
+		m.state.tracks.tracks[idx].mute = !m.state.tracks.tracks[idx].mute
 		m.refreshList()
 	}
 }
 
 func (m *trackUIModel) toggleRecord() {
 	idx := m.list.Index()
-	if idx < 0 || idx >= len(m.state.Tracks) {
+	if idx < 0 || idx >= len(m.state.tracks.tracks) {
 		return
 	}
-	if m.state.RecordTrack == &m.state.Tracks[idx] {
+	m.stopRecording()
+
+	if m.state.RecordTrack == &m.state.tracks.tracks[idx] {
 		m.state.RecordTrack = nil
 	} else {
-		m.state.RecordTrack = &m.state.Tracks[idx]
+		// Turning on recording for a new track
+		m.state.RecordTrack = &m.state.tracks.tracks[idx]
+		if m.ticking {
+			m.startRecording()
+		}
 	}
 	m.refreshList()
+}
+
+func (m *trackUIModel) startRecording() {
+	if m.state.RecordTrack == nil || m.state.Recording() {
+		return
+	}
+	path := m.state.getRecordingPath()
+	if path == "" {
+		return
+	}
+	m.state.currentRecPath = path
+	if err := m.state.rec.Start(path); err != nil {
+		fmt.Printf("error starting recording: %v\n", err)
+		return
+	}
+}
+
+func (m *trackUIModel) stopRecording() {
+	if !m.state.Recording() {
+		return
+	}
+	if err := m.state.rec.Stop(); err != nil {
+		fmt.Printf("error stopping recording: %v\n", err)
+	}
+	if m.state.currentRecPath != "" && m.state.RecordTrack != nil {
+		m.state.RecordTrack.AddSegment(&Segment{Path: m.state.currentRecPath})
+		m.state.currentRecPath = ""
+	}
 }
 
 func (m *trackUIModel) startInput(mode inputMode) {
@@ -146,8 +180,8 @@ func (m *trackUIModel) startInput(mode inputMode) {
 	case inputEditName:
 		m.nameInput = newTextInput("Edit track name")
 		idx := m.list.Index()
-		if idx >= 0 && idx < len(m.state.Tracks) {
-			m.nameInput.SetValue(m.state.Tracks[idx].name)
+		if idx >= 0 && idx < len(m.state.tracks.tracks) {
+			m.nameInput.SetValue(m.state.tracks.tracks[idx].name)
 		}
 	}
 	m.nameInput.Focus()
@@ -161,7 +195,7 @@ func (m *trackUIModel) confirmInput() {
 	}
 	switch m.inputMode {
 	case inputNewTrack:
-		m.state.addTrack(name)
+		m.state.tracks.add(name)
 	case inputEditName:
 		m.renameTrackIfValid(name)
 	}
@@ -177,47 +211,64 @@ func (m *trackUIModel) cancelInput() {
 
 func (m *trackUIModel) renameTrackIfValid(name string) {
 	idx := m.list.Index()
-	if idx < 0 || idx >= len(m.state.Tracks) {
+	if idx < 0 || idx >= len(m.state.tracks.tracks) {
 		return
 	}
-	m.state.renameTrack(m.state.Tracks[idx].name, name)
+	if !m.state.tracks.rename(m.state.tracks.tracks[idx].name, name) {
+		return
+	}
 }
 
 func (m *trackUIModel) togglePlayback() {
+	oldTicking := m.ticking
 	m.ticking = !m.ticking
-}
 
-func (m *trackUIModel) positionLeft() {
-	m.state.position -= 5
-	if m.state.position < 0 {
-		m.state.position = 0
+	if m.ticking {
+		m.state.clock.Start()
+	} else {
+		m.state.clock.Stop()
+	}
+
+	// If starting playback and there's a record track, start recording
+	if m.ticking && !oldTicking && m.state.RecordTrack != nil {
+		m.startRecording()
+	}
+	// If stopping playback, stop recording
+	if !m.ticking && oldTicking {
+		m.stopRecording()
 	}
 }
 
+func (m *trackUIModel) positionLeft() {
+	if m.state.Recording() {
+		return
+	}
+	m.state.clock.Seek(-5)
+}
+
 func (m *trackUIModel) positionRight() {
-	m.state.position += 5
+	if m.state.Recording() {
+		return
+	}
+	m.state.clock.Seek(5)
 }
 
 func (m *trackUIModel) positionHome() {
-	m.state.position = 0
+	if m.state.Recording() {
+		return
+	}
+	m.state.clock.Reset()
 }
 
 func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	kpStr := msg.String()
-
-	if m.inputMode != inputNone {
-		switch kpStr {
-		case "esc":
-			m.cancelInput()
-		}
-		return m, nil
-	}
 
 	switch kpStr {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc":
 		m.focused = focusTracks
+		return m, nil
 	case "n":
 		m.startInput(inputNewTrack)
 		return m, nil
@@ -283,7 +334,7 @@ func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listCmd
 	case tickMsg:
 		if m.ticking {
-			m.state.position += 1
+			m.state.clock.Seek(1)
 			return m, m.tick()
 		}
 	}
@@ -297,10 +348,11 @@ func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func formatPosition(pos SampleTick) string {
-	totalSeconds := int(pos)
-	minutes := totalSeconds / 60
-	seconds := totalSeconds % 60
+func (m *trackUIModel) formatPosition() string {
+	dur := m.state.clock.Position()
+	s := int(dur.Seconds())
+	minutes := s / 60
+	seconds := s % 60
 	return fmt.Sprintf("%02d:%02d", minutes, seconds)
 }
 
@@ -344,7 +396,7 @@ func (m *trackUIModel) View() tea.View {
 	if m.ticking {
 		playIcon = "|>"
 	}
-	posText := fmt.Sprintf("Position (%s): %s", playIcon, formatPosition(m.state.position))
+	posText := fmt.Sprintf("Position (%s): %s", playIcon, m.formatPosition())
 	sb.WriteString(posBorder.Render(posText))
 
 	return tea.NewView(sb.String())
@@ -362,6 +414,6 @@ func TrackUI(s *State) {
 	m := initTrackUIModel(s)
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error running UI: %v\n", err)
+		fmt.Printf("error running UI: %v\n", err)
 	}
 }

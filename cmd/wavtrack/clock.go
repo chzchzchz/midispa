@@ -1,0 +1,37 @@
+package main
+
+import (
+	"time"
+)
+
+type Clock struct {
+	position SampleTick
+	start    time.Time
+	rate     float64
+}
+
+func (c *Clock) Start() {
+	c.start = time.Now()
+}
+
+func (c *Clock) Stop() {}
+
+func (c *Clock) Update() {
+	c.position += SampleTick(c.rate * time.Now().Sub(c.start).Seconds())
+}
+
+func (c *Clock) Seek(samples int) {
+	c.position -= SampleTick(samples)
+	if c.position < 0 {
+		c.position = 0
+	}
+}
+
+func (c *Clock) Reset() { c.position = 0 }
+
+func (c *Clock) Position() time.Duration {
+	seconds := float64(c.position) / c.rate
+	return time.Duration(float64(time.Second) * seconds)
+}
+
+func (c *Clock) Sample() SampleTick { return c.position }
