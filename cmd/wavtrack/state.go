@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type State struct {
@@ -50,6 +51,43 @@ func (s *State) Save() error {
 	return s.tracks.Save(s.tracksJSONPath())
 }
 
+func (s *State) loadExtraSegments() {
+	// Scan each track directory and add missing segments to segmentStore
+	for i := range s.tracks.Tracks {
+		track := &s.tracks.Tracks[i]
+		trackDir := s.tracks.dir(track)
+
+		existingPaths := make(map[string]struct{})
+		for _, seg := range track.segmentStore {
+			existingPaths[seg.Path] = struct{}{}
+		}
+		// Scan the track directory for .wav files
+		entries, err := os.ReadDir(trackDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			path := filepath.Join(trackDir, entry.Name())
+			if _, ok := existingPaths[path]; ok {
+				continue
+			}
+			if !strings.HasSuffix(path, ".wav") {
+				continue
+			}
+			seg, err := NewSegment(path)
+			if err != nil {
+				log.Printf("error loading segment %s: %v", path, err)
+				continue
+			}
+			track.segmentStore = append(track.segmentStore, seg)
+		}
+	}
+}
+
 func (s *State) Load() error {
-	return s.tracks.Load(s.tracksJSONPath())
+	if err := s.tracks.Load(s.tracksJSONPath()); err != nil {
+		return err
+	}
+	s.loadExtraSegments()
+	return nil
 }

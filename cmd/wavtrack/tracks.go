@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
@@ -52,11 +53,54 @@ func (s *Tracks) rename(oldName, newName string) bool {
 }
 
 func (t *Tracks) Save(p string) error {
-	// TODO
-	return nil
+	cfgBytes, err := json.MarshalIndent(t, "", " ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, cfgBytes, 0644)
+}
+
+func (t *Tracks) loadUniqueSegments() {
+	// Ensure unique Segment pointers per unique Segment path
+	// For each track, ensure there is one unique Segment pointer per unique Segment path
+	// in its segmentStore, referenced by track segments
+	for i := range t.Tracks {
+		track := &t.Tracks[i]
+		// Build a map of path -> *Segment for this track
+		segmentMap := make(map[string]*Segment)
+
+		// First pass: collect all unique segments from TrackSegments
+		for j := range track.Segments {
+			seg := &track.Segments[j]
+			if seg.Segment == nil {
+				continue
+			}
+			// Check if we already have a segment with this path in this track's map
+			if existingSeg, exists := segmentMap[seg.Segment.Path]; exists {
+				// Use the existing segment pointer
+				seg.Segment = existingSeg
+			} else {
+				// Add to map
+				segmentMap[seg.Segment.Path] = seg.Segment
+			}
+		}
+
+		// Rebuild segmentStore with unique segments
+		track.segmentStore = nil
+		for _, seg := range segmentMap {
+			track.segmentStore = append(track.segmentStore, seg)
+		}
+	}
 }
 
 func (t *Tracks) Load(p string) error {
-	// TODO
+	cfgBytes, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(cfgBytes, t); err != nil {
+		return err
+	}
+	t.loadUniqueSegments()
 	return nil
 }
