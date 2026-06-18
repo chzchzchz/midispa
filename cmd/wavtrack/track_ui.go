@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ const (
 	inputNewTrack
 	inputEditName
 	inputSaveConfirm
+	inputTime
 )
 
 type focusArea int
@@ -34,6 +36,7 @@ type trackUIModel struct {
 	state          *State
 	list           list.Model
 	nameInput      textinput.Model
+	timeInput      textinput.Model
 	inputMode      inputMode
 	editIndex      int
 	ticking        bool
@@ -179,14 +182,19 @@ func (m *trackUIModel) startInput(mode inputMode) {
 	switch mode {
 	case inputNewTrack:
 		m.nameInput = newTextInput("Enter track name")
+		m.nameInput.Focus()
 	case inputEditName:
 		m.nameInput = newTextInput("Edit track name")
 		idx := m.list.Index()
 		if idx >= 0 && idx < len(m.state.tracks.Tracks) {
 			m.nameInput.SetValue(m.state.tracks.Tracks[idx].Name)
 		}
+		m.nameInput.Focus()
+	case inputTime:
+		m.timeInput = newTextInput("MM:SS.mmmm")
+		m.timeInput.SetValue(m.formatPosition())
+		m.timeInput.Focus()
 	}
-	m.nameInput.Focus()
 }
 
 func (m *trackUIModel) confirmInput() {
@@ -206,9 +214,73 @@ func (m *trackUIModel) confirmInput() {
 	m.refreshList()
 }
 
+func (m *trackUIModel) confirmTimeInput() bool {
+	input := m.timeInput.Value()
+	minutes, seconds, milliseconds, ok := parseTimeInput(input)
+	if !ok {
+		return false
+	}
+	duration := time.Duration(minutes)*time.Minute + time.Duration(seconds)*time.Second + time.Duration(milliseconds)*time.Millisecond
+	m.state.clock.SetPosition(duration)
+	return true
+}
+
+func parseTimeInput(input string) (minutes, seconds, milliseconds int, ok bool) {
+	if len(input) == 0 {
+		return 0, 0, 0, false
+	}
+
+	var minPart, secPart, msPart string
+	parts := strings.Split(input, ":")
+	if len(parts) != 2 {
+		return 0, 0, 0, false
+	}
+	minPart = parts[0]
+
+	secMsParts := strings.Split(parts[1], ".")
+	if len(secMsParts) != 2 {
+		return 0, 0, 0, false
+	}
+	secPart = secMsParts[0]
+	msPart = secMsParts[1]
+
+	if len(msPart) > 4 {
+		return 0, 0, 0, false
+	}
+
+	var err error
+	minutes, err = strconv.Atoi(minPart)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+
+	seconds, err = strconv.Atoi(secPart)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+
+	if minutes < 0 || seconds < 0 || seconds >= 60 {
+		return 0, 0, 0, false
+	}
+
+	if len(msPart) > 0 {
+		msVal, err := strconv.Atoi(msPart)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		for i := len(msPart); i < 4; i++ {
+			msVal *= 10
+		}
+		milliseconds = msVal
+	}
+
+	return minutes, seconds, milliseconds, true
+}
+
 func (m *trackUIModel) cancelInput() {
 	m.inputMode = inputNone
 	m.nameInput.Reset()
+	m.timeInput.Reset()
 }
 
 func (m *trackUIModel) confirmSave() {
@@ -285,6 +357,11 @@ func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.cancelSave()
 			return m, nil
 		}
+		if m.inputMode == inputTime {
+			m.inputMode = inputNone
+			m.timeInput.Reset()
+			return m, nil
+		}
 		m.focused = focusTracks
 		return m, nil
 	case "n":
@@ -323,6 +400,8 @@ func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.positionRight()
 		case "home":
 			m.positionHome()
+		case "t":
+			m.startInput(inputTime)
 		}
 	}
 	return m, nil
@@ -330,12 +409,22 @@ func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *trackUIModel) handleInputMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	m.nameInput, cmd = m.nameInput.Update(msg)
-	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
-		if m.inputMode == inputSaveConfirm {
-			m.confirmSave()
-		} else {
-			m.confirmInput()
+	if m.inputMode == inputTime {
+		m.timeInput, cmd = m.timeInput.Update(msg)
+		if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+			if m.confirmTimeInput() {
+				m.inputMode = inputNone
+				m.timeInput.Reset()
+			}
+		}
+	} else {
+		m.nameInput, cmd = m.nameInput.Update(msg)
+		if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+			if m.inputMode == inputSaveConfirm {
+				m.confirmSave()
+			} else {
+				m.confirmInput()
+			}
 		}
 	}
 	return m, cmd
@@ -382,10 +471,11 @@ func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *trackUIModel) formatPosition() string {
 	dur := m.state.clock.Position()
-	s := int(dur.Seconds())
-	minutes := s / 60
-	seconds := s % 60
-	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+	totalMs := int(dur.Milliseconds())
+	minutes := (totalMs / 60000) % 60
+	seconds := (totalMs / 1000) % 60
+	milliseconds := totalMs % 1000
+	return fmt.Sprintf("%02d:%02d.%04d", minutes, seconds, milliseconds*10)
 }
 
 func (m *trackUIModel) View() tea.View {
@@ -418,6 +508,8 @@ func (m *trackUIModel) View() tea.View {
 	if m.inputMode != inputNone {
 		if m.inputMode == inputSaveConfirm {
 			sb.WriteString(posBorder.Render("Save? (y/n)"))
+		} else if m.inputMode == inputTime {
+			sb.WriteString(posBorder.Render(m.timeInput.View()))
 		} else {
 			sb.WriteString(posBorder.Render(m.nameInput.View()))
 		}

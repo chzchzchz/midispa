@@ -27,6 +27,13 @@ func (c *Clock) Seek(samples int) {
 	}
 }
 
+func (c *Clock) SetPosition(d time.Duration) {
+	c.position = SampleTick(d.Seconds() * c.rate)
+	if c.position < 0 {
+		c.position = 0
+	}
+}
+
 func (c *Clock) Reset() { c.position = 0 }
 
 func (c *Clock) Position() time.Duration {
