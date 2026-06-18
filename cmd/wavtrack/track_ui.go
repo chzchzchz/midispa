@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"strconv"
+	"image/color"
+	"log"
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -26,7 +26,10 @@ type focusArea int
 
 const (
 	focusTracks focusArea = iota
+	focusAudio
 	focusPosition
+	focusSegments
+	focusWav
 )
 
 var focusBorderColor = lipgloss.Color("#FFFFFF")
@@ -34,7 +37,7 @@ var unfocusBorderColor = lipgloss.Color("#000040")
 
 type trackUIModel struct {
 	state          *State
-	list           list.Model
+	trackList      *trackListModel
 	nameInput      textinput.Model
 	timeInput      textinput.Model
 	inputMode      inputMode
@@ -42,59 +45,16 @@ type trackUIModel struct {
 	ticking        bool
 	focused        focusArea
 	currentRecPath string
+	width          int
+	height         int
+	trackAudio     *trackAudioModel
+	segmentList    *SegmentListModel
+	wavUI          *wavUIModel
 }
 
-type trackItem struct {
-	track    *Track
-	isRecord bool
-}
+const tickUpdateRate = 250 * time.Millisecond
 
-func (i trackItem) Title() string {
-	m, r, s := " ", " ", false
-	if i.track.Mute {
-		m, s = "M", true
-	}
-	if i.isRecord {
-		r, s = "R", true
-	}
-	suffix := "     "
-	if s {
-		suffix = fmt.Sprintf(" [%s%s]", m, r)
-	}
-	return i.track.Name + suffix
-}
-
-func (i trackItem) Description() string {
-	return ""
-}
-
-func (i trackItem) FilterValue() string {
-	return i.track.Name
-}
-
-func buildListItems(s *State) []list.Item {
-	items := make([]list.Item, len(s.tracks.Tracks))
-	for i := range s.tracks.Tracks {
-		isRecord := s.RecordTrack != nil && &s.tracks.Tracks[i] == s.RecordTrack
-		items[i] = trackItem{track: &s.tracks.Tracks[i], isRecord: isRecord}
-	}
-	return items
-}
-
-func newList(items []list.Item) list.Model {
-	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = false
-	delegate.SetSpacing(0)
-
-	l := list.New(items, delegate, 0, 0)
-	l.Title = "Tracks"
-	l.SetSize(64, 16)
-	l.SetShowStatusBar(false)
-	l.SetShowHelp(false)
-	l.SetShowPagination(false)
-	l.SetShowFilter(false)
-	return l
-}
+type tickMsg struct{}
 
 func newTextInput(placeholder string) textinput.Model {
 	ti := textinput.New()
@@ -104,49 +64,35 @@ func newTextInput(placeholder string) textinput.Model {
 }
 
 func initTrackUIModel(s *State) *trackUIModel {
-	items := buildListItems(s)
-	l := newList(items)
 	return &trackUIModel{
-		state:     s,
-		list:      l,
-		nameInput: newTextInput("Enter track name"),
-		focused:   focusTracks,
+		state:      s,
+		trackList:  newTrackListModel(s),
+		nameInput:  newTextInput("Enter track name"),
+		focused:    focusTracks,
+		trackAudio: NewTrackAudioModel(s),
 	}
+}
+
+func (m *trackUIModel) borderColorFor(focus focusArea) color.Color {
+	if m.focused == focus && m.inputMode == inputNone {
+		return focusBorderColor
+	}
+	if m.inputMode != inputNone {
+		return focusBorderColor
+	}
+	return unfocusBorderColor
 }
 
 func (m *trackUIModel) Init() tea.Cmd {
 	return nil
 }
 
-func (m *trackUIModel) refreshList() {
-	m.list.SetItems(buildListItems(m.state))
-}
-
-func (m *trackUIModel) toggleMute() {
-	idx := m.list.Index()
-	if idx >= 0 && idx < len(m.state.tracks.Tracks) {
-		m.state.tracks.Tracks[idx].Mute = !m.state.tracks.Tracks[idx].Mute
-		m.refreshList()
-	}
-}
-
 func (m *trackUIModel) toggleRecord() {
-	idx := m.list.Index()
-	if idx < 0 || idx >= len(m.state.tracks.Tracks) {
-		return
-	}
 	m.stopRecording()
-
-	if m.state.RecordTrack == &m.state.tracks.Tracks[idx] {
-		m.state.RecordTrack = nil
-	} else {
-		// Turning on recording for a new track
-		m.state.RecordTrack = &m.state.tracks.Tracks[idx]
-		if m.ticking {
-			m.startRecording()
-		}
+	m.trackList.toggleRecord()
+	if m.state.RecordTrack != nil && m.ticking {
+		m.startRecording()
 	}
-	m.refreshList()
 }
 
 func (m *trackUIModel) startRecording() {
@@ -157,11 +103,11 @@ func (m *trackUIModel) startRecording() {
 	if path == "" {
 		return
 	}
-	m.currentRecPath = path
 	if err := m.state.rec.Start(path); err != nil {
-		fmt.Printf("error starting recording: %v\n", err)
+		log.Printf("error starting recording: %v\n", err)
 		return
 	}
+	m.currentRecPath = path
 }
 
 func (m *trackUIModel) stopRecording() {
@@ -169,7 +115,7 @@ func (m *trackUIModel) stopRecording() {
 		return
 	}
 	if err := m.state.rec.Stop(); err != nil {
-		fmt.Printf("error stopping recording: %v\n", err)
+		log.Printf("error stopping recording: %v\n", err)
 	}
 	if m.currentRecPath != "" && m.state.RecordTrack != nil {
 		m.state.RecordTrack.AddSegment(&Segment{Path: m.currentRecPath})
@@ -180,14 +126,14 @@ func (m *trackUIModel) stopRecording() {
 func (m *trackUIModel) startInput(mode inputMode) {
 	m.inputMode = mode
 	switch mode {
-	case inputNewTrack:
+	case inputNewTrack, inputEditName:
 		m.nameInput = newTextInput("Enter track name")
-		m.nameInput.Focus()
-	case inputEditName:
-		m.nameInput = newTextInput("Edit track name")
-		idx := m.list.Index()
-		if idx >= 0 && idx < len(m.state.tracks.Tracks) {
-			m.nameInput.SetValue(m.state.tracks.Tracks[idx].Name)
+		if mode == inputEditName {
+			m.nameInput.Placeholder = "Edit track name"
+			selectedTrack := m.trackList.getSelectedTrack()
+			if selectedTrack != nil {
+				m.nameInput.SetValue(selectedTrack.Name)
+			}
 		}
 		m.nameInput.Focus()
 	case inputTime:
@@ -207,74 +153,18 @@ func (m *trackUIModel) confirmInput() {
 	case inputNewTrack:
 		m.state.tracks.add(name)
 	case inputEditName:
-		m.renameTrackIfValid(name)
+		m.trackList.renameTrackIfValid(name)
 	}
 	m.inputMode = inputNone
 	m.nameInput.Reset()
-	m.refreshList()
+	m.trackList.refresh()
 }
 
 func (m *trackUIModel) confirmTimeInput() bool {
 	input := m.timeInput.Value()
-	minutes, seconds, milliseconds, ok := parseTimeInput(input)
-	if !ok {
-		return false
-	}
-	duration := time.Duration(minutes)*time.Minute + time.Duration(seconds)*time.Second + time.Duration(milliseconds)*time.Millisecond
-	m.state.clock.SetPosition(duration)
+	newPos := parseTimeInputWithBase(input, m.state.clock.Position())
+	m.state.clock.SetPosition(newPos)
 	return true
-}
-
-func parseTimeInput(input string) (minutes, seconds, milliseconds int, ok bool) {
-	if len(input) == 0 {
-		return 0, 0, 0, false
-	}
-
-	var minPart, secPart, msPart string
-	parts := strings.Split(input, ":")
-	if len(parts) != 2 {
-		return 0, 0, 0, false
-	}
-	minPart = parts[0]
-
-	secMsParts := strings.Split(parts[1], ".")
-	if len(secMsParts) != 2 {
-		return 0, 0, 0, false
-	}
-	secPart = secMsParts[0]
-	msPart = secMsParts[1]
-
-	if len(msPart) > 4 {
-		return 0, 0, 0, false
-	}
-
-	var err error
-	minutes, err = strconv.Atoi(minPart)
-	if err != nil {
-		return 0, 0, 0, false
-	}
-
-	seconds, err = strconv.Atoi(secPart)
-	if err != nil {
-		return 0, 0, 0, false
-	}
-
-	if minutes < 0 || seconds < 0 || seconds >= 60 {
-		return 0, 0, 0, false
-	}
-
-	if len(msPart) > 0 {
-		msVal, err := strconv.Atoi(msPart)
-		if err != nil {
-			return 0, 0, 0, false
-		}
-		for i := len(msPart); i < 4; i++ {
-			msVal *= 10
-		}
-		milliseconds = msVal
-	}
-
-	return minutes, seconds, milliseconds, true
 }
 
 func (m *trackUIModel) cancelInput() {
@@ -283,68 +173,93 @@ func (m *trackUIModel) cancelInput() {
 	m.timeInput.Reset()
 }
 
+func (m *trackUIModel) openSegmentList() {
+	selectedTrack := m.trackList.getSelectedTrack()
+	if selectedTrack == nil {
+		return
+	}
+	m.segmentList = NewSegmentListModel(m.state, selectedTrack, m.width-16, 8)
+	m.focused = focusSegments
+}
+
+func (m *trackUIModel) closeSegmentList() {
+	m.segmentList = nil
+	m.focused = focusTracks
+}
+
+func (m *trackUIModel) openWavUI() tea.Cmd {
+	if m.segmentList == nil {
+		return nil
+	}
+	seg := m.segmentList.SelectedSegment()
+	if seg == nil {
+		return nil
+	}
+	selectedTrack := m.trackList.getSelectedTrack()
+	if selectedTrack == nil {
+		return nil
+	}
+	m.wavUI = NewWavUIModelFromSegment(m.state, selectedTrack, seg)
+	m.focused = focusWav
+	return m.wavUI.Init()
+}
+
+func (m *trackUIModel) closeWavUI() {
+	if m.wavUI != nil {
+		m.wavUI.Close()
+		m.wavUI = nil
+	}
+	m.focused = focusTracks
+}
+
 func (m *trackUIModel) confirmSave() {
 	m.state.Save()
 	m.inputMode = inputNone
 }
 
-func (m *trackUIModel) cancelSave() {
-	m.inputMode = inputNone
-}
-
-func (m *trackUIModel) renameTrackIfValid(name string) {
-	idx := m.list.Index()
-	if idx < 0 || idx >= len(m.state.tracks.Tracks) {
-		return
-	}
-	if !m.state.tracks.rename(m.state.tracks.Tracks[idx].Name, name) {
-		return
-	}
-}
-
 func (m *trackUIModel) togglePlayback() {
-	oldTicking := m.ticking
 	m.ticking = !m.ticking
-
 	if m.ticking {
 		m.state.clock.Start()
+		m.startRecording()
 	} else {
 		m.state.clock.Stop()
-	}
-
-	// If starting playback and there's a record track, start recording
-	if m.ticking && !oldTicking && m.state.RecordTrack != nil {
-		m.startRecording()
-	}
-	// If stopping playback, stop recording
-	if !m.ticking && oldTicking {
 		m.stopRecording()
 	}
 }
 
 func (m *trackUIModel) positionLeft() {
-	if m.state.Recording() {
-		return
+	if !m.state.Recording() {
+		m.state.clock.Seek(m.state.clock.Ticks(-5 * time.Second))
 	}
-	m.state.clock.Seek(-5)
 }
 
 func (m *trackUIModel) positionRight() {
-	if m.state.Recording() {
-		return
+	if !m.state.Recording() {
+		m.state.clock.Seek(m.state.clock.Ticks(5 * time.Second))
 	}
-	m.state.clock.Seek(5)
 }
 
 func (m *trackUIModel) positionHome() {
-	if m.state.Recording() {
-		return
+	if !m.state.Recording() {
+		m.state.clock.Reset()
 	}
-	m.state.clock.Reset()
 }
 
 func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if cmd, done := m.handleInputMsg(msg); done {
+		return m, cmd
+	}
+	if m.trackAudio.inputActive || m.trackAudio.segmentListActive {
+		_, cmd := m.trackAudio.Update(msg)
+		return m, cmd
+	}
+
 	kpStr := msg.String()
+	if kpStr != "esc" && m.focused == focusWav {
+		_, cmd := m.wavUI.Update(msg)
+		return m, cmd
+	}
 
 	switch kpStr {
 	case "ctrl+c":
@@ -353,19 +268,14 @@ func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.inputMode = inputSaveConfirm
 		return m, nil
 	case "esc":
-		if m.inputMode == inputSaveConfirm {
-			m.cancelSave()
-			return m, nil
+		switch m.focused {
+		case focusSegments:
+			m.closeSegmentList()
+		case focusWav:
+			m.closeWavUI()
+		default:
+			return m, tea.Quit
 		}
-		if m.inputMode == inputTime {
-			m.inputMode = inputNone
-			m.timeInput.Reset()
-			return m, nil
-		}
-		m.focused = focusTracks
-		return m, nil
-	case "n":
-		m.startInput(inputNewTrack)
 		return m, nil
 	case "p":
 		m.togglePlayback()
@@ -374,99 +284,99 @@ func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "tab":
-		if m.focused == focusTracks {
-			m.focused = focusPosition
-		} else {
-			m.focused = focusTracks
-		}
+		m.cycleFocus()
 		return m, nil
 	}
 
-	if m.focused == focusTracks {
-		switch kpStr {
-		case "e":
-			m.startInput(inputEditName)
-			m.editIndex = m.list.Index()
-		case "r":
-			m.toggleRecord()
-		case "m":
-			m.toggleMute()
+	switch m.focused {
+	case focusSegments:
+		if kpStr == "enter" {
+			return m, m.openWavUI()
+		} else {
+			_, cmd := m.segmentList.Update(msg)
+			return m, cmd
 		}
-	} else if m.focused == focusPosition {
-		switch kpStr {
-		case "left":
-			m.positionLeft()
-		case "right":
-			m.positionRight()
-		case "home":
-			m.positionHome()
-		case "t":
-			m.startInput(inputTime)
-		}
+	case focusTracks:
+		m.handleTracksKey(msg)
+	case focusAudio:
+		_, cmd := m.handleAudioKey(msg)
+		return m, cmd
+	case focusPosition:
+		m.handlePositionKey(kpStr)
+	case focusWav:
+		_, cmd := m.handleWavKey(msg)
+		return m, cmd
 	}
 	return m, nil
 }
 
-func (m *trackUIModel) handleInputMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	if m.inputMode == inputTime {
+func (m *trackUIModel) handleInputMsg(msg tea.KeyPressMsg) (cmd tea.Cmd, done bool) {
+	if m.inputMode == inputNone {
+		return nil, false
+	}
+	if msg.String() == "esc" {
+		m.cancelInput()
+		return nil, true
+	}
+	isEnter := msg.String() == "enter"
+	switch m.inputMode {
+	case inputTime:
 		m.timeInput, cmd = m.timeInput.Update(msg)
-		if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
+		if isEnter {
 			if m.confirmTimeInput() {
 				m.inputMode = inputNone
 				m.timeInput.Reset()
 			}
 		}
-	} else {
+	case inputNewTrack, inputEditName:
 		m.nameInput, cmd = m.nameInput.Update(msg)
-		if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
-			if m.inputMode == inputSaveConfirm {
-				m.confirmSave()
-			} else {
-				m.confirmInput()
-			}
+		if isEnter {
+			m.confirmInput()
 		}
+	case inputSaveConfirm:
+		switch msg.String() {
+		case "y":
+			m.confirmSave()
+		case "n":
+			m.inputMode = inputNone
+		}
+	default:
+		return nil, false
 	}
-	return m, cmd
+	return cmd, true
 }
 
 func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if m.inputMode != inputNone && m.inputMode != inputSaveConfirm {
-			return m.handleInputMsg(msg)
+		return m.handleKey(msg)
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		// Propagate window size to trackAudioModel
+		// Account for track list width and borders
+		msg2 := msg
+		msg2.Width -= 16
+		_, audioCmd := m.trackAudio.Update(msg2)
+		if m.segmentList != nil {
+			m.segmentList.list.SetSize(m.width-16, m.height-4)
 		}
-		if m.inputMode == inputSaveConfirm {
-			switch msg.String() {
-			case "y":
-				m.confirmSave()
-				return m, nil
-			case "n", "esc":
-				m.cancelSave()
-				return m, nil
-			}
+		if m.wavUI != nil {
+			m.wavUI.Update(msg2)
 		}
-		result, cmd := m.handleKey(msg)
-		if cmd != nil {
-			return result, cmd
-		}
-		var listCmd tea.Cmd
-		m.list, listCmd = m.list.Update(msg)
-		return m, listCmd
+		return m, audioCmd
 	case tickMsg:
 		if m.ticking {
-			m.state.clock.Seek(1)
+			m.state.clock.Update()
 			return m, m.tick()
 		}
+		if m.focused == focusWav {
+			_, cmd := m.wavUI.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	}
-
-	if m.inputMode != inputNone && m.inputMode != inputSaveConfirm {
-		return m.handleInputMsg(msg)
-	}
-
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m *trackUIModel) formatPosition() string {
@@ -478,60 +388,79 @@ func (m *trackUIModel) formatPosition() string {
 	return fmt.Sprintf("%02d:%02d.%04d", minutes, seconds, milliseconds*10)
 }
 
-func (m *trackUIModel) View() tea.View {
-	var sb strings.Builder
-
-	// Track list box - square corners
-	borderColor := unfocusBorderColor
-	if m.focused == focusTracks && m.inputMode == inputNone {
-		borderColor = focusBorderColor
-	}
-	trackBorder := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(borderColor)
-
-	sb.WriteString(trackBorder.Render(m.list.View()) + "\n")
-
+func (m *trackUIModel) renderPositionArea(sb *strings.Builder) {
 	// Position area - square border
-	posBorderColor := unfocusBorderColor
-	if m.focused == focusPosition && m.inputMode == inputNone {
-		posBorderColor = focusBorderColor
-	}
-	if m.inputMode != inputNone {
-		posBorderColor = lipgloss.Color("#FFFFFF")
-	}
+	posBorderColor := m.borderColorFor(focusPosition)
 	posBorder := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(posBorderColor).
 		Padding(0, 1)
 
-	if m.inputMode != inputNone {
-		if m.inputMode == inputSaveConfirm {
-			sb.WriteString(posBorder.Render("Save? (y/n)"))
-		} else if m.inputMode == inputTime {
-			sb.WriteString(posBorder.Render(m.timeInput.View()))
-		} else {
-			sb.WriteString(posBorder.Render(m.nameInput.View()))
-		}
-	} else {
+	switch m.inputMode {
+	case inputSaveConfirm:
+		sb.WriteString(posBorder.Render("Save? (y/n)"))
+	case inputTime:
+		sb.WriteString(posBorder.Render(m.timeInput.View()))
+	case inputEditName:
+		sb.WriteString(posBorder.Render(m.nameInput.View()))
+	default:
 		playIcon := "[]"
 		if m.ticking {
-			playIcon = "|>"
+			playIcon = ">|"
 		}
 		posText := fmt.Sprintf("Position (%s): %s", playIcon, m.formatPosition())
 		sb.WriteString(posBorder.Render(posText))
 	}
+}
 
+func (m *trackUIModel) renderRightPane() string {
+	// Right pane - segment list, wavUI, or track audio
+	var rightPane string
+	rightBorderColor := unfocusBorderColor
+	if m.inputMode == inputNone && (m.focused == focusAudio || m.focused == focusSegments || m.focused == focusWav) {
+		rightBorderColor = focusBorderColor
+	}
+	rightBorder := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(rightBorderColor)
+
+	switch m.focused {
+	case focusSegments:
+		rightPane = rightBorder.Render(m.segmentList.View().Content)
+	case focusWav:
+		rightPane = rightBorder.Render(m.wavUI.View().Content)
+	default:
+		rightPane = rightBorder.Render(m.trackAudio.View().Content)
+	}
+	return rightPane
+}
+
+func (m *trackUIModel) renderLeftPane() string {
+	// Track list box - square corners
+	borderColor := m.borderColorFor(focusTracks)
+	trackBorder := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(borderColor)
+	return trackBorder.Render(m.trackList.View())
+}
+
+func (m *trackUIModel) View() tea.View {
+	var sb strings.Builder
+	// Join track list and right pane side-by-side
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
+		m.renderLeftPane(),
+		m.renderRightPane(),
+	))
+	sb.WriteString("\n")
+	m.renderPositionArea(&sb)
 	return tea.NewView(sb.String())
 }
 
 func (m *trackUIModel) tick() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(tickUpdateRate, func(t time.Time) tea.Msg {
 		return tickMsg{}
 	})
 }
-
-type tickMsg struct{}
 
 func TrackUI(s *State) {
 	m := initTrackUIModel(s)
@@ -539,4 +468,63 @@ func TrackUI(s *State) {
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("error running UI: %v\n", err)
 	}
+}
+
+func (m *trackUIModel) cycleFocus() {
+	switch m.focused {
+	case focusTracks:
+		m.focused = focusAudio
+	case focusAudio:
+		m.focused = focusPosition
+	case focusPosition:
+		m.focused = focusTracks
+	}
+}
+
+func (m *trackUIModel) handleTracksKey(msg tea.KeyPressMsg) {
+	switch msg.String() {
+	case "s":
+		m.openSegmentList()
+	case "e":
+		m.startInput(inputEditName)
+	case "r":
+		m.toggleRecord()
+	case "m":
+		m.trackList.toggleMute()
+	case "n":
+		m.startInput(inputNewTrack)
+	default:
+		m.trackList.Update(msg)
+	}
+}
+
+func (m *trackUIModel) handleAudioKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Route to trackAudio - use Update if input active or segment list active, otherwise handleKey
+	if m.trackAudio.inputActive || m.trackAudio.segmentListActive {
+		_, cmd := m.trackAudio.Update(msg)
+		return m, cmd
+	}
+	_, cmd := m.trackAudio.handleKey(msg)
+	return m, cmd
+}
+
+func (m *trackUIModel) handlePositionKey(kpStr string) {
+	switch kpStr {
+	case "left":
+		m.positionLeft()
+	case "right":
+		m.positionRight()
+	case "home":
+		m.positionHome()
+	case "t":
+		m.startInput(inputTime)
+	}
+}
+
+func (m *trackUIModel) handleWavKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.wavUI != nil {
+		_, cmd := m.wavUI.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }

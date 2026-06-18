@@ -36,7 +36,6 @@ var (
 	projectStyle      = lipgloss.NewStyle().Foreground(lipgloss.BrightBlue).Bold(true)
 	playbackStyle     = lipgloss.NewStyle().Foreground(lipgloss.BrightGreen).Bold(true)
 	recordStyle       = lipgloss.NewStyle().Foreground(lipgloss.BrightRed).Bold(true)
-	createStyle       = lipgloss.NewStyle().Foreground(lipgloss.BrightMagenta).Bold(true)
 	focusedBorder     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.BrightWhite)
 )
 
@@ -97,7 +96,8 @@ func (m *startModel) Init() tea.Cmd {
 
 func (m *startModel) config() string {
 	var s strings.Builder
-	s.WriteString(infoStyle.Render("Project: "+m.projectNameInput.Value()) + "\n")
+	s.WriteString(infoStyle.Render("Project: " + m.projectNameInput.Value()))
+	s.WriteByte('\n')
 
 	l, r := "(none)", "(none)"
 	if m.LeftPlayback != "" {
@@ -106,7 +106,8 @@ func (m *startModel) config() string {
 	if m.RightPlayback != "" {
 		r = m.RightPlayback
 	}
-	s.WriteString(infoStyle.Render("Playback: L:"+l+", R:"+r) + "\n")
+	s.WriteString(infoStyle.Render("Playback: L:" + l + ", R:" + r))
+	s.WriteByte('\n')
 	s.WriteString(infoStyle.Render("Record: " + m.RecordPort))
 	return focusedBorder.Render(s.String())
 }
@@ -211,30 +212,42 @@ func (m *startModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *startModel) View() tea.View {
 	var view strings.Builder
 
-	view.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.BrightWhite).Render("Project Setup") + "\n\n")
+	view.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.BrightWhite).Render("Project Setup"))
+	view.WriteString("\n\n")
 
 	switch m.focused {
 	case focusedProjectName:
 		projectInput := m.projectNameInput.View()
-		view.WriteString(projectStyle.Render("Project Name:") + "\n")
-		view.WriteString(focusedBorder.Render(projectInput) + "\n\n")
-		view.WriteString(m.config() + "\n\n")
+		view.WriteString(projectStyle.Render("Project Name:"))
+		view.WriteString("\n")
+		view.WriteString(focusedBorder.Render(projectInput))
+		view.WriteString("\n\n")
+		view.WriteString(m.config())
+		view.WriteString("\n\n")
 
 	case focusedPlayback:
 		playbackList := m.playbackList.View()
-		view.WriteString(playbackStyle.Render("Playback Ports:") + "\n")
-		view.WriteString(focusedBorder.Render(playbackList) + "\n\n")
-		view.WriteString(m.config() + "\n\n")
+		view.WriteString(playbackStyle.Render("Playback Ports:"))
+		view.WriteString("\n")
+		view.WriteString(focusedBorder.Render(playbackList))
+		view.WriteString("\n\n")
+		view.WriteString(m.config())
+		view.WriteString("\n\n")
 
 	case focusedRecord:
 		recordList := m.recordList.View()
-		view.WriteString(recordStyle.Render("Record Port:") + "\n")
-		view.WriteString(focusedBorder.Render(recordList) + "\n\n")
-		view.WriteString(m.config() + "\n\n")
+		view.WriteString(recordStyle.Render("Record Port:"))
+		view.WriteString("\n")
+		view.WriteString(focusedBorder.Render(recordList))
+		view.WriteString("\n\n")
+		view.WriteString(m.config())
+		view.WriteString("\n\n")
 
 	case focusedCreate:
-		view.WriteString(m.config() + "\n\n")
-		view.WriteString(createButtonStyle.Render("  Create  ") + "\n\n")
+		view.WriteString(m.config())
+		view.WriteString("\n\n")
+		view.WriteString(createButtonStyle.Render("  Create  "))
+		view.WriteString("\n\n")
 	}
 
 	view.WriteString(lipgloss.NewStyle().Faint(true).Render("Tab: next  L/R: select left/right  Enter: confirm/next  Ctrl+C: quit"))

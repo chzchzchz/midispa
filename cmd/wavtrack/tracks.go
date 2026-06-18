@@ -19,6 +19,11 @@ func (s *Tracks) add(name string) bool {
 		}
 	}
 	s.Tracks = append(s.Tracks, Track{Name: name})
+	// Create the track directory after appending
+	trackDir := filepath.Join(s.baseDir, name)
+	if err := os.MkdirAll(trackDir, 0755); err != nil {
+		log.Printf("error creating track directory: %v", err)
+	}
 	return true
 }
 

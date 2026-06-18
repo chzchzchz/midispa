@@ -16,7 +16,7 @@ import (
 type Record struct {
 	Port        *mjack.Port
 	running     atomic.Bool
-	buffers     sync.Pool
+	buffers     *Pool[[]jack.AudioSample]
 	bufc        chan []jack.AudioSample
 	bufDuration time.Duration
 	sampleRate  int
@@ -29,12 +29,13 @@ type Record struct {
 	donec     chan struct{}
 }
 
-const BufferPoolSize = 16
+const RecordBufferSize = 16
 
 func NewRecord(portName string) (*Record, error) {
 	r := &Record{
-		bufc:  make(chan []jack.AudioSample, BufferPoolSize),
-		donec: make(chan struct{}, 1),
+		buffers: NewPool[[]jack.AudioSample](RecordBufferSize),
+		bufc:    make(chan []jack.AudioSample, RecordBufferSize),
+		donec:   make(chan struct{}, 1),
 	}
 	pc := mjack.PortConfig{
 		ClientName:    "wavtrack",
@@ -49,7 +50,7 @@ func NewRecord(portName string) (*Record, error) {
 
 	bufSize := r.Port.Client.GetBufferSize()
 	r.sampleRate = int(r.Port.Client.GetSampleRate())
-	for i := 0; i < BufferPoolSize; i++ {
+	for i := 0; i < RecordBufferSize; i++ {
 		r.buffers.Put(make([]jack.AudioSample, bufSize))
 	}
 
@@ -62,8 +63,8 @@ func (r *Record) callback(in []jack.AudioSample) int {
 		return 0
 	}
 	if buf := r.buffers.Get(); buf != nil {
-		copy(buf.([]jack.AudioSample), in)
-		r.bufc <- buf.([]jack.AudioSample)
+		copy(buf, in)
+		r.bufc <- buf
 	}
 	return 0
 }

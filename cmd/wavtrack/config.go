@@ -30,7 +30,7 @@ func (p *ProjectConfig) Save() error {
 	return os.WriteFile(filepath.Join(p.Dir(), "project.json"), cfgBytes, 0644)
 }
 
-func LoadProject(baseDir, projectName string) (*ProjectConfig, error) {
+func LoadConfig(baseDir, projectName string) (*ProjectConfig, error) {
 	p := &ProjectConfig{
 		BaseDir:     baseDir,
 		ProjectName: projectName,

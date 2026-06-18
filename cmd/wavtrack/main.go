@@ -3,10 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/user"
 	"path/filepath"
-	//	"time"
 
 	"github.com/chzchzchz/midispa/jack"
 )
@@ -23,23 +23,46 @@ func getBaseDir() string {
 	return wavtrackDir
 }
 
+func setupLog(path string) *os.File {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		log.Fatal("Failed to open log file:", err)
+	}
+	log.SetOutput(f)
+	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
+	return f
+}
+
 func main() {
 	var project string
+	var projectDir string
 	flag.StringVar(&project, "project", "", "Load project from .wavtrack directory and skip start UI")
+	flag.StringVar(&projectDir, "project-dir", "", "Base project path instead of ~/.wavtrack")
 	flag.Parse()
 
 	ports, err := jack.Ports()
 	if err != nil {
 		panic("error getting jack ports: " + err.Error())
 	}
-	wavtrackDir := getBaseDir()
 
-	var cfg *ProjectConfig
+	wavtrackDir := projectDir
+	if wavtrackDir == "" {
+		wavtrackDir = getBaseDir()
+	}
+
+	logFile := setupLog(filepath.Join(wavtrackDir, "debug.log"))
+	defer logFile.Close()
+	log.SetPrefix("[init] ")
+
+	var s *State
 	if project != "" {
-		fmt.Printf("Loading project: %s\n", project)
-		if cfg, err = LoadProject(wavtrackDir, project); err != nil {
+		log.Printf("Loading project: %s\n", project)
+		cfg, err := LoadConfig(wavtrackDir, project)
+		if err != nil {
 			panic("error loading project: " + err.Error())
 		}
+		s = NewState(cfg)
+		s.Load()
 	} else {
 		m := Start(ports)
 		m.ProjectConfig.BaseDir = wavtrackDir
@@ -54,20 +77,20 @@ func main() {
 		if err := m.ProjectConfig.Save(); err != nil {
 			panic("error saving project: " + err.Error())
 		}
-		cfg = &m.ProjectConfig
+		s = NewState(&m.ProjectConfig)
 	}
 
-	s := NewState(cfg)
+	log.SetPrefix(fmt.Sprintf("[%s] ", s.cfg.ProjectName))
+
+	if s.Play, err = NewPlay([]string{s.cfg.LeftPlayback, s.cfg.RightPlayback}); err != nil {
+		panic("couldn't create play ports:" + err.Error())
+	}
+	defer s.Play.Close()
+
+	if s.rec, err = NewRecord(s.cfg.RecordPort); err != nil {
+		panic("couldn't record:" + err.Error())
+	}
+	defer s.rec.Close()
+
 	TrackUI(s)
-	/*
-	   rec, err := NewRecord(cfg.RecordPort)
-
-	   	if err != nil {
-	   		panic("couldn't record:" + err.Error())
-	   	}
-
-	   defer rec.Close()
-	   rec.Start("abc.wav")
-	   time.Sleep(10 * time.Second)
-	*/
 }

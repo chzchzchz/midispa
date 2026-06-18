@@ -17,11 +17,14 @@ func (c *Clock) Start() {
 func (c *Clock) Stop() {}
 
 func (c *Clock) Update() {
-	c.position += SampleTick(c.rate * time.Now().Sub(c.start).Seconds())
+	now := time.Now()
+	dur := now.Sub(c.start)
+	c.start = now
+	c.position += c.Ticks(dur)
 }
 
-func (c *Clock) Seek(samples int) {
-	c.position -= SampleTick(samples)
+func (c *Clock) Seek(samples SampleTick) {
+	c.position += samples
 	if c.position < 0 {
 		c.position = 0
 	}
@@ -42,3 +45,7 @@ func (c *Clock) Position() time.Duration {
 }
 
 func (c *Clock) Sample() SampleTick { return c.position }
+
+func (c *Clock) Ticks(d time.Duration) SampleTick {
+	return SampleTick(c.rate * d.Seconds())
+}

@@ -16,6 +16,7 @@ type State struct {
 	RecordTrack *Track
 	rec         *Record
 	clock       Clock
+	Play        *Play
 }
 
 func NewState(cfg *ProjectConfig) *State {
@@ -24,7 +25,6 @@ func NewState(cfg *ProjectConfig) *State {
 		tracks: Tracks{baseDir: cfg.Dir()},
 		clock:  Clock{rate: float64(cfg.SampleRate)},
 	}
-
 }
 
 func (s *State) Recording() bool { return s.rec.Running() }
@@ -40,7 +40,19 @@ func (s *State) getRecordingPath() string {
 		return ""
 	}
 	segmentNum := track.SegmentCount + 1
-	return filepath.Join(trackDir, fmt.Sprintf("%06d.wav", segmentNum))
+	for {
+		path := filepath.Join(trackDir, fmt.Sprintf("%06d.wav", segmentNum))
+		_, err := os.Stat(path)
+		if err == nil {
+			segmentNum++
+			continue
+		}
+		if !os.IsNotExist(err) {
+			log.Printf("error checking recording path: %v", err)
+			return ""
+		}
+		return path
+	}
 }
 
 func (s *State) tracksJSONPath() string {
@@ -80,6 +92,9 @@ func (s *State) loadExtraSegments() {
 				continue
 			}
 			track.segmentStore = append(track.segmentStore, seg)
+		}
+		if totalSegs := len(track.segmentStore); totalSegs > track.SegmentCount {
+			track.SegmentCount = totalSegs
 		}
 	}
 }
