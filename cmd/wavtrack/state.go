@@ -42,3 +42,8 @@ func (s *State) getRecordingPath() string {
 	segmentNum := track.SegmentCount() + 1
 	return filepath.Join(trackDir, fmt.Sprintf("%06d.wav", segmentNum))
 }
+
+func (s *State) Save() error {
+	// nop
+	return nil
+}

@@ -17,6 +17,7 @@ const (
 	inputNone inputMode = iota
 	inputNewTrack
 	inputEditName
+	inputSaveConfirm
 )
 
 type focusArea int
@@ -209,6 +210,15 @@ func (m *trackUIModel) cancelInput() {
 	m.nameInput.Reset()
 }
 
+func (m *trackUIModel) confirmSave() {
+	m.state.Save()
+	m.inputMode = inputNone
+}
+
+func (m *trackUIModel) cancelSave() {
+	m.inputMode = inputNone
+}
+
 func (m *trackUIModel) renameTrackIfValid(name string) {
 	idx := m.list.Index()
 	if idx < 0 || idx >= len(m.state.tracks.tracks) {
@@ -266,7 +276,14 @@ func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch kpStr {
 	case "ctrl+c":
 		return m, tea.Quit
+	case "ctrl+s":
+		m.inputMode = inputSaveConfirm
+		return m, nil
 	case "esc":
+		if m.inputMode == inputSaveConfirm {
+			m.cancelSave()
+			return m, nil
+		}
 		m.focused = focusTracks
 		return m, nil
 	case "n":
@@ -314,7 +331,11 @@ func (m *trackUIModel) handleInputMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.nameInput, cmd = m.nameInput.Update(msg)
 	if msg, ok := msg.(tea.KeyPressMsg); ok && msg.String() == "enter" {
-		m.confirmInput()
+		if m.inputMode == inputSaveConfirm {
+			m.confirmSave()
+		} else {
+			m.confirmInput()
+		}
 	}
 	return m, cmd
 }
@@ -322,8 +343,18 @@ func (m *trackUIModel) handleInputMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if m.inputMode != inputNone {
+		if m.inputMode != inputNone && m.inputMode != inputSaveConfirm {
 			return m.handleInputMsg(msg)
+		}
+		if m.inputMode == inputSaveConfirm {
+			switch msg.String() {
+			case "y":
+				m.confirmSave()
+				return m, nil
+			case "n", "esc":
+				m.cancelSave()
+				return m, nil
+			}
 		}
 		result, cmd := m.handleKey(msg)
 		if cmd != nil {
@@ -339,7 +370,7 @@ func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.inputMode != inputNone {
+	if m.inputMode != inputNone && m.inputMode != inputSaveConfirm {
 		return m.handleInputMsg(msg)
 	}
 
@@ -371,13 +402,23 @@ func (m *trackUIModel) View() tea.View {
 	listView := m.list.View()
 
 	if m.inputMode != inputNone {
-		inputBox := lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("#00FFFF")).
-			Padding(0, 1).
-			Render(m.nameInput.View())
-		sb.WriteString(trackBorder.Render(listView) + "\n")
-		sb.WriteString(inputBox + "\n")
+		if m.inputMode == inputSaveConfirm {
+			saveDialog := lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("#00FFFF")).
+				Padding(0, 1).
+				Render("Save? (y/n)")
+			sb.WriteString(trackBorder.Render(listView) + "\n")
+			sb.WriteString(saveDialog + "\n")
+		} else {
+			inputBox := lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("#00FFFF")).
+				Padding(0, 1).
+				Render(m.nameInput.View())
+			sb.WriteString(trackBorder.Render(listView) + "\n")
+			sb.WriteString(inputBox + "\n")
+		}
 	} else {
 		sb.WriteString(trackBorder.Render(listView) + "\n")
 	}
