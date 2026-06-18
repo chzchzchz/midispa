@@ -8,7 +8,7 @@ import (
 
 type Tracks struct {
 	baseDir string
-	tracks  []Track
+	Tracks  []Track `json:"tracks"`
 }
 
 func (s *Tracks) add(name string) bool {
@@ -49,4 +49,14 @@ func (s *Tracks) rename(oldName, newName string) bool {
 		}
 	}
 	return true
+}
+
+func (t *Tracks) Save(p string) error {
+	// TODO
+	return nil
+}
+
+func (t *Tracks) Load(p string) error {
+	// TODO
+	return nil
 }

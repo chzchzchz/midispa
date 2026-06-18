@@ -9,10 +9,10 @@ import (
 )
 
 type Segment struct {
-	Path       string
-	Duration   time.Duration
-	Samples    SampleTick
-	SampleRate int
+	Path       string        `json:"path"`
+	Duration   time.Duration `json:"duration"`
+	Samples    SampleTick    `json:"samples"`
+	SampleRate int           `json:"sample_rate"`
 }
 
 func NewSegment(path string) (*Segment, error) {

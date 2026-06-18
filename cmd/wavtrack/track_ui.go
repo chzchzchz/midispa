@@ -31,13 +31,14 @@ var focusBorderColor = lipgloss.Color("#FFFFFF")
 var unfocusBorderColor = lipgloss.Color("#000040")
 
 type trackUIModel struct {
-	state     *State
-	list      list.Model
-	nameInput textinput.Model
-	inputMode inputMode
-	editIndex int
-	ticking   bool
-	focused   focusArea
+	state          *State
+	list           list.Model
+	nameInput      textinput.Model
+	inputMode      inputMode
+	editIndex      int
+	ticking        bool
+	focused        focusArea
+	currentRecPath string
 }
 
 type trackItem struct {
@@ -153,7 +154,7 @@ func (m *trackUIModel) startRecording() {
 	if path == "" {
 		return
 	}
-	m.state.currentRecPath = path
+	m.currentRecPath = path
 	if err := m.state.rec.Start(path); err != nil {
 		fmt.Printf("error starting recording: %v\n", err)
 		return
@@ -167,9 +168,9 @@ func (m *trackUIModel) stopRecording() {
 	if err := m.state.rec.Stop(); err != nil {
 		fmt.Printf("error stopping recording: %v\n", err)
 	}
-	if m.state.currentRecPath != "" && m.state.RecordTrack != nil {
-		m.state.RecordTrack.AddSegment(&Segment{Path: m.state.currentRecPath})
-		m.state.currentRecPath = ""
+	if m.currentRecPath != "" && m.state.RecordTrack != nil {
+		m.state.RecordTrack.AddSegment(&Segment{Path: m.currentRecPath})
+		m.currentRecPath = ""
 	}
 }
 
@@ -399,46 +400,35 @@ func (m *trackUIModel) View() tea.View {
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(borderColor)
 
-	listView := m.list.View()
-
-	if m.inputMode != inputNone {
-		if m.inputMode == inputSaveConfirm {
-			saveDialog := lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color("#00FFFF")).
-				Padding(0, 1).
-				Render("Save? (y/n)")
-			sb.WriteString(trackBorder.Render(listView) + "\n")
-			sb.WriteString(saveDialog + "\n")
-		} else {
-			inputBox := lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(lipgloss.Color("#00FFFF")).
-				Padding(0, 1).
-				Render(m.nameInput.View())
-			sb.WriteString(trackBorder.Render(listView) + "\n")
-			sb.WriteString(inputBox + "\n")
-		}
-	} else {
-		sb.WriteString(trackBorder.Render(listView) + "\n")
-	}
+	sb.WriteString(trackBorder.Render(m.list.View()) + "\n")
 
 	// Position area - square border
 	posBorderColor := unfocusBorderColor
-	if m.focused == focusPosition {
+	if m.focused == focusPosition && m.inputMode == inputNone {
 		posBorderColor = focusBorderColor
+	}
+	if m.inputMode != inputNone {
+		posBorderColor = lipgloss.Color("#FFFFFF")
 	}
 	posBorder := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(posBorderColor).
 		Padding(0, 1)
 
-	playIcon := "[]"
-	if m.ticking {
-		playIcon = "|>"
+	if m.inputMode != inputNone {
+		if m.inputMode == inputSaveConfirm {
+			sb.WriteString(posBorder.Render("Save? (y/n)"))
+		} else {
+			sb.WriteString(posBorder.Render(m.nameInput.View()))
+		}
+	} else {
+		playIcon := "[]"
+		if m.ticking {
+			playIcon = "|>"
+		}
+		posText := fmt.Sprintf("Position (%s): %s", playIcon, m.formatPosition())
+		sb.WriteString(posBorder.Render(posText))
 	}
-	posText := fmt.Sprintf("Position (%s): %s", playIcon, m.formatPosition())
-	sb.WriteString(posBorder.Render(posText))
 
 	return tea.NewView(sb.String())
 }

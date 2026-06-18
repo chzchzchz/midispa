@@ -8,14 +8,13 @@ import (
 )
 
 type State struct {
-	cfg            ProjectConfig
-	running        bool
-	tracks         Tracks
-	Markers        []Marker
-	RecordTrack    *Track
-	rec            *Record
-	clock          Clock
-	currentRecPath string
+	cfg         ProjectConfig
+	running     bool
+	tracks      Tracks
+	Markers     []Marker
+	RecordTrack *Track
+	rec         *Record
+	clock       Clock
 }
 
 func NewState(cfg *ProjectConfig) *State {
@@ -43,7 +42,14 @@ func (s *State) getRecordingPath() string {
 	return filepath.Join(trackDir, fmt.Sprintf("%06d.wav", segmentNum))
 }
 
+func (s *State) tracksJSONPath() string {
+	return filepath.Join(cfg.Dir(), "tracks.json")
+}
+
 func (s *State) Save() error {
-	// nop
-	return nil
+	return tracks.Save(s.tracksJSONPath())
+}
+
+func (s *State) Load() error {
+	return tracks.Load(s.tracksJSONPath())
 }
