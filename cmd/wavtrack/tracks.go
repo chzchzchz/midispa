@@ -12,26 +12,26 @@ type Tracks struct {
 }
 
 func (s *Tracks) add(name string) bool {
-	for _, t := range s.tracks {
-		if t.name == name {
+	for _, t := range s.Tracks {
+		if t.Name == name {
 			return false
 		}
 	}
-	s.tracks = append(s.tracks, Track{name: name})
+	s.Tracks = append(s.Tracks, Track{Name: name})
 	return true
 }
 
 func (s *Tracks) dir(t *Track) string {
-	return filepath.Join(s.baseDir, t.name)
+	return filepath.Join(s.baseDir, t.Name)
 }
 
 func (s *Tracks) rename(oldName, newName string) bool {
 	idx := -1
-	for i, t := range s.tracks {
-		if t.name == newName {
+	for i, t := range s.Tracks {
+		if t.Name == newName {
 			return false
 		}
-		if t.name == oldName {
+		if t.Name == oldName {
 			idx = i
 		}
 	}
@@ -40,9 +40,9 @@ func (s *Tracks) rename(oldName, newName string) bool {
 	}
 
 	if oldName != newName {
-		t := &s.tracks[idx]
+		t := &s.Tracks[idx]
 		oldDir := s.dir(t)
-		t.name = newName
+		t.Name = newName
 		newDir := s.dir(t)
 		if err := os.Rename(oldDir, newDir); err != nil {
 			log.Printf("error renaming track directory: %v", err)

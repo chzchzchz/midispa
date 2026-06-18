@@ -38,18 +38,18 @@ func (s *State) getRecordingPath() string {
 		log.Printf("error creating track directory: %v", err)
 		return ""
 	}
-	segmentNum := track.SegmentCount() + 1
+	segmentNum := track.SegmentCount + 1
 	return filepath.Join(trackDir, fmt.Sprintf("%06d.wav", segmentNum))
 }
 
 func (s *State) tracksJSONPath() string {
-	return filepath.Join(cfg.Dir(), "tracks.json")
+	return filepath.Join(s.cfg.Dir(), "tracks.json")
 }
 
 func (s *State) Save() error {
-	return tracks.Save(s.tracksJSONPath())
+	return s.tracks.Save(s.tracksJSONPath())
 }
 
 func (s *State) Load() error {
-	return tracks.Load(s.tracksJSONPath())
+	return s.tracks.Load(s.tracksJSONPath())
 }

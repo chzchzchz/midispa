@@ -48,7 +48,7 @@ type trackItem struct {
 
 func (i trackItem) Title() string {
 	m, r, s := " ", " ", false
-	if i.track.mute {
+	if i.track.Mute {
 		m, s = "M", true
 	}
 	if i.isRecord {
@@ -58,7 +58,7 @@ func (i trackItem) Title() string {
 	if s {
 		suffix = fmt.Sprintf(" [%s%s]", m, r)
 	}
-	return i.track.name + suffix
+	return i.track.Name + suffix
 }
 
 func (i trackItem) Description() string {
@@ -66,14 +66,14 @@ func (i trackItem) Description() string {
 }
 
 func (i trackItem) FilterValue() string {
-	return i.track.name
+	return i.track.Name
 }
 
 func buildListItems(s *State) []list.Item {
-	items := make([]list.Item, len(s.tracks.tracks))
-	for i := range s.tracks.tracks {
-		isRecord := s.RecordTrack != nil && &s.tracks.tracks[i] == s.RecordTrack
-		items[i] = trackItem{track: &s.tracks.tracks[i], isRecord: isRecord}
+	items := make([]list.Item, len(s.tracks.Tracks))
+	for i := range s.tracks.Tracks {
+		isRecord := s.RecordTrack != nil && &s.tracks.Tracks[i] == s.RecordTrack
+		items[i] = trackItem{track: &s.tracks.Tracks[i], isRecord: isRecord}
 	}
 	return items
 }
@@ -121,24 +121,24 @@ func (m *trackUIModel) refreshList() {
 
 func (m *trackUIModel) toggleMute() {
 	idx := m.list.Index()
-	if idx >= 0 && idx < len(m.state.tracks.tracks) {
-		m.state.tracks.tracks[idx].mute = !m.state.tracks.tracks[idx].mute
+	if idx >= 0 && idx < len(m.state.tracks.Tracks) {
+		m.state.tracks.Tracks[idx].Mute = !m.state.tracks.Tracks[idx].Mute
 		m.refreshList()
 	}
 }
 
 func (m *trackUIModel) toggleRecord() {
 	idx := m.list.Index()
-	if idx < 0 || idx >= len(m.state.tracks.tracks) {
+	if idx < 0 || idx >= len(m.state.tracks.Tracks) {
 		return
 	}
 	m.stopRecording()
 
-	if m.state.RecordTrack == &m.state.tracks.tracks[idx] {
+	if m.state.RecordTrack == &m.state.tracks.Tracks[idx] {
 		m.state.RecordTrack = nil
 	} else {
 		// Turning on recording for a new track
-		m.state.RecordTrack = &m.state.tracks.tracks[idx]
+		m.state.RecordTrack = &m.state.tracks.Tracks[idx]
 		if m.ticking {
 			m.startRecording()
 		}
@@ -182,8 +182,8 @@ func (m *trackUIModel) startInput(mode inputMode) {
 	case inputEditName:
 		m.nameInput = newTextInput("Edit track name")
 		idx := m.list.Index()
-		if idx >= 0 && idx < len(m.state.tracks.tracks) {
-			m.nameInput.SetValue(m.state.tracks.tracks[idx].name)
+		if idx >= 0 && idx < len(m.state.tracks.Tracks) {
+			m.nameInput.SetValue(m.state.tracks.Tracks[idx].Name)
 		}
 	}
 	m.nameInput.Focus()
@@ -222,10 +222,10 @@ func (m *trackUIModel) cancelSave() {
 
 func (m *trackUIModel) renameTrackIfValid(name string) {
 	idx := m.list.Index()
-	if idx < 0 || idx >= len(m.state.tracks.tracks) {
+	if idx < 0 || idx >= len(m.state.tracks.Tracks) {
 		return
 	}
-	if !m.state.tracks.rename(m.state.tracks.tracks[idx].name, name) {
+	if !m.state.tracks.rename(m.state.tracks.Tracks[idx].Name, name) {
 		return
 	}
 }
