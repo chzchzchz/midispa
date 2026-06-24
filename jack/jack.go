@@ -3,6 +3,7 @@ package jack
 import (
 	"io"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 
@@ -19,9 +20,9 @@ type Port struct {
 	portExternal map[string]*jack.Port
 	portInternal *jack.Port
 
-	portc      chan *jack.Port
-	connecting bool
-	wg         sync.WaitGroup
+	portc                  chan *jack.Port
+	portExternalConnecting map[string]bool
+	wg                     sync.WaitGroup
 
 	mw *midiWriter
 }
@@ -65,11 +66,12 @@ func NewJackPort(pc PortConfig, fl uint64) (*Port, error) {
 		return nil, jack.StrError(status)
 	}
 	j := &Port{
-		PortConfig:   pc,
-		Client:       client,
-		portExternal: make(map[string]*jack.Port),
-		fl:           fl,
-		portc:        make(chan *jack.Port, 2),
+		PortConfig:             pc,
+		Client:                 client,
+		portExternal:           make(map[string]*jack.Port),
+		portExternalConnecting: make(map[string]bool),
+		fl:                     fl,
+		portc:                  make(chan *jack.Port, 2),
 	}
 	if code := j.Client.SetPortRegistrationCallback(j.portRegistration); code != 0 {
 		j.Client.Close()
@@ -164,17 +166,20 @@ func (j *Port) portRegistration(id jack.PortId, made bool) {
 	if !made {
 		if _, ok := j.portExternal[name]; ok {
 			log.Println("unregistered:", name)
+			delete(j.portExternalConnecting, name)
 			delete(j.portExternal, name)
 		}
 		return
 	}
-	if strings.HasPrefix(name, j.ClientName) || !j.isNameMatch(name) {
-		log.Println("ignoring non-match:", name)
-	} else if _, ok := j.portExternal[name]; ok || len(j.portc) > 0 || j.connecting {
+	if strings.HasPrefix(name, j.ClientName) {
+		log.Println("ignoring non-match due to client name prefix:", name)
+	} else if !j.isNameMatch(name) {
+		log.Println("ignoring non-match due to name mismatch:", name)
+	} else if _, ok := j.portExternal[name]; ok || j.portExternalConnecting[name] {
 		log.Println("ignoring match:", name)
 	} else {
 		log.Println("matched:", name)
-		j.connecting = true
+		j.portExternalConnecting[name] = true
 		j.portc <- p
 	}
 }
@@ -199,7 +204,8 @@ func (j *Port) connectExternal(ext *jack.Port) error {
 		log.Println("failed to connect ports")
 		return jack.StrError(code)
 	}
-	j.connecting, j.portExternal[ext.GetName()] = false, ext
+	extName := ext.GetName()
+	j.portExternalConnecting[extName], j.portExternal[extName] = false, ext
 	return nil
 }
 
