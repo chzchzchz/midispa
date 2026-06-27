@@ -115,12 +115,6 @@ typedef struct ubpf_vm ubpf_vm;
 */
 import "C"
 
-const (
-	DROP = iota
-	PASS
-	DONE
-)
-
 const MaxMessageBytes = 64
 const BufBytes = 256
 
