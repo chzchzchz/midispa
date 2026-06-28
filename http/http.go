@@ -39,7 +39,7 @@ type trackDev struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 
-	pattern *track.Pattern
+	pattern *track.PatternStream
 	seq     *sequencer.Sequencer
 }
 
