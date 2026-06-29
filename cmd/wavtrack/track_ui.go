@@ -380,12 +380,7 @@ func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *trackUIModel) formatPosition() string {
-	dur := m.state.clock.Position()
-	totalMs := int(dur.Milliseconds())
-	minutes := (totalMs / 60000) % 60
-	seconds := (totalMs / 1000) % 60
-	milliseconds := totalMs % 1000
-	return fmt.Sprintf("%02d:%02d.%04d", minutes, seconds, milliseconds*10)
+	return formatDuration(m.state.clock.Position())
 }
 
 func (m *trackUIModel) renderPositionArea(sb *strings.Builder) {

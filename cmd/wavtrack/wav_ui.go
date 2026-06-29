@@ -105,10 +105,7 @@ func (m *wavUIModel) Init() tea.Cmd {
 func (m *wavUIModel) Close() {
 	m.wavPlayer.Close()
 	m.state.Play.Stop()
-	if m.wavReader != nil {
-		m.wavReader.Close()
-		m.wavReader = nil
-	}
+	m.wavReader.Close()
 	m.columnMinValues = nil
 	m.columnMaxValues = nil
 	m.columnMaxSamples = nil
