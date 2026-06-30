@@ -175,6 +175,8 @@ func (m *wavUIModel) updateOffsetInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch kpStr {
 		case "enter":
 			newOffset := parseTimeInputToSampleTick(m.offsetInput.Value(), m.segmentWindow.Offset, m.segment.SampleRate)
+			m.segmentWindow.Length -= newOffset - m.segmentWindow.Offset
+			m.segmentWindow.Length = max(m.segmentWindow.Length, 0)
 			m.segmentWindow.Offset = newOffset
 			m.ensureVisible()
 			m.offsetInputActive = false
