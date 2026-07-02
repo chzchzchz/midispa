@@ -11,7 +11,7 @@ import (
 )
 
 type WavPlayer struct {
-	play   *Play
+	play   PoolStream
 	reader *mwav.WavReader
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -19,7 +19,7 @@ type WavPlayer struct {
 	mu     sync.Mutex
 }
 
-func NewWavPlayer(p string, play *Play) (*WavPlayer, error) {
+func NewWavPlayer(p string, play PoolStream) (*WavPlayer, error) {
 	reader, err := mwav.OpenReader(p)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func NewWavPlayer(p string, play *Play) (*WavPlayer, error) {
 	return wp, nil
 }
 
-func (wp *WavPlayer) Play(ctx context.Context, sample SampleTick) {
+func (wp *WavPlayer) Play(ctx context.Context, w SampleWindow) {
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
 	if wp.cancel != nil {
@@ -39,7 +39,7 @@ func (wp *WavPlayer) Play(ctx context.Context, sample SampleTick) {
 	}
 	wp.ctx, wp.cancel = context.WithCancel(ctx)
 	wp.stopc = make(chan struct{})
-	wp.reader.Seek(int(sample), io.SeekStart)
+	wp.reader.Seek(int(w.start), io.SeekStart)
 
 	go func() {
 		defer func() {
@@ -51,11 +51,13 @@ func (wp *WavPlayer) Play(ctx context.Context, sample SampleTick) {
 		outBuf := wp.play.Buffer(ctx)
 		outc := wp.play.Chan()
 		inBuf := make([]int, len(outBuf))
+		samples := 0
 		for outBuf != nil {
 			sz, _ := wp.reader.Read(inBuf)
 			for i := 0; i < len(inBuf); i++ {
 				outBuf[i] = jack.AudioSample(float32(inBuf[i]) / float32(1<<15))
 			}
+			samples += sz
 			select {
 			case outc <- outBuf:
 			case <-ctx.Done():
@@ -64,7 +66,8 @@ func (wp *WavPlayer) Play(ctx context.Context, sample SampleTick) {
 				outc <- outBuf
 				return
 			}
-			if sz < len(inBuf) {
+			if sz < len(inBuf) || samples >= w.samples {
+				// No more samples to process.
 				return
 			}
 			outBuf = wp.play.Buffer(ctx)

@@ -330,7 +330,9 @@ func (m *wavUIModel) handlePlayPress() (tea.Model, tea.Cmd) {
 
 	// Start playing
 	m.state.Play.Start()
-	m.wavPlayer.Play(ctx, m.segmentWindow.Offset)
+	m.wavPlayer.Play(
+		ctx,
+		SampleWindow{start: SampleTick(m.segmentWindow.Offset), samples: int(m.segmentWindow.Length)})
 	m.playStartTime = time.Now()
 
 	// Store cancel function to stop playback later

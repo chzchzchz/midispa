@@ -8,6 +8,11 @@ import (
 
 type SampleTick int
 
+type SampleWindow struct {
+	start   SampleTick
+	samples int
+}
+
 func parseTimeInputWithBase(input string, base time.Duration) time.Duration {
 	if len(input) > 0 && (input[0] == '+' || input[0] == '-') {
 		// Relative time
