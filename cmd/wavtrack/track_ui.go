@@ -20,6 +20,7 @@ const (
 	inputEditName
 	inputSaveConfirm
 	inputTime
+	inputDeleteConfirm
 )
 
 type focusArea int
@@ -217,6 +218,27 @@ func (m *trackUIModel) confirmSave() {
 	m.inputMode = inputNone
 }
 
+func (m *trackUIModel) confirmDeleteSegment() {
+	if m.segmentList == nil {
+		m.inputMode = inputNone
+		return
+	}
+	seg := m.segmentList.SelectedSegment()
+	if seg == nil {
+		m.inputMode = inputNone
+		return
+	}
+	selectedTrack := m.trackList.getSelectedTrack()
+	if selectedTrack == nil {
+		m.inputMode = inputNone
+		return
+	}
+	selectedTrack.RemoveSegment(seg)
+	m.state.Save()
+	m.inputMode = inputNone
+	m.segmentList.list.SetItems(buildSegmentListItems(m.state, selectedTrack))
+}
+
 func (m *trackUIModel) togglePlayback() {
 	m.ticking = !m.ticking
 	if m.ticking {
@@ -277,6 +299,11 @@ func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	case "backspace", "delete":
+		if m.focused == focusSegments && m.segmentList != nil {
+			m.inputMode = inputDeleteConfirm
+			return m, nil
+		}
 	case "p":
 		m.togglePlayback()
 		if m.ticking {
@@ -340,6 +367,14 @@ func (m *trackUIModel) handleInputMsg(msg tea.KeyPressMsg) (cmd tea.Cmd, done bo
 		case "n":
 			m.inputMode = inputNone
 		}
+	case inputDeleteConfirm:
+		switch msg.String() {
+		case "y":
+			m.confirmDeleteSegment()
+		case "n":
+			m.inputMode = inputNone
+			m.closeSegmentList()
+		}
 	default:
 		return nil, false
 	}
@@ -394,6 +429,8 @@ func (m *trackUIModel) renderPositionArea(sb *strings.Builder) {
 	switch m.inputMode {
 	case inputSaveConfirm:
 		sb.WriteString(posBorder.Render("Save? (y/n)"))
+	case inputDeleteConfirm:
+		sb.WriteString(posBorder.Render("Delete segment? (y/n)"))
 	case inputTime:
 		sb.WriteString(posBorder.Render(m.timeInput.View()))
 	case inputEditName:

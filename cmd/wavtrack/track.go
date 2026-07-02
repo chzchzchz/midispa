@@ -53,3 +53,22 @@ func (t *Track) RemoveTrackSegment(start SampleTick) *TrackSegment {
 	}
 	return nil
 }
+
+func (t *Track) RemoveSegment(seg *Segment) {
+	for i, s := range t.segmentStore {
+		if s == seg {
+			t.segmentStore = append(t.segmentStore[:i], t.segmentStore[i+1:]...)
+			break
+		}
+	}
+	newSegments := make([]TrackSegment, 0, len(t.Segments))
+	for _, ts := range t.Segments {
+		if ts.Segment != seg {
+			newSegments = append(newSegments, ts)
+		}
+	}
+	t.Segments = newSegments
+	if t.SegmentCount > 0 {
+		t.SegmentCount--
+	}
+}
