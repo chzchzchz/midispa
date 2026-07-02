@@ -71,4 +71,5 @@ func (t *Track) RemoveSegment(seg *Segment) {
 	if t.SegmentCount > 0 {
 		t.SegmentCount--
 	}
+	seg.Delete()
 }

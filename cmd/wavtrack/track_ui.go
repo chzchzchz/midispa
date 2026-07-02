@@ -401,13 +401,13 @@ func (m *trackUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, audioCmd
 	case tickMsg:
-		if m.ticking {
-			m.state.clock.Update()
-			return m, m.tick()
-		}
 		if m.focused == focusWav {
 			_, cmd := m.wavUI.Update(msg)
 			return m, cmd
+		}
+		if m.ticking {
+			m.state.clock.Update()
+			return m, m.tick()
 		}
 		return m, nil
 	}

@@ -43,3 +43,5 @@ func NewSegment(path string) (*Segment, error) {
 	}
 	return s, nil
 }
+
+func (s *Segment) Delete() error { return os.Remove(s.Path) }
