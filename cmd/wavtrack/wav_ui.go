@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -41,6 +42,8 @@ type wavUIModel struct {
 	lengthInput       textinput.Model
 	offsetInputActive bool
 	lengthInputActive bool
+	saveConfirmActive bool
+	saveConfirmInput  textinput.Model
 }
 
 func NewWavUIModelFromTrackSegment(s *State, track *Track, seg *TrackSegment) *wavUIModel {
@@ -112,6 +115,9 @@ func (m *wavUIModel) Close() {
 }
 
 func (m *wavUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.saveConfirmActive {
+		return m.updateSaveConfirmInput(msg)
+	}
 	if m.offsetInputActive {
 		return m.updateOffsetInput(msg)
 	}
@@ -168,6 +174,31 @@ func (m *wavUIModel) viewDirty() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *wavUIModel) updateSaveConfirmInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		kpStr := msg.String()
+		switch kpStr {
+		case "enter":
+			if m.saveConfirmInput.Value() == "y" {
+				if err := m.saveSegment(); err != nil {
+					log.Printf("failed to save segment: %v", err)
+				}
+			}
+			m.saveConfirmActive = false
+			m.saveConfirmInput.Reset()
+			return m, nil
+		case "esc":
+			m.saveConfirmActive = false
+			m.saveConfirmInput.Reset()
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.saveConfirmInput, cmd = m.saveConfirmInput.Update(msg)
+	return m, cmd
+}
+
 func (m *wavUIModel) updateOffsetInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -179,6 +210,7 @@ func (m *wavUIModel) updateOffsetInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.segmentWindow.Length = max(m.segmentWindow.Length, 0)
 			m.segmentWindow.Offset = newOffset
 			m.ensureVisible()
+			m.saveConfirmActive = false
 			m.offsetInputActive = false
 			m.offsetInput.Reset()
 			m.dirty = true
@@ -203,6 +235,7 @@ func (m *wavUIModel) updateLengthInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			newLength := parseTimeInputToSampleTick(m.lengthInput.Value(), m.segmentWindow.Length, m.segment.SampleRate)
 			m.segmentWindow.Length = newLength
 			m.ensureVisible()
+			m.saveConfirmActive = false
 			m.lengthInputActive = false
 			m.lengthInput.Reset()
 			m.dirty = true
@@ -227,6 +260,7 @@ func (m *wavUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		return m.handlePlayPress()
 	case "o":
+		m.saveConfirmActive = false
 		m.offsetInputActive = true
 		m.offsetInput = newTextInput("MM:SS.mmmm")
 		m.offsetInput.SetValue(FormatSampleTick(m.segmentWindow.Offset, m.segment.SampleRate))
@@ -234,10 +268,17 @@ func (m *wavUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.dirty = true
 		return m, nil
 	case "l":
+		m.saveConfirmActive = false
 		m.lengthInputActive = true
 		m.lengthInput = newTextInput("MM:SS.mmmm")
 		m.lengthInput.SetValue(FormatSampleTick(m.segmentWindow.Length, m.segment.SampleRate))
 		m.lengthInput.Focus()
+		m.dirty = true
+		return m, nil
+	case "s":
+		m.saveConfirmActive = true
+		m.saveConfirmInput = newTextInput("y/n")
+		m.saveConfirmInput.Focus()
 		m.dirty = true
 		return m, nil
 	case "[":
@@ -520,7 +561,7 @@ func (m *wavUIModel) getLoudnessChar(loudness int) string {
 }
 
 func (m *wavUIModel) renderInputs(sb *strings.Builder) {
-	if !m.offsetInputActive && !m.lengthInputActive {
+	if !m.offsetInputActive && !m.lengthInputActive && !m.saveConfirmActive {
 		return
 	}
 	inputStyle := lipgloss.NewStyle().
@@ -536,6 +577,60 @@ func (m *wavUIModel) renderInputs(sb *strings.Builder) {
 		sb.WriteString(inputStyle.Render("Length: " + m.lengthInput.View()))
 		sb.WriteString("\n")
 	}
+	if m.saveConfirmActive {
+		sb.WriteString(inputStyle.Render("Save segment (y/n)? " + m.saveConfirmInput.View()))
+		sb.WriteString("\n")
+	}
+}
+
+func (m *wavUIModel) saveSegment() error {
+	origOffset := m.segmentWindow.Offset
+	origLength := m.segmentWindow.Length
+
+	m.wavReader.Seek(int(origOffset), io.SeekStart)
+	intSamples := make([]int, int(origLength))
+	n, err := m.wavReader.Read(intSamples)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read samples: %w", err)
+	}
+	intSamples = intSamples[:n]
+
+	floatSamples := make([]float32, len(intSamples))
+	for i, s := range intSamples {
+		floatSamples[i] = float32(s) / float32((1<<15)-1)
+	}
+
+	tmpPath := m.segment.Path + ".new"
+	if err := wav.WriteFile(tmpPath, floatSamples, m.segment.SampleRate); err != nil {
+		return fmt.Errorf("failed to write wav: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, m.segment.Path); err != nil {
+		return fmt.Errorf("failed to rename wav: %w", err)
+	}
+
+	m.segment.Samples = SampleTick(len(floatSamples))
+	m.segmentWindow.Offset = 0
+	m.segmentWindow.Length = SampleTick(len(floatSamples))
+
+	for ti := range m.state.tracks.Tracks {
+		track := &m.state.tracks.Tracks[ti]
+		for si := range track.Segments {
+			seg := &track.Segments[si]
+			if seg.Segment != m.segment {
+				continue
+			}
+			seg.Offset -= origOffset
+			if seg.Offset < 0 {
+				seg.Offset = 0
+			}
+			if seg.Length > m.segment.Samples {
+				seg.Length = m.segment.Samples
+			}
+		}
+	}
+
+	return m.state.Save()
 }
 
 func (m *wavUIModel) renderIndicators(sb *strings.Builder) {

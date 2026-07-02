@@ -14,9 +14,18 @@ func (c *Clock) Start() {
 	c.start = time.Now()
 }
 
-func (c *Clock) Stop() {}
+func (c *Clock) Stop() {
+	c.start = time.Time{}
+}
+
+func (c *Clock) Running() bool {
+	return !c.start.IsZero()
+}
 
 func (c *Clock) Update() {
+	if !c.Running() {
+		return
+	}
 	now := time.Now()
 	dur := now.Sub(c.start)
 	c.start = now

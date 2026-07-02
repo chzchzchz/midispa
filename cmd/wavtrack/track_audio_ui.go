@@ -32,6 +32,7 @@ type trackAudioModel struct {
 	inputActive          bool
 	segmentList          list.Model
 	segmentListActive    bool
+	fixedView            bool
 }
 
 func NewTrackAudioModel(s *State) *trackAudioModel {
@@ -235,6 +236,8 @@ func (m *trackAudioModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.inputActive = true
 		m.timeInput = newTextInput("MM:SS.mmmm")
 		m.timeInput.Focus()
+	case "f":
+		m.fixedView = !m.fixedView
 	case "i":
 		if m.hasSelectedTrack() {
 			m.segmentListActive = true
@@ -319,6 +322,15 @@ func (m *trackAudioModel) View() tea.View {
 	startTime := m.startTime
 	endTime := m.startTime + m.timeSpan
 
+	// Auto-scroll: if clock is running and position is out of view, scroll to it
+	// Skip if fixedView is enabled
+	clockPos := m.state.clock.Position()
+	if !m.fixedView && m.state.clock.Running() && (clockPos < startTime || clockPos > endTime) {
+		startTime = clockPos
+		endTime = clockPos + m.timeSpan
+		m.startTime = startTime
+	}
+
 	// Render each track
 	rw := renderWindow{
 		start: startTime,
@@ -335,6 +347,9 @@ func (m *trackAudioModel) View() tea.View {
 		m.renderTrackSegments(&sb, &track, i == m.selectedTrackIndex, &rw)
 		sb.WriteString("\n")
 	}
+
+	// Render caret line
+	m.renderCaretLine(&sb, startTime, endTime, &rw)
 
 	// Separator line
 	sb.WriteString("\n")
@@ -463,6 +478,24 @@ func (m *trackAudioModel) renderTrackSegments(sb *strings.Builder, track *Track,
 	}
 }
 
+func (m *trackAudioModel) renderCaretLine(sb *strings.Builder, startTime, endTime time.Duration, rw *renderWindow) {
+	// Indent to align with track content (2 for indicator)
+	sb.WriteString("  ")
+	clockPos := m.state.clock.Position()
+	if clockPos < startTime || clockPos > endTime {
+		sb.WriteString(strings.Repeat(" ", rw.width))
+		sb.WriteString("\n")
+		return
+	}
+	caretPos := int(float64(clockPos-startTime) / float64(rw.Range()) * float64(rw.width))
+	beforeCaret := caretPos
+	afterCaret := rw.width - caretPos - 1
+	sb.WriteString(strings.Repeat(" ", beforeCaret))
+	sb.WriteString("^")
+	sb.WriteString(strings.Repeat(" ", afterCaret))
+	sb.WriteString("\n")
+}
+
 func (m *trackAudioModel) renderStatusLine(startTime, endTime time.Duration) string {
 	// Format times
 	formatDuration := func(d time.Duration) string {
@@ -479,6 +512,11 @@ func (m *trackAudioModel) renderStatusLine(startTime, endTime time.Duration) str
 	status := fmt.Sprintf("Range: %s to %s",
 		formatDuration(startTime),
 		formatDuration(endTime))
+
+	// Add fixed view indicator
+	if m.fixedView {
+		status += " [F]"
+	}
 
 	// Add selected segment info
 	if m.hasSelectedTrack() {
