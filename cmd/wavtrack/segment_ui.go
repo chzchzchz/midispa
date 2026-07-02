@@ -38,6 +38,7 @@ type SegmentListModel struct {
 	list          list.Model
 	nameInput     textinput.Model
 	inputActive   bool
+	deleteConfirm bool
 	selectedIndex int
 	focussed      bool
 }
@@ -120,6 +121,19 @@ func (m *SegmentListModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.deleteConfirm {
+		switch kpStr {
+		case "y":
+			m.commitDelete()
+			m.deleteConfirm = false
+			return m, nil
+		case "n", "esc":
+			m.deleteConfirm = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch kpStr {
 	case "r":
 		m.inputActive = true
@@ -129,6 +143,9 @@ func (m *SegmentListModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.nameInput.SetValue(filepath.Base(segItem.segment.Path))
 			}
 		}
+		return m, nil
+	case "backspace", "delete":
+		m.deleteConfirm = true
 		return m, nil
 	case "enter":
 		// Return the selected segment
@@ -174,6 +191,23 @@ func (m *SegmentListModel) commitRename() {
 	segItem.segment.Path = newPath
 
 	// Refresh the list
+	m.list.SetItems(buildSegmentListItems(m.state, m.track))
+}
+
+func (m *SegmentListModel) commitDelete() {
+	if m.track == nil {
+		return
+	}
+	item := m.list.SelectedItem()
+	if item == nil {
+		return
+	}
+	segItem, ok := item.(segmentListItem)
+	if !ok {
+		return
+	}
+	m.track.RemoveSegment(segItem.segment)
+	m.state.Save()
 	m.list.SetItems(buildSegmentListItems(m.state, m.track))
 }
 
@@ -223,7 +257,10 @@ func (m *SegmentListModel) View() tea.View {
 
 	var inner strings.Builder
 	inner.WriteString(m.list.View())
-	if m.inputActive {
+	if m.deleteConfirm {
+		inner.WriteString("\n")
+		inner.WriteString("Delete segment? (y/n) ")
+	} else if m.inputActive {
 		inner.WriteString("\n")
 		inner.WriteString(m.nameInput.View())
 	}
