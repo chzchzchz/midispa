@@ -5,7 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/xthexder/go-jack"
 
@@ -95,8 +94,7 @@ func (r *Record) record() {
 		case <-r.recCtx.Done():
 			return
 		case buf := <-r.bufc:
-			bb := (*[]float32)(unsafe.Pointer(&buf))
-			r.werr = r.writer(*bb)
+			r.werr = r.writer(audioSampleToFloat32(buf))
 			r.buffers.Put(buf)
 			if r.werr != nil {
 				r.running.Store(false)

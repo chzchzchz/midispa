@@ -109,3 +109,13 @@ func (t *Tracks) Load(p string) error {
 	t.loadUniqueSegments()
 	return nil
 }
+
+func (t *Tracks) Length() SampleTick {
+	var maxEnd SampleTick
+	for _, track := range t.Tracks {
+		for _, ts := range track.Segments {
+			maxEnd = max(maxEnd, ts.Start+ts.Length)
+		}
+	}
+	return maxEnd
+}

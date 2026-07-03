@@ -9,14 +9,15 @@ import (
 )
 
 type State struct {
-	cfg         ProjectConfig
-	running     bool
-	tracks      Tracks
-	Markers     []Marker
-	RecordTrack *Track
-	rec         *Record
-	clock       Clock
-	Play        *Play
+	cfg          ProjectConfig
+	running      bool
+	tracks       Tracks
+	Markers      []Marker
+	RecordTrack  *Track
+	rec          *Record
+	clock        Clock
+	Play         *Play
+	TracksPlayer *TracksPlayer
 }
 
 func NewState(cfg *ProjectConfig) *State {

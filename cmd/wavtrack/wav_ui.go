@@ -14,6 +14,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/chzchzchz/midispa/wav"
 )
 
@@ -24,7 +25,7 @@ type wavUIModel struct {
 	segmentWindow SegmentWindow
 	width         int
 	height        int
-	wavReader     *wav.WavReader
+	wavReader     wav.Reader
 	timeSpan      time.Duration
 	// Max absolute value for each column (for loudness)
 	columnMaxValues []int
@@ -49,16 +50,14 @@ type wavUIModel struct {
 func NewWavUIModelFromTrackSegment(s *State, track *Track, seg *TrackSegment) *wavUIModel {
 	var segment *Segment
 	var sw SegmentWindow
-	if seg != nil && seg.Segment != nil {
+	if seg == nil {
+		return nil
+	}
+	if seg.Segment != nil {
 		segment = seg.Segment
 		sw = seg.SegmentWindow
 	}
-	wavPlayer, err := NewWavPlayer(segment.Path, s.Play)
-	if err != nil {
-		log.Printf("failed to create wav player: %v", err)
-		return nil
-	}
-	return &wavUIModel{
+	m := &wavUIModel{
 		state:         s,
 		track:         track,
 		segment:       segment,
@@ -67,43 +66,49 @@ func NewWavUIModelFromTrackSegment(s *State, track *Track, seg *TrackSegment) *w
 		height:        24,
 		timeSpan:      1 * time.Second,
 		dirty:         true,
-		wavPlayer:     wavPlayer,
 	}
-}
-
-func NewWavUIModelFromSegment(s *State, track *Track, seg *Segment) *wavUIModel {
-	wavPlayer, err := NewWavPlayer(seg.Path, s.Play)
-	if err != nil {
-		log.Printf("failed to create wav player: %v", err)
+	if m.init() != nil {
 		return nil
 	}
-	return &wavUIModel{
-		state:   s,
-		track:   track,
-		segment: seg,
-		segmentWindow: SegmentWindow{
-			Offset: 0,
-			Length: seg.Samples,
-		},
-		width:     80,
-		height:    24,
-		timeSpan:  1 * time.Second,
-		dirty:     true,
-		wavPlayer: wavPlayer,
-	}
+	return m
 }
 
-func (m *wavUIModel) Init() tea.Cmd {
-	if m.segment == nil {
-		return nil
-	}
-	var err error
+func (m *wavUIModel) init() (err error) {
 	m.wavReader, err = wav.OpenReader(m.segment.Path)
 	if err != nil {
-		return nil
+		log.Printf("failed to create load wav reader: %v", err)
+		return err
+	}
+	m.wavPlayer, err = NewWavPlayer(m.segment.Path, m.state.Play)
+	if err != nil {
+		m.wavReader.Close()
+		log.Printf("failed to create wav player: %v", err)
+		return err
 	}
 	return nil
 }
+
+func NewWavUIModelFromSegment(s *State, track *Track, seg *Segment) *wavUIModel {
+	if seg == nil {
+		return nil
+	}
+	m := &wavUIModel{
+		state:         s,
+		track:         track,
+		segment:       seg,
+		segmentWindow: SegmentWindow{Offset: 0, Length: seg.Samples},
+		width:         80,
+		height:        24,
+		timeSpan:      1 * time.Second,
+		dirty:         true,
+	}
+	if m.init() != nil {
+		return nil
+	}
+	return m
+}
+
+func (m *wavUIModel) Init() tea.Cmd { return nil }
 
 func (m *wavUIModel) Close() {
 	m.wavPlayer.Close()
@@ -377,7 +382,7 @@ func (m *wavUIModel) samplesPerColumn() float64 {
 
 // loadColumnData reads only the samples needed for the current view and computes max values per column
 func (m *wavUIModel) loadColumnData() {
-	if m.wavReader == nil || m.segment == nil || m.width <= 0 || m.segmentWindow.Length <= 0 {
+	if m.segment == nil || m.width <= 0 || m.segmentWindow.Length <= 0 {
 		m.columnMaxValues = nil
 		m.columnMinValues = nil
 		m.columnMaxSamples = nil

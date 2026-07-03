@@ -87,6 +87,11 @@ func main() {
 	}
 	defer s.Play.Close()
 
+	if s.TracksPlayer, err = NewTracksPlayer(&s.tracks, s.Play); err != nil {
+		panic("couldn't create tracks player: " + err.Error())
+	}
+	defer s.TracksPlayer.Close()
+
 	if s.rec, err = NewRecord(s.cfg.RecordPort); err != nil {
 		panic("couldn't record:" + err.Error())
 	}

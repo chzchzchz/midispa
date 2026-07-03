@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"log"
@@ -164,6 +165,7 @@ func (m *trackUIModel) confirmTimeInput() bool {
 	input := m.timeInput.Value()
 	newPos := parseTimeInputWithBase(input, m.state.clock.Position())
 	m.state.clock.SetPosition(newPos)
+	m.restartPlaybackAtCurrentPosition()
 	return true
 }
 
@@ -221,29 +223,37 @@ func (m *trackUIModel) togglePlayback() {
 	m.ticking = !m.ticking
 	if m.ticking {
 		m.state.clock.Start()
+		m.state.Play.Start()
+		m.state.TracksPlayer.Play(
+			context.Background(),
+			SampleWindow{
+				start:   m.state.clock.Sample(),
+				samples: int(m.state.tracks.Length()),
+			})
 		m.startRecording()
 	} else {
 		m.state.clock.Stop()
+		m.state.TracksPlayer.Stop()
+		m.state.Play.Stop()
 		m.stopRecording()
 	}
 }
 
-func (m *trackUIModel) positionLeft() {
-	if !m.state.Recording() {
-		m.state.clock.Seek(m.state.clock.Ticks(-5 * time.Second))
+func (m *trackUIModel) restartPlaybackAtCurrentPosition() {
+	if !m.ticking {
+		return
 	}
-}
-
-func (m *trackUIModel) positionRight() {
-	if !m.state.Recording() {
-		m.state.clock.Seek(m.state.clock.Ticks(5 * time.Second))
-	}
-}
-
-func (m *trackUIModel) positionHome() {
-	if !m.state.Recording() {
-		m.state.clock.Reset()
-	}
+	m.state.clock.Stop()
+	m.state.TracksPlayer.Stop()
+	m.state.Play.Stop()
+	m.state.clock.Start()
+	m.state.Play.Start()
+	m.state.TracksPlayer.Play(
+		context.Background(),
+		SampleWindow{
+			start:   m.state.clock.Sample(),
+			samples: int(m.state.tracks.Length()),
+		})
 }
 
 func (m *trackUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -322,11 +332,9 @@ func (m *trackUIModel) handleInputMsg(msg tea.KeyPressMsg) (cmd tea.Cmd, done bo
 	switch m.inputMode {
 	case inputTime:
 		m.timeInput, cmd = m.timeInput.Update(msg)
-		if isEnter {
-			if m.confirmTimeInput() {
-				m.inputMode = inputNone
-				m.timeInput.Reset()
-			}
+		if isEnter && m.confirmTimeInput() {
+			m.inputMode = inputNone
+			m.timeInput.Reset()
 		}
 	case inputNewTrack, inputEditName:
 		m.nameInput, cmd = m.nameInput.Update(msg)
@@ -504,16 +512,23 @@ func (m *trackUIModel) handleAudioKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m *trackUIModel) handlePositionKey(kpStr string) {
+	if m.state.Recording() {
+		return
+	}
 	switch kpStr {
 	case "left":
-		m.positionLeft()
+		m.state.clock.Seek(m.state.clock.Ticks(-5 * time.Second))
 	case "right":
-		m.positionRight()
+		m.state.clock.Seek(m.state.clock.Ticks(5 * time.Second))
 	case "home":
-		m.positionHome()
+		m.state.clock.Reset()
 	case "t":
 		m.startInput(inputTime)
+		return
+	default:
+		return
 	}
+	m.restartPlaybackAtCurrentPosition()
 }
 
 func (m *trackUIModel) handleWavKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

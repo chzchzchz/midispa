@@ -22,6 +22,10 @@ type TrackSegment struct {
 	SegmentWindow `json:",inline"`
 }
 
+func (ts *TrackSegment) Contains(t SampleTick) bool {
+	return t >= ts.SegmentWindow.Start && t < (ts.SegmentWindow.Start+ts.SegmentWindow.Length)
+}
+
 func (t *Track) AddSegment(s *Segment) {
 	t.segmentStore = append(t.segmentStore, s)
 	t.SegmentCount++

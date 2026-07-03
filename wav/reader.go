@@ -8,15 +8,50 @@ import (
 	gowav "github.com/go-audio/wav"
 )
 
-type WavReader struct {
+type reader struct {
 	dec      *gowav.Decoder
 	f        *os.File
 	format   *audio.Format
 	depth    int
 	pcmStart int64
+	pos      int
 }
 
-func OpenReader(path string) (*WavReader, error) {
+type Reader interface {
+	Read(buf []int) (int, error)
+	Seek(samples, whence int) error
+	Close() error
+}
+
+type sliceReader struct {
+	s   []int
+	pos int
+}
+
+func NewSliceReader(s []int) Reader { return &sliceReader{s: s} }
+
+func (sr *sliceReader) Seek(off, whence int) error {
+	if whence != io.SeekStart {
+		panic("unsupported whence")
+	}
+	sr.pos = off
+	return nil
+}
+
+func (sr *sliceReader) Read(buf []int) (int, error) {
+	end := min(sr.pos+len(buf), len(sr.s))
+	n := end - sr.pos
+	copy(buf, sr.s[sr.pos:end])
+	sr.pos = end
+	if sr.pos == len(sr.s) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func (sr *sliceReader) Close() error { return nil }
+
+func OpenReader(path string) (Reader, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -36,7 +71,7 @@ func OpenReader(path string) (*WavReader, error) {
 		f.Close()
 		return nil, err
 	}
-	return &WavReader{
+	return &reader{
 		dec:      dec,
 		f:        f,
 		format:   dec.Format(),
@@ -45,7 +80,7 @@ func OpenReader(path string) (*WavReader, error) {
 	}, nil
 }
 
-func (r *WavReader) Read(buf []int) (int, error) {
+func (r *reader) Read(buf []int) (int, error) {
 	ibuf := &audio.IntBuffer{
 		Data:           buf,
 		Format:         r.format,
@@ -57,10 +92,15 @@ func (r *WavReader) Read(buf []int) (int, error) {
 			buf[i] = 0
 		}
 	}
+	r.pos += n
 	return n, err
 }
 
-func (r *WavReader) Seek(samples, whence int) error {
+func (r *reader) Seek(samples, whence int) error {
+	if whence == io.SeekStart && samples == r.pos {
+		// No need to rewind/seek.
+		return nil
+	}
 	// Rewind is needed because of the way the decoder handles buffering.
 	if err := r.dec.Rewind(); err != nil {
 		return err
@@ -70,8 +110,6 @@ func (r *WavReader) Seek(samples, whence int) error {
 	switch whence {
 	case io.SeekStart:
 		byteOffset += r.pcmStart
-	case io.SeekEnd:
-		byteOffset += r.pcmStart + int64(r.dec.PCMLen())
 	default:
 		panic("bad whence")
 	}
@@ -79,11 +117,9 @@ func (r *WavReader) Seek(samples, whence int) error {
 	return err
 }
 
-func (r *WavReader) Samples() int {
+func (r *reader) Samples() int {
 	bps := (r.depth-1)/8 + 1
 	return int(r.dec.PCMLen() / int64(bps))
 }
 
-func (r *WavReader) Close() {
-	r.f.Close()
-}
+func (r *reader) Close() error { return r.f.Close() }

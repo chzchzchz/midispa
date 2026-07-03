@@ -46,12 +46,6 @@ func (p *Play) Running() bool { return p.running.Load() }
 
 func (p *Play) Start() { p.running.Store(true) }
 
-func clearBuffer(in []jack.AudioSample) {
-	for i := 0; i < len(in); i++ {
-		in[i] = 0.0
-	}
-}
-
 func (p *Play) callback(in []jack.AudioSample) int {
 	if !p.running.Load() {
 		// Only notify if there is a reader waiting.
