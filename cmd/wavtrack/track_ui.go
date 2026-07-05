@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ const (
 	inputEditName
 	inputSaveConfirm
 	inputTime
+	inputGain
 )
 
 type focusArea int
@@ -41,6 +43,7 @@ type trackUIModel struct {
 	trackList      *trackListModel
 	nameInput      textinput.Model
 	timeInput      textinput.Model
+	gainInput textinput.Model
 	inputMode      inputMode
 	editIndex      int
 	ticking        bool
@@ -141,6 +144,13 @@ func (m *trackUIModel) startInput(mode inputMode) {
 		m.timeInput = newTextInput("MM:SS.mmmm")
 		m.timeInput.SetValue(m.formatPosition())
 		m.timeInput.Focus()
+	case inputGain:
+		m.gainInput = newTextInput("Enter gain value")
+		selectedTrack := m.trackList.getSelectedTrack()
+		if selectedTrack != nil {
+			m.gainInput.SetValue(fmt.Sprintf("%.2f", selectedTrack.Gain))
+		}
+		m.gainInput.Focus()
 	}
 }
 
@@ -169,10 +179,24 @@ func (m *trackUIModel) confirmTimeInput() bool {
 	return true
 }
 
+func (m *trackUIModel) confirmGainInput() bool {
+	input := m.gainInput.Value()
+	gain, err := strconv.ParseFloat(input, 32)
+	if err != nil || gain < 0.0 {
+		return false
+	}
+	selectedTrack := m.trackList.getSelectedTrack()
+	if selectedTrack != nil {
+		selectedTrack.Gain = float32(gain)
+	}
+	return true
+}
+
 func (m *trackUIModel) cancelInput() {
 	m.inputMode = inputNone
 	m.nameInput.Reset()
 	m.timeInput.Reset()
+	m.gainInput.Reset()
 }
 
 func (m *trackUIModel) openSegmentList() {
@@ -341,6 +365,14 @@ func (m *trackUIModel) handleInputMsg(msg tea.KeyPressMsg) (cmd tea.Cmd, done bo
 		if isEnter {
 			m.confirmInput()
 		}
+	case inputGain:
+		m.gainInput, cmd = m.gainInput.Update(msg)
+		if isEnter {
+			if m.confirmGainInput() {
+				m.inputMode = inputNone
+				m.gainInput.Reset()
+			}
+		}
 	case inputSaveConfirm:
 		switch msg.String() {
 		case "y":
@@ -406,6 +438,8 @@ func (m *trackUIModel) renderPositionArea(sb *strings.Builder) {
 		sb.WriteString(posBorder.Render(m.timeInput.View()))
 	case inputEditName:
 		sb.WriteString(posBorder.Render(m.nameInput.View()))
+	case inputGain:
+		sb.WriteString(posBorder.Render(m.gainInput.View()))
 	default:
 		playIcon := "[]"
 		if m.ticking {
@@ -496,6 +530,8 @@ func (m *trackUIModel) handleTracksKey(msg tea.KeyPressMsg) {
 		m.trackList.toggleMute()
 	case "n":
 		m.startInput(inputNewTrack)
+	case "g":
+		m.startInput(inputGain)
 	default:
 		m.trackList.Update(msg)
 	}

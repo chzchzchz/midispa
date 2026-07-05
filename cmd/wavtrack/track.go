@@ -4,6 +4,7 @@ type Track struct {
 	Name         string         `json:"name"`
 	Segments     []TrackSegment `json:"segments"`
 	Mute         bool           `json:"mute"`
+	Gain	     float32	    `json:"gain"`
 	SegmentCount int            `json:"segment_count"`
 	segmentStore []*Segment
 }

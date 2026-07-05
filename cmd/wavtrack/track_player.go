@@ -78,12 +78,18 @@ func (tp *TrackPlayer) Play(ctx context.Context, w SampleWindow) {
 }
 
 func (tp *TrackPlayer) read(outBuf []jack.AudioSample, pos SampleTick) error {
+	if tp.track.Mute {
+		clearBuffer(outBuf)
+		return nil
+	}
+
 	// This function is kind of complicated, it might be better to build up
 	// a list of wavs and gaps and run through that instead of the binsearch stuff.
 	remaining := int(tp.endPos - pos)
 	segs := tp.track.Segments
 	outIdx := 0
 
+	gain := tp.track.Gain / float32(1 << 15)
 	for remaining > 0 && outIdx < len(outBuf) {
 		segIdx := tp.firstSegmentAtOrAfter(pos)
 		tp.lastSegIdx = segIdx
@@ -98,9 +104,7 @@ func (tp *TrackPlayer) read(outBuf []jack.AudioSample, pos SampleTick) error {
 		// Check if no more segments to read.
 		if segIdx < 0 || (holdsPosTs == nil && segIdx >= len(segs)) {
 			n := min(len(outBuf)-outIdx, remaining)
-			for i := 0; i < n; i++ {
-				outBuf[outIdx+i] = 0
-			}
+			clearBuffer(outBuf[outIdx:outIdx+n])
 			outIdx += n
 			pos += SampleTick(n)
 			remaining -= n
@@ -119,9 +123,7 @@ func (tp *TrackPlayer) read(outBuf []jack.AudioSample, pos SampleTick) error {
 			// Gap before segment starts
 			gap := int(segs[segIdx].Start - pos)
 			n := min(len(outBuf)-outIdx, min(remaining, gap))
-			for i := 0; i < n; i++ {
-				outBuf[outIdx+i] = 0
-			}
+			clearBuffer(outBuf[outIdx:outIdx+n])
 			outIdx += n
 			pos += SampleTick(n)
 			remaining -= n
@@ -142,7 +144,7 @@ func (tp *TrackPlayer) read(outBuf []jack.AudioSample, pos SampleTick) error {
 		}
 
 		for i := 0; i < n; i++ {
-			outBuf[outIdx+i] = jack.AudioSample(float32(tp.inBuf[i]) / float32(1<<15))
+			outBuf[outIdx+i] = jack.AudioSample(float32(tp.inBuf[i]) * gain)
 		}
 
 		outIdx += n
