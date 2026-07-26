@@ -74,6 +74,7 @@ func applyJitterWith(interval, randpct float64, rng *rand.Rand) float64 {
 func (s *Sequencer) ClockWriter(randpct float64) {
 	evClock := alsa.MakeEvent([]byte{midi.Clock})
 	nextClock := time.Now()
+	var nextBeatClock time.Time
 	for {
 		err := s.aseq.Write(evClock)
 		if err != nil {
@@ -87,15 +88,29 @@ func (s *Sequencer) ClockWriter(randpct float64) {
 			}
 			<-s.contc
 			nextClock = time.Now()
+			nextBeatClock = time.Time{}
 			s.pulseInBeat = 0
 		}
 
-		interval := computeInterval(float64(nextDur), s.pulseInBeat, s.swingPct)
-		interval = applyJitter(interval, randpct)
-		nextClock = nextClock.Add(time.Duration(interval))
+		if s.pulseInBeat == ppqn-1 && !nextBeatClock.IsZero() {
+			// Next beat's first clock is next midi clock message.
+			// Must wait until nextBeatClock before sending first clock of next beat.
+			nextClock = nextBeatClock
+			nextBeatClock = nextBeatClock.Add(ppqn * nextDur)
+		} else {
+			interval := computeInterval(float64(nextDur), s.pulseInBeat, s.swingPct)
+			interval = applyJitter(interval, randpct)
+			nextClock = nextClock.Add(time.Duration(interval))
+		}
 
 		time.Sleep(time.Until(nextClock))
+
 		s.pulseInBeat = (s.pulseInBeat + 1) % ppqn
+		if s.pulseInBeat == 0 && nextBeatClock.IsZero() {
+			// This is the start of beat, before sending midi clock.
+			// Start of the next beat will therefore be ppqn * nextDur.
+			nextBeatClock = nextClock.Add(ppqn * nextDur)
+		}
 	}
 }
 
