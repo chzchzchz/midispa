@@ -14,11 +14,14 @@ import (
 
 type Sequencer struct {
 	curBpmInt int
-	clockDur  int64
-	contc     chan struct{}
-	outc      chan alsa.SeqEvent
-	aseq      *alsa.Seq
-	wg        sync.WaitGroup
+	// clockDur is the duration between PPQN ticks
+	clockDur    int64
+	contc       chan struct{}
+	outc        chan alsa.SeqEvent
+	aseq        *alsa.Seq
+	wg          sync.WaitGroup
+	swingPct    float64
+	pulseInBeat int
 }
 
 func (s *Sequencer) UpdateClock() {
@@ -31,8 +34,44 @@ func (s *Sequencer) UpdateClock() {
 	log.Printf("midiclock output bpm = %v\n", float64(s.curBpmInt)/64.0)
 }
 
+const ppqn = 24
+
+// computeInterval returns the swing-shaped duration of the next per-pulse
+// slot for a given beat position. With swingPct = 50 every slot equals
+// baseInterval (straight time); with swingPct > 50 the on-beat halves
+// (pulses 0..11) are stretched and the off-beat halves (12..23) shrink,
+// so pulse 12 lands at swingPct % of the beat.
+func computeInterval(baseInterval float64, pulseInBeat int, swingPct float64) float64 {
+	if pulseInBeat < ppqn/2 {
+		return baseInterval * swingPct / 50.0
+	}
+	return baseInterval * (100.0 - swingPct) / 50.0
+}
+
+// applyJitter scales an interval by ±randpct%, matching the prior
+// per-pulse jitter shape in midiclock. A nil rng falls back to the
+// package-level rand source so callers without their own generator
+// (i.e. the live ClockWriter) still work.
+func applyJitter(interval, randpct float64) float64 {
+	return applyJitterWith(interval, randpct, nil)
+}
+
+// applyJitterWith is applyJitter with an explicit *rand.Rand for tests.
+func applyJitterWith(interval, randpct float64, rng *rand.Rand) float64 {
+	if randpct != 0 {
+		randCoef := randpct / 100.0
+		var r float64
+		if rng != nil {
+			r = rng.Float64()
+		} else {
+			r = rand.Float64()
+		}
+		return interval * (1.0 + randCoef*(2.0*r-1.0))
+	}
+	return interval
+}
+
 func (s *Sequencer) ClockWriter(randpct float64) {
-	randCoef := randpct / 100.0
 	evClock := alsa.MakeEvent([]byte{midi.Clock})
 	nextClock := time.Now()
 	for {
@@ -48,14 +87,15 @@ func (s *Sequencer) ClockWriter(randpct float64) {
 			}
 			<-s.contc
 			nextClock = time.Now()
+			s.pulseInBeat = 0
 		}
 
-		swing := randCoef * (2.0 * (rand.Float64() - 0.5))
-		nextDurSwing := time.Duration(swing * float64(nextDur))
-		nextClockSwing := nextClock.Add(nextDurSwing)
-		nextClock = nextClock.Add(nextDur)
-		//fmt.Println(nextDur, nextDurSwing)
-		time.Sleep(time.Until(nextClockSwing))
+		interval := computeInterval(float64(nextDur), s.pulseInBeat, s.swingPct)
+		interval = applyJitter(interval, randpct)
+		nextClock = nextClock.Add(time.Duration(interval))
+
+		time.Sleep(time.Until(nextClock))
+		s.pulseInBeat = (s.pulseInBeat + 1) % ppqn
 	}
 }
 
@@ -108,17 +148,28 @@ func (s *Sequencer) Read() {
 			} else if cc == CcBpmMsb {
 				s.curBpmInt = (s.curBpmInt & 0x7f) | (int(v) << 7)
 				s.UpdateClock()
+			} else if cc == CcSwing {
+				s.swingPct = ccSwingToSwingPct(v)
+				log.Printf("midiclock swing = %v%%\n", int(s.swingPct))
 			}
 		}
 	}
 }
 
-func NewClockSequencer(aseq *alsa.Seq, bpmFlag *float64, randPct float64) *Sequencer {
+func ccSwingToSwingPct(v byte) float64 {
+	s := 50.0 * (1.0 + (float64(int(v)-64))/64.0)
+	s = max(minSwingPct, s)
+	s = min(maxSwingPct, s)
+	return s
+}
+
+func NewClockSequencer(aseq *alsa.Seq, bpmFlag *float64, swingPct, randPct float64) *Sequencer {
 	s := &Sequencer{
 		aseq:      aseq,
 		curBpmInt: int(*bpmFlag * 64.0),
 		contc:     make(chan struct{}, 1),
 		outc:      make(chan alsa.SeqEvent, 16),
+		swingPct:  swingPct,
 	}
 
 	// Compute input clock message intervals.
