@@ -58,12 +58,14 @@ type FilterSeq struct {
 	bcast   *EvWriter
 	routes  [16]*EvWriter
 	routing int
+	policy  Policy
 }
 
-func newFilterSeq(aseq *alsa.Seq) *FilterSeq {
+func newFilterSeq(aseq *alsa.Seq, p Policy) *FilterSeq {
 	return &FilterSeq{
-		aseq:  aseq,
-		bcast: makeWriter(aseq, alsa.SubsSeqAddr),
+		aseq:   aseq,
+		bcast:  makeWriter(aseq, alsa.SubsSeqAddr),
+		policy: p,
 	}
 }
 
@@ -104,7 +106,7 @@ func (f *FilterSeq) handleEvent() error {
 	} else if isRouteSysEx(ev.Data) {
 		f.handleRoute(ev)
 		return nil
-	} else if handlePolicy(ev.Data) {
+	} else if f.policy.handle(ev.Data) {
 		return nil
 	}
 	outc := f.bcast.outc
@@ -149,8 +151,8 @@ func main() {
 	}
 
 	log.Printf("%q: %+v", *cnFlag, aseq.SeqAddr)
-	initPolicy(*policyFlag, aseq.NewWriter(alsa.SubsSeqAddr))
-	f := newFilterSeq(aseq)
+	policy := initPolicy(*policyFlag, aseq.NewWriter(alsa.SubsSeqAddr))
+	f := newFilterSeq(aseq, policy)
 	defer f.Close()
 	for {
 		if err := f.handleEvent(); err != nil {
