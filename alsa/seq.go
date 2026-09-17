@@ -23,6 +23,11 @@ import (
 var errExpectedSysEx = errors.New("expected sysex")
 
 const (
+	midiDataMax  = 127
+	midiDataBits = 7
+	pitchCenter  = 8192
+	pitchMax     = 16383
+
 	EvPortSubscribed   = 0
 	EvPortUnsubscribed = 1
 )
@@ -216,6 +221,28 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 			ret.Data = []byte{
 				midi.MakePgm(int(ctrl.channel)),
 				byte(ctrl.value)}
+		case C.SND_SEQ_EVENT_KEYPRESS:
+			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+			ret.Data = []byte{
+				midi.KeyAftertouch | byte(note.channel),
+				byte(note.note),
+				byte(note.velocity)}
+		case C.SND_SEQ_EVENT_CHANPRESS:
+			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+			if ctrl.value < 0 || ctrl.value > midiDataMax {
+				return ret, fmt.Errorf("invalid channel pressure: %d", ctrl.value)
+			}
+			ret.Data = []byte{midi.ChannelAftertouch | byte(ctrl.channel), byte(ctrl.value)}
+		case C.SND_SEQ_EVENT_PITCHBEND:
+			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+			if ctrl.value < -pitchCenter || ctrl.value > pitchMax-pitchCenter {
+				return ret, fmt.Errorf("invalid pitch bend: %d", ctrl.value)
+			}
+			value := int(ctrl.value) + pitchCenter
+			ret.Data = []byte{
+				midi.Pitch | byte(ctrl.channel),
+				byte(value & midiDataMax),
+				byte(value >> midiDataBits)}
 		case C.SND_SEQ_EVENT_NOTEON:
 			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 			ret.Data = []byte{
@@ -360,9 +387,34 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 		event._type = C.SND_SEQ_EVENT_SONGSEL
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		ctrl.value = C.int(ev.Data[1])
+	case midi.ChannelAftertouch:
+		if len(ev.Data) != 2 {
+			return fmt.Errorf("bad size for channel aftertouch: %d", len(ev.Data))
+		}
+		if ev.Data[1] > midiDataMax {
+			return fmt.Errorf("invalid channel pressure: %d", ev.Data[1])
+		}
+		event._type = C.SND_SEQ_EVENT_CHANPRESS
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
+		ctrl.value = C.int(ev.Data[1])
+	case midi.Pitch:
+		if len(ev.Data) != 3 {
+			return fmt.Errorf("bad size for pitch bend: %d", len(ev.Data))
+		}
+		if ev.Data[1] > midiDataMax || ev.Data[2] > midiDataMax {
+			return fmt.Errorf("invalid pitch bend: %d %d", ev.Data[1], ev.Data[2])
+		}
+		event._type = C.SND_SEQ_EVENT_PITCHBEND
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
+		ctrl.value = C.int(int(ev.Data[1])|int(ev.Data[2])<<midiDataBits) - pitchCenter
 	case midi.KeyAftertouch:
 		if len(ev.Data) != 3 {
-			panic("bad size for aftertouch")
+			return fmt.Errorf("bad size for key aftertouch: %d", len(ev.Data))
+		}
+		if ev.Data[1] > midiDataMax || ev.Data[2] > midiDataMax {
+			return fmt.Errorf("invalid key aftertouch: %d %d", ev.Data[1], ev.Data[2])
 		}
 		event._type = C.SND_SEQ_EVENT_KEYPRESS
 		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
