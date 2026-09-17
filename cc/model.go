@@ -592,6 +592,43 @@ type MidiMix struct {
 	RecArm8 Control `note:"24"`
 }
 
+type ProVSMini struct {
+	Modulation       Control `cc:"1"`   // 0-127
+	Portamento       Control `cc:"5"`   // 0-127
+	VoiceAWave       Control `cc:"24"`  // 0-127
+	VoiceBWave       Control `cc:"25"`  // 0-127
+	VoiceCWave       Control `cc:"26"`  // 0-127
+	VoiceDWave       Control `cc:"27"`  // 0-127
+	LFO2Amount       Control `cc:"28"`  // 0-99  (Pitch)
+	FilterEnvAmount  Control `cc:"47"`  // 0-127
+	LFO1Waveform     Control `cc:"54"`  // 0-127 (triangle, square, saw)
+	LFO2Waveform     Control `cc:"55"`  // 0-127 (triangle, square, saw)
+	LFO1Destination  Control `cc:"56"`  // 0-127 (VCF OSC)
+	LFO1Amount       Control `cc:"70"`  // 0-99  (VCF)
+	FilterResonance  Control `cc:"71"`  // 0-99
+	LFO1Rate         Control `cc:"72"`  // 0-99
+	LFO2Rate         Control `cc:"73"`  // 0-99
+	FilterCutoff     Control `cc:"74"`  // 0-99
+	AmpEnvAttack     Control `cc:"81"`  // 0-99
+	AmpEnvDecay      Control `cc:"82"`  // 0-99
+	AmpEnvSustain    Control `cc:"83"`  // 0-99
+	AmpEnvRelease    Control `cc:"84"`  // 0-99
+	FilterEnvAttack  Control `cc:"85"`  // 0-99
+	FilterEnvDecay   Control `cc:"86"`  // 0-99
+	FilterEnvSustain Control `cc:"87"`  // 0-99
+	FilterEnvRelease Control `cc:"88"`  // 0-99
+	ChorusDepth      Control `cc:"91"`  // 0-99
+	ChorusRate       Control `cc:"92"`  // 0-99
+	VoiceAFine       Control `cc:"111"` // 0-99
+	VoiceBFine       Control `cc:"112"` // 0-99
+	VoiceCFine       Control `cc:"113"` // 0-99
+	VoiceDFine       Control `cc:"114"` // 0-99
+	VoiceACoarse     Control `cc:"115"` // 0-99
+	VoiceBCoarse     Control `cc:"116"` // 0-99
+	VoiceCCoarse     Control `cc:"117"` // 0-99
+	VoiceDCoarse     Control `cc:"118"` // 0-99
+}
+
 type Model struct {
 	Model            string
 	*GMController    `json:"GMController,omitempty"`
@@ -606,6 +643,7 @@ type Model struct {
 	*VolcaKick       `json:"VolcaKick,omitempty"`
 	*VolcaDrum       `json:"VolcaDrum,omitempty"`
 	*UnoSynth        `json:"UnoSynth,omitempty"`
+	*ProVSMini       `json:"ProVSMini,omitempty"`
 }
 
 func (m *Model) MidiParams() interface{} {
@@ -638,6 +676,8 @@ func (m *Model) MidiParams() interface{} {
 		return m.UnoSynth
 	case "WorldeEasyControl9":
 		return &WorldeEasyControl9{}
+	case "Pro VS Mini":
+		return m.ProVSMini
 	default:
 		panic("unknown model " + m.Model)
 	}
