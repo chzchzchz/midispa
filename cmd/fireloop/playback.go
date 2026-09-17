@@ -59,7 +59,7 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 	for {
 		if p.songBeat == 0 {
 			ev := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{0xfa}}
-			if err := aseq.WritePort(ev, 1); err != nil {
+			if err := aseq.WritePort(ev, syncPort.Port); err != nil {
 				return err
 			}
 		}
@@ -109,7 +109,7 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 		case <-time.After(waitUntil):
 		case <-ctx.Done():
 			ev := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{0xfc}}
-			return aseq.WritePort(ev, 1)
+			return aseq.WritePort(ev, syncPort.Port)
 		}
 	}
 }

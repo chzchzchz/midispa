@@ -33,7 +33,8 @@ const (
 )
 
 type Seq struct {
-	seq *C.snd_seq_t
+	seq   *C.snd_seq_t
+	ports map[int]struct{}
 	SeqAddr
 }
 
@@ -54,11 +55,14 @@ func MakeEvent(data []byte) SeqEvent {
 }
 
 func (a *Seq) Close() error {
-	if err := C.snd_seq_close(a.seq); err != 0 {
-		return snderr2error(err)
+	if a.seq == nil {
+		return nil
 	}
-	return nil
-
+	err := snderr2error(C.snd_seq_close(a.seq))
+	a.seq = nil
+	a.ports = nil
+	a.Port = -1
+	return err
 }
 
 func (ev *SeqEvent) IsControl() bool {
@@ -84,16 +88,17 @@ func snderr2error(err C.int) error {
 }
 
 func OpenSeq(clientName string) (a *Seq, err error) {
-	a = &Seq{}
+	a = &Seq{SeqAddr: SeqAddr{Port: -1}, ports: make(map[int]struct{})}
 
 	seqname := C.CString("default")
 	defer C.free(unsafe.Pointer(seqname))
 	if err := C.snd_seq_open(&a.seq, seqname, C.SND_SEQ_OPEN_DUPLEX, 0); err < 0 {
 		return nil, snderr2error(err)
 	}
+	opened := a
 	defer func() {
 		if err != nil {
-			a.Close()
+			opened.Close()
 		}
 	}()
 	cname := C.CString(clientName)
@@ -101,9 +106,9 @@ func OpenSeq(clientName string) (a *Seq, err error) {
 	if err := C.snd_seq_set_client_name(a.seq, cname); err < 0 {
 		return nil, snderr2error(err)
 	}
-	c, err := C.snd_seq_client_id(a.seq)
-	if err != nil {
-		return nil, err
+	c := C.snd_seq_client_id(a.seq)
+	if c < 0 {
+		return nil, snderr2error(c)
 	}
 	a.Client = int(c)
 	if err = a.CreatePort(clientName); err != nil {
@@ -113,9 +118,17 @@ func OpenSeq(clientName string) (a *Seq, err error) {
 }
 
 func (a *Seq) CreatePort(name string) error {
+	_, err := a.CreatePortAddr(name)
+	return err
+}
+
+func (a *Seq) CreatePortAddr(name string) (SeqAddr, error) {
+	if a.seq == nil {
+		return SeqAddr{}, errors.New("sequencer is closed")
+	}
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
-	if err := C.snd_seq_create_simple_port(a.seq, cname,
+	port := C.snd_seq_create_simple_port(a.seq, cname,
 		C.SND_SEQ_PORT_CAP_DUPLEX|
 			C.SND_SEQ_PORT_CAP_READ|
 			C.SND_SEQ_PORT_CAP_SUBS_READ|
@@ -123,30 +136,88 @@ func (a *Seq) CreatePort(name string) error {
 			C.SND_SEQ_PORT_CAP_SUBS_WRITE,
 		C.SND_SEQ_PORT_TYPE_MIDI_GENERIC|
 			C.SND_SEQ_PORT_TYPE_PORT|
-			C.SND_SEQ_PORT_TYPE_APPLICATION); err < 0 {
-		return snderr2error(err)
+			C.SND_SEQ_PORT_TYPE_APPLICATION)
+	if port < 0 {
+		return SeqAddr{}, snderr2error(port)
+	}
+	addr := SeqAddr{a.Client, int(port)}
+	a.ports[addr.Port] = struct{}{}
+	if a.Port < 0 {
+		a.SeqAddr = addr
+	}
+	return addr, nil
+}
+
+func (a *Seq) localPort(addr SeqAddr) error {
+	if a.seq == nil {
+		return errors.New("sequencer is closed")
+	}
+	if _, ok := a.ports[addr.Port]; !ok || addr.Client != a.Client {
+		return fmt.Errorf("port %v is not owned by this sequencer", addr)
+	}
+	return nil
+}
+
+func (a *Seq) DeletePort(addr SeqAddr) error {
+	if err := a.localPort(addr); err != nil {
+		return err
+	}
+	if err := snderr2error(C.snd_seq_delete_simple_port(a.seq, C.int(addr.Port))); err != nil {
+		return err
+	}
+	delete(a.ports, addr.Port)
+	if a.Port == addr.Port {
+		a.Port = -1
 	}
 	return nil
 }
 
 func (a *Seq) OpenPort(client, port int) error {
-	return snderr2error(C.snd_seq_connect_from(a.seq, 0, C.int(client), C.int(port)))
+	return a.OpenPortRead(SeqAddr{client, port})
 }
 
 func (a *Seq) OpenPortRead(sa SeqAddr) error {
-	return snderr2error(C.snd_seq_connect_from(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+	return a.OpenPortReadAt(a.SeqAddr, sa)
+}
+
+func (a *Seq) OpenPortReadAt(local, remote SeqAddr) error {
+	if err := a.localPort(local); err != nil {
+		return err
+	}
+	return snderr2error(C.snd_seq_connect_from(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
 func (a *Seq) OpenPortWrite(sa SeqAddr) error {
-	return snderr2error(C.snd_seq_connect_to(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+	return a.OpenPortWriteAt(a.SeqAddr, sa)
+}
+
+func (a *Seq) OpenPortWriteAt(local, remote SeqAddr) error {
+	if err := a.localPort(local); err != nil {
+		return err
+	}
+	return snderr2error(C.snd_seq_connect_to(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
 func (a *Seq) ClosePortWrite(sa SeqAddr) error {
-	return snderr2error(C.snd_seq_disconnect_to(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+	return a.ClosePortWriteAt(a.SeqAddr, sa)
+}
+
+func (a *Seq) ClosePortWriteAt(local, remote SeqAddr) error {
+	if err := a.localPort(local); err != nil {
+		return err
+	}
+	return snderr2error(C.snd_seq_disconnect_to(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
 func (a *Seq) ClosePortRead(sa SeqAddr) error {
-	return snderr2error(C.snd_seq_disconnect_from(a.seq, 0, C.int(sa.Client), C.int(sa.Port)))
+	return a.ClosePortReadAt(a.SeqAddr, sa)
+}
+
+func (a *Seq) ClosePortReadAt(local, remote SeqAddr) error {
+	if err := a.localPort(local); err != nil {
+		return err
+	}
+	return snderr2error(C.snd_seq_disconnect_from(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
 func (a *Seq) OpenPortName(portName string) error {
@@ -290,10 +361,13 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 }
 
 func (a *Seq) Write(ev SeqEvent) error {
-	return a.WritePort(ev, 0)
+	return a.WritePort(ev, a.Port)
 }
 
 func (a *Seq) WritePort(ev SeqEvent, port int) error {
+	if err := a.localPort(SeqAddr{a.Client, port}); err != nil {
+		return err
+	}
 	if len(ev.Data) == 0 {
 		return nil
 	}

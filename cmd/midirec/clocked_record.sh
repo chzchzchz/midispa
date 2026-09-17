@@ -29,8 +29,31 @@ sleep 1s
 pids="$! $pids"
 
 # connect clock to external midi drum machine
-clock_port=`aconnect -l | grep midiclock | cut -f1 -d: | awk ' {print $2 } ' | head -n1`
+clock_port=$(aconnect -l | awk -F "'" '
+/^client / {
+	client = $1
+	sub(/^client /, "", client)
+	sub(/:.*/, "", client)
+	is_clock = ($2 == "midiclock")
+}
+is_clock && /^[[:space:]]+[0-9]+[[:space:]]/ {
+	name = $2
+	sub(/[[:space:]]+$/, "", name)
+	if (name == "midiclock") {
+		port = $1
+		gsub(/[[:space:]]/, "", port)
+		address = client ":" port
+		matches++
+	}
+}
+END {
+	if (matches != 1) {
+		print "expected exactly one midiclock port" > "/dev/stderr"
+		exit 1
+	}
+	print address
+}')
 midi_port=`aconnect -l | grep MIDI4x4 | cut -f1 -d: | awk ' { print $2 } ' | head -n1`
-aconnect $clock_port:0 $midi_port:2
+aconnect "$clock_port" "$midi_port:2"
 
 wait $pids
