@@ -1,5 +1,13 @@
 package midi
 
+const (
+	DataBits        = 7
+	DataMax         = (1 << DataBits) - 1
+	SongPositionMax = (1 << (2 * DataBits)) - 1
+	PitchCenter     = 8192
+	PitchMax        = 16383
+)
+
 // First byte of a message.
 const (
 	SysEx             byte = 0xf0

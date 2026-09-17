@@ -2,6 +2,7 @@ package alsa
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -264,6 +265,21 @@ func TestDirectionChecksAndRollback(t *testing.T) {
 		t.Error("first failure created output subscription")
 	}
 }
+const (
+	alsaSongPosition       = 20
+	alsaSongSelect         = 21
+	alsaQuarterFrame       = 22
+	alsaStart              = 30
+	alsaContinue           = 31
+	alsaStop               = 32
+	alsaClock              = 36
+	alsaTick               = 37
+	alsaTuneRequest        = 40
+	alsaReset              = 41
+	alsaSensing            = 42
+	alsaDirectQueue        = 253
+	alsaControlValueOffset = 8
+)
 
 func TestExpressionRoundTrip(t *testing.T) {
 	sender, receiver := openTestSeq(t), openTestSeq(t)
@@ -536,4 +552,146 @@ func TestSeqPortOwnership(t *testing.T) {
 		t.Fatal("subscription on closed sequencer accepted")
 	}
 	seqOK(t, owner.Close())
+}
+
+func TestSystemMessageRoundTrip(t *testing.T) {
+	cases := []struct {
+		data      []byte
+		eventType int
+		value     uint32
+	}{
+		{[]byte{midi.SongPosition, 0, 0}, alsaSongPosition, 0},
+		{[]byte{midi.SongPosition, 1, 0}, alsaSongPosition, 1},
+		{[]byte{midi.SongPosition, 0, 64}, alsaSongPosition, 8192},
+		{[]byte{midi.SongPosition, 127, 127}, alsaSongPosition, 16383},
+		{[]byte{midi.SongSelect, 0}, alsaSongSelect, 0},
+		{[]byte{midi.SongSelect, 127}, alsaSongSelect, 127},
+	}
+	for value := uint32(0); value <= midi.DataMax; value++ {
+		cases = append(cases, struct {
+			data      []byte
+			eventType int
+			value     uint32
+		}{[]byte{midi.QuarterFrame, byte(value)}, alsaQuarterFrame, value})
+	}
+	for _, test := range cases {
+		t.Run(fmt.Sprintf("%x", test.data), func(t *testing.T) {
+			source, destination := SeqAddr{12, 3}, SeqAddr{45, 6}
+			event, err := encodeEvent(SeqEvent{destination, test.data}, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if int(event._type) != test.eventType {
+				t.Fatalf("event type = %d, want %d", event._type, test.eventType)
+			}
+			if value := binary.NativeEndian.Uint32(event.data[alsaControlValueOffset:]); value != test.value {
+				t.Fatalf("ALSA control value = %d, want %d", value, test.value)
+			}
+			if int(event.dest.client) != destination.Client || int(event.dest.port) != destination.Port || event.queue != alsaDirectQueue {
+				t.Fatal("destination or direct queue changed")
+			}
+			decoded, err := decodeSeqEvent(event)
+			if err != nil || !bytes.Equal(decoded.Data, test.data) || decoded.SeqAddr != source {
+				t.Fatalf("decoded = %+v, error = %v, want %x from %+v", decoded, err, test.data, source)
+			}
+		})
+	}
+}
+
+func TestTransportRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		status    byte
+		eventType int
+	}{
+		{midi.Clock, alsaClock},
+		{midi.Start, alsaStart},
+		{midi.Continue, alsaContinue},
+		{midi.Stop, alsaStop},
+	} {
+		t.Run(fmt.Sprintf("%x", test.status), func(t *testing.T) {
+			event, err := encodeEvent(MakeEvent([]byte{test.status}), SeqAddr{12, 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if int(event._type) != test.eventType || event.queue != alsaDirectQueue || event.data[0] != alsaDirectQueue {
+				t.Fatalf("unexpected transport event: %+v", event)
+			}
+			decoded, err := decodeSeqEvent(event)
+			if err != nil || !bytes.Equal(decoded.Data, []byte{test.status}) {
+				t.Fatalf("decoded = %x, error = %v", decoded.Data, err)
+			}
+		})
+	}
+}
+
+func TestUnsupportedSystemStatuses(t *testing.T) {
+	for _, status := range []byte{0xf4, 0xf5, 0xf6, midi.EndSysEx, 0xf9, 0xfd, 0xfe, 0xff} {
+		for _, data := range [][]byte{{status}, {status, 0}} {
+			var unsupported *UnsupportedMessageError
+			if err := newTestSeq().Write(MakeEvent(data)); !errors.As(err, &unsupported) {
+				t.Errorf("Write(%x) = %v, want unsupported status", data, err)
+			}
+		}
+	}
+}
+
+func TestInvalidSystemMessages(t *testing.T) {
+	for _, data := range [][]byte{
+		{midi.SongPosition}, {midi.SongPosition, 0}, {midi.SongPosition, 0, 0, 0},
+		{midi.SongPosition, 128, 0}, {midi.SongPosition, 0, 128},
+		{midi.QuarterFrame}, {midi.QuarterFrame, 0, 0}, {midi.QuarterFrame, 128},
+		{midi.SongSelect}, {midi.SongSelect, 0, 0}, {midi.SongSelect, 128},
+		{midi.Clock, 0}, {midi.Start, 0}, {midi.Continue, 0}, {midi.Stop, 0},
+	} {
+		var invalid *InvalidMessageError
+		if err := newTestSeq().WritePort(MakeEvent(data), testSourcePort); !errors.As(err, &invalid) {
+			t.Errorf("WritePort(%x) = %v, want invalid message", data, err)
+		}
+	}
+	if err := newTestSeq().Write(MakeEvent(nil)); err != nil {
+		t.Fatalf("empty write = %v", err)
+	}
+}
+
+func TestUnsupportedSystemEvents(t *testing.T) {
+	event, err := encodeEvent(MakeEvent([]byte{midi.Clock}), SeqAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventType := range []byte{alsaTick, alsaTuneRequest, alsaSensing, alsaReset} {
+		switch eventType {
+		case alsaTick:
+			event._type = alsaTick
+		case alsaTuneRequest:
+			event._type = alsaTuneRequest
+		case alsaSensing:
+			event._type = alsaSensing
+		case alsaReset:
+			event._type = alsaReset
+		}
+		decoded, err := decodeSeqEvent(event)
+		if !errors.Is(err, ErrUnsupportedEvent) || len(decoded.Data) != 0 {
+			t.Errorf("event %d decoded = %x, error = %v", eventType, decoded.Data, err)
+		}
+	}
+}
+
+func TestInvalidSystemEventValues(t *testing.T) {
+	for _, data := range [][]byte{{midi.SongPosition, 0, 0}, {midi.QuarterFrame, 0}, {midi.SongSelect, 0}} {
+		event, err := encodeEvent(MakeEvent(data), SeqAddr{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		maximum := uint32(midi.DataMax)
+		if data[0] == midi.SongPosition {
+			maximum = midi.SongPositionMax
+		}
+		for _, value := range []uint32{maximum + 1, ^uint32(0)} {
+			binary.NativeEndian.PutUint32(event.data[alsaControlValueOffset:], value)
+			decoded, err := decodeSeqEvent(event)
+			if !errors.Is(err, ErrInvalidMessage) || len(decoded.Data) != 0 {
+				t.Errorf("status %x value %d decoded = %x, error = %v", data[0], value, decoded.Data, err)
+			}
+		}
+	}
 }

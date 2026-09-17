@@ -65,16 +65,16 @@ func (e *AmbiguousPortError) Error() string {
 }
 
 const (
-	midiDataMax  = 127
-	midiDataBits = 7
-	pitchCenter  = 8192
-	pitchMax     = 16383
-
 	EvPortSubscribed   = 0
 	EvPortUnsubscribed = 1
 )
 
 type outputEvent = C.snd_seq_event_t
+
+var (
+	ErrUnsupportedEvent = errors.New("unsupported ALSA event")
+	ErrInvalidMessage   = errors.New("invalid midi message")
+)
 
 type Seq struct {
 	seq   *C.snd_seq_t
@@ -447,93 +447,114 @@ func (a *Seq) Read() (ret SeqEvent, err error) {
 		if err := C.snd_seq_event_input(a.seq, &event); err < 0 {
 			return ret, snderr2error(err)
 		}
-		ret.Client, ret.Port = int(event.source.client), int(event.source.port)
-		switch event._type {
-		case C.SND_SEQ_EVENT_SYSEX:
-			ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
-			data := C.snd_seq_ev_ext_data(ext)
-			ret.Data = C.GoBytes(unsafe.Pointer(data), C.int(ext.len))
-		case C.SND_SEQ_EVENT_SONGSEL:
-			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{midi.SongSelect, byte(ctrl.value)}
-		case C.SND_SEQ_EVENT_CONTROLLER:
-			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{
-				midi.MakeCC(int(ctrl.channel)),
-				byte(ctrl.param),
-				byte(ctrl.value),
-			}
-		case C.SND_SEQ_EVENT_PGMCHANGE:
-			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{
-				midi.MakePgm(int(ctrl.channel)),
-				byte(ctrl.value)}
-		case C.SND_SEQ_EVENT_KEYPRESS:
-			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{
-				midi.KeyAftertouch | byte(note.channel),
-				byte(note.note),
-				byte(note.velocity)}
-		case C.SND_SEQ_EVENT_CHANPRESS:
-			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-			if ctrl.value < 0 || ctrl.value > midiDataMax {
-				return ret, fmt.Errorf("invalid channel pressure: %d", ctrl.value)
-			}
-			ret.Data = []byte{midi.ChannelAftertouch | byte(ctrl.channel), byte(ctrl.value)}
-		case C.SND_SEQ_EVENT_PITCHBEND:
-			ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-			if ctrl.value < -pitchCenter || ctrl.value > pitchMax-pitchCenter {
-				return ret, fmt.Errorf("invalid pitch bend: %d", ctrl.value)
-			}
-			value := int(ctrl.value) + pitchCenter
-			ret.Data = []byte{
-				midi.Pitch | byte(ctrl.channel),
-				byte(value & midiDataMax),
-				byte(value >> midiDataBits)}
-		case C.SND_SEQ_EVENT_NOTEON:
-			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{
-				midi.MakeNoteOn(int(note.channel)),
-				byte(note.note),
-				byte(note.velocity)}
-			if note.velocity == 0 {
-				ret.Data[0] = midi.MakeNoteOff(int(note.channel))
-			}
-		case C.SND_SEQ_EVENT_NOTEOFF:
-			note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{
-				midi.MakeNoteOff(int(note.channel)),
-				byte(note.note),
-				byte(note.velocity)}
-		case C.SND_SEQ_EVENT_CLOCK:
-			ret.Data = []byte{midi.Clock}
-		case C.SND_SEQ_EVENT_TICK:
-			ret.Data = []byte{midi.Tick}
-		case C.SND_SEQ_EVENT_START:
-			ret.Data = []byte{midi.Start}
-		case C.SND_SEQ_EVENT_CONTINUE:
-			ret.Data = []byte{midi.Continue}
-		case C.SND_SEQ_EVENT_STOP:
-			ret.Data = []byte{midi.Stop}
-		case C.SND_SEQ_EVENT_PORT_SUBSCRIBED:
-			c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{
-				EvPortSubscribed,
-				byte(c.sender.client), byte(c.sender.port),
-				byte(c.dest.client), byte(c.dest.port),
-			}
-		case C.SND_SEQ_EVENT_PORT_UNSUBSCRIBED:
-			c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
-			ret.Data = []byte{
-				EvPortUnsubscribed,
-				byte(c.sender.client), byte(c.sender.port),
-				byte(c.dest.client), byte(c.dest.port),
-			}
-		default:
-			continue
+		ret, err = decodeSeqEvent(event)
+		if len(ret.Data) != 0 || err != nil {
+			return ret, err
 		}
-		return ret, nil
 	}
+}
+
+func decodeSeqEvent(event *C.snd_seq_event_t) (ret SeqEvent, err error) {
+	ret.Client, ret.Port = int(event.source.client), int(event.source.port)
+	switch event._type {
+	case C.SND_SEQ_EVENT_SYSEX:
+		ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
+		data := C.snd_seq_ev_ext_data(ext)
+		ret.Data = C.GoBytes(unsafe.Pointer(data), C.int(ext.len))
+	case C.SND_SEQ_EVENT_SONGSEL:
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		if ctrl.value < 0 || ctrl.value > midi.DataMax {
+			return ret, fmt.Errorf("%w: song select %d", ErrInvalidMessage, ctrl.value)
+		}
+		ret.Data = []byte{midi.SongSelect, byte(ctrl.value)}
+	case C.SND_SEQ_EVENT_CONTROLLER:
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ret.Data = []byte{
+			midi.MakeCC(int(ctrl.channel)),
+			byte(ctrl.param),
+			byte(ctrl.value),
+		}
+	case C.SND_SEQ_EVENT_PGMCHANGE:
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ret.Data = []byte{
+			midi.MakePgm(int(ctrl.channel)),
+			byte(ctrl.value)}
+	case C.SND_SEQ_EVENT_KEYPRESS:
+		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+		ret.Data = []byte{
+			midi.KeyAftertouch | byte(note.channel),
+			byte(note.note),
+			byte(note.velocity)}
+	case C.SND_SEQ_EVENT_CHANPRESS:
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		if ctrl.value < 0 || ctrl.value > midi.DataMax {
+			return ret, fmt.Errorf("invalid channel pressure: %d", ctrl.value)
+		}
+		ret.Data = []byte{midi.ChannelAftertouch | byte(ctrl.channel), byte(ctrl.value)}
+	case C.SND_SEQ_EVENT_PITCHBEND:
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		if ctrl.value < -midi.PitchCenter || ctrl.value > midi.PitchMax-midi.PitchCenter {
+			return ret, fmt.Errorf("invalid pitch bend: %d", ctrl.value)
+		}
+		value := int(ctrl.value) + midi.PitchCenter
+		ret.Data = []byte{
+			midi.Pitch | byte(ctrl.channel),
+			byte(value & midi.DataMax),
+			byte(value >> midi.DataBits)}
+	case C.SND_SEQ_EVENT_NOTEON:
+		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+		ret.Data = []byte{
+			midi.MakeNoteOn(int(note.channel)),
+			byte(note.note),
+			byte(note.velocity)}
+		if note.velocity == 0 {
+			ret.Data[0] = midi.MakeNoteOff(int(note.channel))
+		}
+	case C.SND_SEQ_EVENT_NOTEOFF:
+		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
+		ret.Data = []byte{
+			midi.MakeNoteOff(int(note.channel)),
+			byte(note.note),
+			byte(note.velocity)}
+	case C.SND_SEQ_EVENT_CLOCK:
+		ret.Data = []byte{midi.Clock}
+	case C.SND_SEQ_EVENT_TICK, C.SND_SEQ_EVENT_TUNE_REQUEST,
+		C.SND_SEQ_EVENT_SENSING, C.SND_SEQ_EVENT_RESET:
+		return ret, fmt.Errorf("%w: type %d", ErrUnsupportedEvent, event._type)
+	case C.SND_SEQ_EVENT_START:
+		ret.Data = []byte{midi.Start}
+	case C.SND_SEQ_EVENT_CONTINUE:
+		ret.Data = []byte{midi.Continue}
+	case C.SND_SEQ_EVENT_STOP:
+		ret.Data = []byte{midi.Stop}
+	case C.SND_SEQ_EVENT_SONGPOS:
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		if ctrl.value < 0 || ctrl.value > midi.SongPositionMax {
+			return ret, fmt.Errorf("%w: song position %d", ErrInvalidMessage, ctrl.value)
+		}
+		ret.Data = []byte{midi.SongPosition, byte(ctrl.value & midi.DataMax), byte(ctrl.value >> midi.DataBits)}
+	case C.SND_SEQ_EVENT_QFRAME:
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		if ctrl.value < 0 || ctrl.value > midi.DataMax {
+			return ret, fmt.Errorf("%w: quarter frame %d", ErrInvalidMessage, ctrl.value)
+		}
+		ret.Data = []byte{midi.QuarterFrame, byte(ctrl.value)}
+	case C.SND_SEQ_EVENT_PORT_SUBSCRIBED:
+		c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
+		ret.Data = []byte{
+			EvPortSubscribed,
+			byte(c.sender.client), byte(c.sender.port),
+			byte(c.dest.client), byte(c.dest.port),
+		}
+	case C.SND_SEQ_EVENT_PORT_UNSUBSCRIBED:
+		c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
+		ret.Data = []byte{
+			EvPortUnsubscribed,
+			byte(c.sender.client), byte(c.sender.port),
+			byte(c.dest.client), byte(c.dest.port),
+		}
+	}
+	return ret, nil
 }
 
 func (a *Seq) Write(ev SeqEvent) error {
@@ -617,7 +638,11 @@ func encodeEvent(ev SeqEvent, src SeqAddr) (event *outputEvent, err error) {
 	case midi.SongPosition:
 		event._type = C.SND_SEQ_EVENT_SONGPOS
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.value = C.int(ev.Data[1]) | C.int(ev.Data[2])<<midiDataBits
+		ctrl.value = C.int(ev.Data[1]) | C.int(ev.Data[2])<<midi.DataBits
+	case midi.QuarterFrame:
+		event._type = C.SND_SEQ_EVENT_QFRAME
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ctrl.value = C.int(ev.Data[1])
 	case midi.SongSelect:
 		event._type = C.SND_SEQ_EVENT_SONGSEL
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
@@ -631,7 +656,7 @@ func encodeEvent(ev SeqEvent, src SeqAddr) (event *outputEvent, err error) {
 		event._type = C.SND_SEQ_EVENT_PITCHBEND
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.value = C.int(int(ev.Data[1])|int(ev.Data[2])<<midiDataBits) - pitchCenter
+		ctrl.value = C.int(int(ev.Data[1])|int(ev.Data[2])<<midi.DataBits) - midi.PitchCenter
 	case midi.KeyAftertouch:
 		event._type = C.SND_SEQ_EVENT_KEYPRESS
 		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))

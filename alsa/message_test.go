@@ -29,6 +29,7 @@ var supportedMessages = []struct {
 	{"program_change", []byte{midi.Pgm, testMaxData}, 11},
 	{"song_position", []byte{midi.SongPosition, 1, testMaxData}, 20},
 	{"song_select", []byte{midi.SongSelect, testMaxData}, 21},
+	{"quarter_frame", []byte{midi.QuarterFrame, testMaxData}, 22},
 	{"clock", []byte{midi.Clock}, 36},
 	{"start", []byte{midi.Start}, 30},
 	{"continue", []byte{midi.Continue}, 31},

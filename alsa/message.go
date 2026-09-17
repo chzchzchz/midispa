@@ -47,7 +47,7 @@ func validateMessage(data []byte) (err error) {
 	switch midi.Message(status) {
 	case midi.NoteOff, midi.NoteOn, midi.KeyAftertouch, midi.CC, midi.SongPosition, midi.Pitch:
 		length = 3
-	case midi.Pgm, midi.SongSelect, midi.ChannelAftertouch:
+	case midi.Pgm, midi.SongSelect, midi.ChannelAftertouch, midi.QuarterFrame:
 		length = 2
 	case midi.Clock, midi.Start, midi.Continue, midi.Stop:
 		length = 1

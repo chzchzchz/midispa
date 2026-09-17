@@ -53,7 +53,8 @@ func TestMessageErrorDetails(t *testing.T) {
 		{[]byte{0x93, 0x40}, "invalid MIDI Note On (0x93): expected 3 bytes, got 2; bytes: [93 40]", false},
 		{[]byte{0xb5, 0x07, 0xff}, "invalid MIDI Control Change (0xb5): data byte 2 is not seven-bit; bytes: [B5 07 FF]", false},
 		{[]byte{0xf0, 0x01}, "invalid MIDI SysEx (0xf0): SysEx must be framed by F0 and F7; bytes: [F0 01]", false},
-		{[]byte{0xf1, 0x00}, "unsupported MIDI Quarter Frame (0xf1); bytes: [F1 00]", true},
+		{[]byte{0xf1}, "invalid MIDI Quarter Frame (0xf1): expected 2 bytes, got 1; bytes: [F1]", false},
+		{[]byte{0xf1, 0x80}, "invalid MIDI Quarter Frame (0xf1): data byte 1 is not seven-bit; bytes: [F1 80]", false},
 		{[]byte{0xf4}, "unsupported MIDI message (0xf4); bytes: [F4]", true},
 		{[]byte{0x01, 0x02}, "invalid MIDI message (0x01): missing status byte; bytes: [01 02]", false},
 	}
