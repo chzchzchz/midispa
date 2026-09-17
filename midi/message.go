@@ -46,6 +46,47 @@ func Message(b byte) byte {
 	return b & 0xf0
 }
 
+func MessageName(status byte) string {
+	switch Message(status) {
+	case NoteOff:
+		return "Note Off"
+	case NoteOn:
+		return "Note On"
+	case KeyAftertouch:
+		return "Key Aftertouch"
+	case CC:
+		return "Control Change"
+	case Pgm:
+		return "Program Change"
+	case ChannelAftertouch:
+		return "Channel Aftertouch"
+	case Pitch:
+		return "Pitch Bend"
+	case SysEx:
+		return "SysEx"
+	case QuarterFrame:
+		return "Quarter Frame"
+	case SongPosition:
+		return "Song Position"
+	case SongSelect:
+		return "Song Select"
+	case EndSysEx:
+		return "End SysEx"
+	case Clock:
+		return "Clock"
+	case Tick:
+		return "Tick"
+	case Start:
+		return "Start"
+	case Continue:
+		return "Continue"
+	case Stop:
+		return "Stop"
+	default:
+		return "message"
+	}
+}
+
 func MakeNoteOn(channel int) byte  { return byte(channel) | NoteOn }
 func MakeNoteOff(channel int) byte { return byte(channel) | NoteOff }
 func MakeCC(channel int) byte      { return byte(channel) | CC }

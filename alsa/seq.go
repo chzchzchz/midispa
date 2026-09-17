@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"unsafe"
 
 	"github.com/chzchzchz/midispa/midi"
@@ -32,10 +33,13 @@ const (
 	EvPortUnsubscribed = 1
 )
 
+type outputEvent = C.snd_seq_event_t
+
 type Seq struct {
 	seq   *C.snd_seq_t
 	ports map[int]struct{}
 	SeqAddr
+	output func(*outputEvent) error
 }
 
 type SeqAddr struct {
@@ -60,6 +64,7 @@ func (a *Seq) Close() error {
 	}
 	err := snderr2error(C.snd_seq_close(a.seq))
 	a.seq = nil
+	a.output = nil
 	a.ports = nil
 	a.Port = -1
 	return err
@@ -75,7 +80,10 @@ type seqWriter struct {
 }
 
 func (a *seqWriter) Write(data []byte) (int, error) {
-	return len(data), a.seq.Write(SeqEvent{a.dst, data})
+	if err := a.seq.Write(SeqEvent{a.dst, data}); err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }
 
 func (a *Seq) NewWriter(sa SeqAddr) io.Writer { return &seqWriter{a, sa} }
@@ -111,6 +119,7 @@ func OpenSeq(clientName string) (a *Seq, err error) {
 		return nil, snderr2error(c)
 	}
 	a.Client = int(c)
+	a.output = a.outputDirect
 	if err = a.CreatePort(clientName); err != nil {
 		return nil, err
 	}
@@ -149,7 +158,7 @@ func (a *Seq) CreatePortAddr(name string) (SeqAddr, error) {
 }
 
 func (a *Seq) localPort(addr SeqAddr) error {
-	if a.seq == nil {
+	if a.ports == nil {
 		return errors.New("sequencer is closed")
 	}
 	if _, ok := a.ports[addr.Port]; !ok || addr.Client != a.Client {
@@ -364,19 +373,31 @@ func (a *Seq) Write(ev SeqEvent) error {
 	return a.WritePort(ev, a.Port)
 }
 
+func (a *Seq) outputDirect(event *outputEvent) error {
+	return snderr2error(C.snd_seq_event_output_direct(a.seq, event))
+}
+
 func (a *Seq) WritePort(ev SeqEvent, port int) error {
 	if err := a.localPort(SeqAddr{a.Client, port}); err != nil {
 		return err
 	}
-	if len(ev.Data) == 0 {
-		return nil
+	event, err := encodeEvent(ev, SeqAddr{a.Client, port})
+	if err != nil || len(ev.Data) == 0 {
+		return err
 	}
-	var event C.snd_seq_event_t
-	src := SeqAddr{a.SeqAddr.Client, port}
+	err = a.output(event)
+	runtime.KeepAlive(ev.Data)
+	return err
+}
+
+func encodeEvent(ev SeqEvent, src SeqAddr) (event *outputEvent, err error) {
+	if err = validateMessage(ev.Data); err != nil || len(ev.Data) == 0 {
+		return nil, err
+	}
+	event = new(outputEvent)
 	event.source.client, event.source.port = src.CAddrValues()
 	event.dest.client, event.dest.port = ev.CAddrValues()
 	event.queue = C.SND_SEQ_QUEUE_DIRECT
-	// event.dest.client, event.dest.port = C.SND_SEQ_ADDRESS_SUBSCRIBERS, C.SND_SEQ_ADDRESS_UNKNOWN
 	switch midi.Message(ev.Data[0]) {
 	case midi.SysEx:
 		event._type = C.SND_SEQ_EVENT_SYSEX
@@ -385,120 +406,72 @@ func (a *Seq) WritePort(ev SeqEvent, port int) error {
 		ext.len = C.uint(len(ev.Data))
 		C.snd_seq_ev_ext_data_set(ext, (*C.uchar)(&ev.Data[0]))
 	case midi.CC:
-		if len(ev.Data) != 3 {
-			panic("bad length")
-		}
 		event._type = C.SND_SEQ_EVENT_CONTROLLER
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.param = C.uint(ev.Data[1])
 		ctrl.value = C.int(ev.Data[2])
 	case midi.NoteOff:
-		if len(ev.Data) != 3 {
-			panic("bad length")
-		}
 		event._type = C.SND_SEQ_EVENT_NOTEOFF
 		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.note = C.uchar(ev.Data[1])
 		ctrl.velocity = C.uchar(ev.Data[2])
 	case midi.NoteOn:
-		if len(ev.Data) != 3 {
-			panic("bad length")
-		}
 		event._type = C.SND_SEQ_EVENT_NOTEON
 		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.note = C.uchar(ev.Data[1])
 		ctrl.velocity = C.uchar(ev.Data[2])
 	case midi.Start:
-		if len(ev.Data) != 1 {
-			panic("bad size for START")
-		}
 		event._type = C.SND_SEQ_EVENT_START
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
 	case midi.Continue:
-		if len(ev.Data) != 1 {
-			panic("bad size for CONTINUE")
-		}
 		event._type = C.SND_SEQ_EVENT_CONTINUE
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
 	case midi.Stop:
-		if len(ev.Data) != 1 {
-			panic("bad size for STOP")
-		}
 		event._type = C.SND_SEQ_EVENT_STOP
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
 	case midi.Clock:
-		if len(ev.Data) != 1 {
-			panic("bad size for CLOCK")
-		}
 		event._type = C.SND_SEQ_EVENT_CLOCK
 		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
 		qc.queue = C.SND_SEQ_QUEUE_DIRECT
 	case midi.Pgm:
-		if len(ev.Data) != 2 {
-			panic("bad size for PGM")
-		}
 		event._type = C.SND_SEQ_EVENT_PGMCHANGE
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.value = C.int(ev.Data[1])
 	case midi.SongPosition:
-		if len(ev.Data) != 3 {
-			panic("bad size for SONGPOS")
-		}
 		event._type = C.SND_SEQ_EVENT_SONGPOS
-		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
-		qc.queue = C.SND_SEQ_QUEUE_DIRECT
+		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
+		ctrl.value = C.int(ev.Data[1]) | C.int(ev.Data[2])<<midiDataBits
 	case midi.SongSelect:
-		if len(ev.Data) != 2 {
-			panic("bad size for SONGSEL")
-		}
 		event._type = C.SND_SEQ_EVENT_SONGSEL
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		ctrl.value = C.int(ev.Data[1])
 	case midi.ChannelAftertouch:
-		if len(ev.Data) != 2 {
-			return fmt.Errorf("bad size for channel aftertouch: %d", len(ev.Data))
-		}
-		if ev.Data[1] > midiDataMax {
-			return fmt.Errorf("invalid channel pressure: %d", ev.Data[1])
-		}
 		event._type = C.SND_SEQ_EVENT_CHANPRESS
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.value = C.int(ev.Data[1])
 	case midi.Pitch:
-		if len(ev.Data) != 3 {
-			return fmt.Errorf("bad size for pitch bend: %d", len(ev.Data))
-		}
-		if ev.Data[1] > midiDataMax || ev.Data[2] > midiDataMax {
-			return fmt.Errorf("invalid pitch bend: %d %d", ev.Data[1], ev.Data[2])
-		}
 		event._type = C.SND_SEQ_EVENT_PITCHBEND
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.value = C.int(int(ev.Data[1])|int(ev.Data[2])<<midiDataBits) - pitchCenter
 	case midi.KeyAftertouch:
-		if len(ev.Data) != 3 {
-			return fmt.Errorf("bad size for key aftertouch: %d", len(ev.Data))
-		}
-		if ev.Data[1] > midiDataMax || ev.Data[2] > midiDataMax {
-			return fmt.Errorf("invalid key aftertouch: %d %d", ev.Data[1], ev.Data[2])
-		}
 		event._type = C.SND_SEQ_EVENT_KEYPRESS
 		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
 		ctrl.note = C.uchar(ev.Data[1])
 		ctrl.velocity = C.uchar(ev.Data[2])
 	default:
-		panic("unknown midi data: " + fmt.Sprintf("%+v", event))
+		return event, &UnsupportedMessageError{ev.Data[0]}
 	}
-	return snderr2error(C.snd_seq_event_output_direct(a.seq, &event))
+	return event, nil
 }
 
 type SeqDevice struct {
