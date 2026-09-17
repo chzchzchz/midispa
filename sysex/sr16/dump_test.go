@@ -38,6 +38,9 @@ func TestEncodeDataBytes(t *testing.T) {
 }
 
 func TestDump(t *testing.T) {
+	if midiPort == "" {
+		t.Skip("set MIDI_PORT to an SR16 MIDI port to run this hardware test")
+	}
 	aseq, err := alsa.OpenSeq("testdump")
 	noErr(t, err)
 	defer aseq.Close()

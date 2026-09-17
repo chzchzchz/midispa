@@ -11,6 +11,8 @@ import (
 
 const defaultPolicyPath = ""
 
+type defaultPolicy struct{}
+
 func initPolicy(p string, w io.Writer) *defaultPolicy {
 	if defaultPolicyPath != p {
 		panic("non-default bpf policy")
