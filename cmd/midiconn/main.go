@@ -67,6 +67,10 @@ func (dt *DeviceTracker) run() {
 		dt.mu.Lock()
 		for s := range dt.disconnected {
 			if sa, err := dt.aseq.PortAddress(s); err == nil {
+				if err := openTrackingPort(dt.aseq, sa); err != nil {
+					log.Printf("tracking %q: %v", s, err)
+					continue
+				}
 				dt.connected[s] = sa
 				dt.sub(s)
 				delete(dt.disconnected, s)
@@ -107,16 +111,52 @@ func (dt *DeviceTracker) Add(s string) {
 	}
 	sa, err := dt.aseq.PortAddress(s)
 	if err != nil {
-		log.Printf("waiting on device %q", s)
+		log.Printf("waiting on device %q: %v", s, err)
 		dt.disconnected[s] = struct{}{}
 		return
 	}
 	log.Printf("tracking device %q on %s", s, sa.String())
-	if err := dt.aseq.OpenPortWrite(sa); err != nil {
+	if err := openTrackingPort(dt.aseq, sa); err != nil {
 		panic(err)
 	}
 	dt.connected[s] = sa
 	dt.sub(s)
+}
+
+func openTrackingPort(seq interface {
+	DevicesFiltered(alsa.PortDir) ([]alsa.SeqDevice, error)
+	OpenPortRead(alsa.SeqAddr) error
+	OpenPortWrite(alsa.SeqAddr) error
+}, addr alsa.SeqAddr) error {
+	devices, err := seq.DevicesFiltered(alsa.PortAny)
+	if err != nil {
+		return err
+	}
+	for _, device := range devices {
+		if device.SeqAddr != addr {
+			continue
+		}
+		if device.Caps.Has(alsa.PortCapWrite | alsa.PortCapSubsWrite) {
+			return seq.OpenPortWrite(addr)
+		}
+		if device.Caps.Has(alsa.PortCapRead | alsa.PortCapSubsRead) {
+			return seq.OpenPortRead(addr)
+		}
+		return fmt.Errorf("port %v does not support tracking subscriptions", addr)
+	}
+	return fmt.Errorf("port %v not found", addr)
+}
+
+func trackingDisconnect(local alsa.SeqAddr, data []byte) (alsa.SeqAddr, bool) {
+	if len(data) != 5 || data[0] != alsa.EvPortUnsubscribed {
+		return alsa.SeqAddr{}, false
+	}
+	source := alsa.SeqAddr{Client: int(data[1]), Port: int(data[2])}
+	destination := alsa.SeqAddr{Client: int(data[3]), Port: int(data[4])}
+	if source == local {
+		return destination, true
+	}
+	return source, destination == local
 }
 
 func (dt *DeviceTracker) Unsubscribe(sa alsa.SeqAddr) {
@@ -193,9 +233,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		dat := ev.Data
-		if dat[0] == 0 {
-			dt.Unsubscribe(alsa.SeqAddr{int(dat[3]), int(dat[4])})
+		if remote, ok := trackingDisconnect(aseq.SeqAddr, ev.Data); ok {
+			dt.Unsubscribe(remote)
 		}
 	}
 }

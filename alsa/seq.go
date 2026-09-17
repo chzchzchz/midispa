@@ -16,12 +16,53 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/chzchzchz/midispa/midi"
 )
 
 var errExpectedSysEx = errors.New("expected sysex")
+
+type PortCaps int
+
+const (
+	PortCapRead      PortCaps = C.SND_SEQ_PORT_CAP_READ
+	PortCapWrite     PortCaps = C.SND_SEQ_PORT_CAP_WRITE
+	PortCapSubsRead  PortCaps = C.SND_SEQ_PORT_CAP_SUBS_READ
+	PortCapSubsWrite PortCaps = C.SND_SEQ_PORT_CAP_SUBS_WRITE
+	PortCapDuplex    PortCaps = C.SND_SEQ_PORT_CAP_DUPLEX
+)
+
+func (c PortCaps) Has(want PortCaps) bool { return c&want == want }
+
+type PortDir int
+
+const (
+	PortSource PortDir = iota
+	PortDest
+	PortDuplex
+	PortAny
+)
+
+const maxSeqAddress = 255
+
+var errNotFound = errors.New("port not found")
+
+type AmbiguousPortError struct {
+	Name    string
+	Matches []SeqDevice
+}
+
+func (e *AmbiguousPortError) Error() string {
+	addrs := make([]string, 0, len(e.Matches))
+	for _, m := range e.Matches {
+		addrs = append(addrs, fmt.Sprintf("%d:%d (%s)", m.Client, m.Port, m.ClientName))
+	}
+	return fmt.Sprintf("port %q matches %d ports: %s",
+		e.Name, len(e.Matches), strings.Join(addrs, ", "))
+}
 
 const (
 	midiDataMax  = 127
@@ -132,17 +173,17 @@ func (a *Seq) CreatePort(name string) error {
 }
 
 func (a *Seq) CreatePortAddr(name string) (SeqAddr, error) {
+	return a.createPortAddrCaps(name, PortCapDuplex|PortCapRead|PortCapSubsRead|PortCapWrite|PortCapSubsWrite)
+}
+
+func (a *Seq) createPortAddrCaps(name string, caps PortCaps) (SeqAddr, error) {
 	if a.seq == nil {
 		return SeqAddr{}, errors.New("sequencer is closed")
 	}
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 	port := C.snd_seq_create_simple_port(a.seq, cname,
-		C.SND_SEQ_PORT_CAP_DUPLEX|
-			C.SND_SEQ_PORT_CAP_READ|
-			C.SND_SEQ_PORT_CAP_SUBS_READ|
-			C.SND_SEQ_PORT_CAP_WRITE|
-			C.SND_SEQ_PORT_CAP_SUBS_WRITE,
+		C.uint(caps),
 		C.SND_SEQ_PORT_TYPE_MIDI_GENERIC|
 			C.SND_SEQ_PORT_TYPE_PORT|
 			C.SND_SEQ_PORT_TYPE_APPLICATION)
@@ -158,6 +199,9 @@ func (a *Seq) CreatePortAddr(name string) (SeqAddr, error) {
 }
 
 func (a *Seq) localPort(addr SeqAddr) error {
+	if err := addr.validate(); err != nil {
+		return err
+	}
 	if a.ports == nil {
 		return errors.New("sequencer is closed")
 	}
@@ -193,6 +237,9 @@ func (a *Seq) OpenPortReadAt(local, remote SeqAddr) error {
 	if err := a.localPort(local); err != nil {
 		return err
 	}
+	if err := a.checkPortCaps(remote, PortCapRead|PortCapSubsRead); err != nil {
+		return err
+	}
 	return snderr2error(C.snd_seq_connect_from(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
@@ -204,7 +251,29 @@ func (a *Seq) OpenPortWriteAt(local, remote SeqAddr) error {
 	if err := a.localPort(local); err != nil {
 		return err
 	}
+	if err := a.checkPortCaps(remote, PortCapWrite|PortCapSubsWrite); err != nil {
+		return err
+	}
 	return snderr2error(C.snd_seq_connect_to(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
+}
+
+func (a *Seq) checkPortCaps(sa SeqAddr, required PortCaps) error {
+	if err := sa.validate(); err != nil {
+		return err
+	}
+	var info *C.snd_seq_port_info_t
+	if err := C.snd_seq_port_info_malloc(&info); err < 0 {
+		return snderr2error(err)
+	}
+	defer C.snd_seq_port_info_free(info)
+	if err := C.snd_seq_get_any_port_info(a.seq, C.int(sa.Client), C.int(sa.Port), info); err < 0 {
+		return snderr2error(err)
+	}
+	caps := PortCaps(C.snd_seq_port_info_get_capability(info))
+	if !caps.Has(required) {
+		return fmt.Errorf("port %d:%d capabilities %#x do not support required %#x", sa.Client, sa.Port, caps, required)
+	}
+	return nil
 }
 
 func (a *Seq) ClosePortWrite(sa SeqAddr) error {
@@ -213,6 +282,9 @@ func (a *Seq) ClosePortWrite(sa SeqAddr) error {
 
 func (a *Seq) ClosePortWriteAt(local, remote SeqAddr) error {
 	if err := a.localPort(local); err != nil {
+		return err
+	}
+	if err := remote.validate(); err != nil {
 		return err
 	}
 	return snderr2error(C.snd_seq_disconnect_to(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
@@ -226,31 +298,126 @@ func (a *Seq) ClosePortReadAt(local, remote SeqAddr) error {
 	if err := a.localPort(local); err != nil {
 		return err
 	}
+	if err := remote.validate(); err != nil {
+		return err
+	}
 	return snderr2error(C.snd_seq_disconnect_from(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
 func (a *Seq) OpenPortName(portName string) error {
-	sa, err := a.PortAddress(portName)
+	return a.OpenPortNameRead(portName)
+}
+
+func (a *Seq) OpenPortNameRead(portName string) error {
+	dev, err := a.resolvePortFiltered(portName, PortSource)
 	if err != nil {
 		return err
 	}
-	return a.OpenPort(sa.Client, sa.Port)
+	return a.OpenPortRead(dev.SeqAddr)
+}
+
+func (a *Seq) OpenPortNameWrite(portName string) error {
+	dev, err := a.resolvePortFiltered(portName, PortDest)
+	if err != nil {
+		return err
+	}
+	return a.OpenPortWrite(dev.SeqAddr)
+}
+
+func (a *Seq) OpenPortDuplex(sa SeqAddr) error {
+	if err := a.OpenPortRead(sa); err != nil {
+		return err
+	}
+	if err := a.OpenPortWrite(sa); err != nil {
+		if cerr := a.ClosePortRead(sa); cerr != nil {
+			return errors.Join(err, cerr)
+		}
+		return err
+	}
+	return nil
+}
+
+func parseSeqAddr(s string) (SeqAddr, error) {
+	client, port, found := strings.Cut(s, ":")
+	if !found {
+		return SeqAddr{}, fmt.Errorf("invalid address %q, want client:port", s)
+	}
+	c, err := strconv.Atoi(client)
+	if err != nil {
+		return SeqAddr{}, fmt.Errorf("invalid client in %q", s)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return SeqAddr{}, fmt.Errorf("invalid port in %q", s)
+	}
+	addr := SeqAddr{c, p}
+	return addr, addr.validate()
 }
 
 func (a *Seq) PortAddress(portName string) (sa SeqAddr, err error) {
-	if n, _ := fmt.Sscanf(portName, "%d:%d", &sa.Client, &sa.Port); n == 2 {
-		return sa, nil
+	if numericSeqName(portName) {
+		return parseSeqAddr(portName)
 	}
-	devs, err := a.Devices()
+	dev, err := a.resolvePort(portName)
 	if err != nil {
 		return SeqAddr{-1, -1}, err
 	}
-	for _, dev := range devs {
-		if dev.PortName == portName {
-			return dev.SeqAddr, nil
+	return dev.SeqAddr, nil
+}
+
+func numericSeqName(name string) bool {
+	client, _, found := strings.Cut(name, ":")
+	if !found {
+		return false
+	}
+	for index, char := range client {
+		if index == 0 && (char == '-' || char == '+') {
+			continue
+		}
+		if char < '0' || char > '9' {
+			return false
 		}
 	}
-	return SeqAddr{-1, -1}, fmt.Errorf("port %q not found", portName)
+	return true
+}
+
+func (a *Seq) resolvePort(name string) (SeqDevice, error) {
+	return a.resolvePortFiltered(name, PortAny)
+}
+
+func (a *Seq) resolvePortFiltered(name string, dir PortDir) (SeqDevice, error) {
+	var addr SeqAddr
+	numeric := numericSeqName(name)
+	if numeric {
+		var err error
+		addr, err = parseSeqAddr(name)
+		if err != nil {
+			return SeqDevice{}, err
+		}
+	}
+	devs, err := a.DevicesFiltered(dir)
+	if err != nil {
+		return SeqDevice{}, err
+	}
+	var matches []SeqDevice
+	for _, dev := range devs {
+		if numeric {
+			if dev.SeqAddr == addr {
+				return dev, nil
+			}
+			continue
+		}
+		if dev.ClientName == name || dev.PortName == name || dev.ClientName+":"+dev.PortName == name {
+			matches = append(matches, dev)
+		}
+	}
+	if len(matches) == 0 {
+		return SeqDevice{}, fmt.Errorf("%w: %q (direction %d)", errNotFound, name, dir)
+	}
+	if len(matches) > 1 {
+		return SeqDevice{}, &AmbiguousPortError{name, matches}
+	}
+	return matches[0], nil
 }
 
 func (a *Seq) MayRead() bool {
@@ -378,6 +545,9 @@ func (a *Seq) outputDirect(event *outputEvent) error {
 }
 
 func (a *Seq) WritePort(ev SeqEvent, port int) error {
+	if err := ev.SeqAddr.validate(); err != nil {
+		return err
+	}
 	if err := a.localPort(SeqAddr{a.Client, port}); err != nil {
 		return err
 	}
@@ -478,16 +648,25 @@ type SeqDevice struct {
 	SeqAddr
 	ClientName string
 	PortName   string
+	Caps       PortCaps
 }
 
 func (a *Seq) Devices() (ret []SeqDevice, err error) {
+	return a.DevicesFiltered(PortSource)
+}
+
+func (a *Seq) devices() (ret []SeqDevice, err error) {
 	var cinfo *C.snd_seq_client_info_t
 	var pinfo *C.snd_seq_port_info_t
 
-	C.snd_seq_client_info_malloc(&cinfo)
+	if err := C.snd_seq_client_info_malloc(&cinfo); err < 0 {
+		return nil, snderr2error(err)
+	}
 	defer C.snd_seq_client_info_free(cinfo)
 
-	C.snd_seq_port_info_malloc(&pinfo)
+	if err := C.snd_seq_port_info_malloc(&pinfo); err < 0 {
+		return nil, snderr2error(err)
+	}
 	defer C.snd_seq_port_info_free(pinfo)
 
 	C.snd_seq_client_info_set_client(cinfo, -1)
@@ -496,10 +675,7 @@ func (a *Seq) Devices() (ret []SeqDevice, err error) {
 		C.snd_seq_port_info_set_client(pinfo, client)
 		C.snd_seq_port_info_set_port(pinfo, -1)
 		for C.snd_seq_query_next_port(a.seq, pinfo) >= 0 {
-			mask := C.SND_SEQ_PORT_CAP_READ | C.SND_SEQ_PORT_CAP_SUBS_READ
-			if int(C.snd_seq_port_info_get_capability(pinfo))&mask != mask {
-				continue
-			}
+			caps := PortCaps(C.snd_seq_port_info_get_capability(pinfo))
 			dev := SeqDevice{
 				SeqAddr: SeqAddr{
 					Client: int(C.snd_seq_port_info_get_client(pinfo)),
@@ -507,8 +683,39 @@ func (a *Seq) Devices() (ret []SeqDevice, err error) {
 				},
 				ClientName: C.GoString(C.snd_seq_client_info_get_name(cinfo)),
 				PortName:   C.GoString(C.snd_seq_port_info_get_name(pinfo)),
+				Caps:       caps,
 			}
 			ret = append(ret, dev)
+		}
+	}
+	return ret, nil
+}
+
+func (a *Seq) DevicesFiltered(dir PortDir) ([]SeqDevice, error) {
+	if dir < PortSource || dir > PortAny {
+		return nil, fmt.Errorf("invalid port direction %d", dir)
+	}
+	devs, err := a.devices()
+	if err != nil {
+		return nil, err
+	}
+	var ret []SeqDevice
+	for _, dev := range devs {
+		switch dir {
+		case PortAny:
+			ret = append(ret, dev)
+		case PortSource:
+			if dev.Caps.Has(PortCapRead | PortCapSubsRead) {
+				ret = append(ret, dev)
+			}
+		case PortDest:
+			if dev.Caps.Has(PortCapWrite | PortCapSubsWrite) {
+				ret = append(ret, dev)
+			}
+		case PortDuplex:
+			if dev.Caps.Has(PortCapRead | PortCapSubsRead | PortCapWrite | PortCapSubsWrite) {
+				ret = append(ret, dev)
+			}
 		}
 	}
 	return ret, nil
@@ -518,6 +725,16 @@ func (d *SeqAddr) String() string {
 	return fmt.Sprintf("%d:%d", d.Client, d.Port)
 }
 
+func (d SeqAddr) validate() error {
+	if d.Client < 0 || d.Client > maxSeqAddress || d.Port < 0 || d.Port > maxSeqAddress {
+		return fmt.Errorf("address %d:%d out of range (0:%d)", d.Client, d.Port, maxSeqAddress)
+	}
+	return nil
+}
+
 func (d *SeqAddr) CAddrValues() (C.uchar, C.uchar) {
+	if err := d.validate(); err != nil {
+		panic(err)
+	}
 	return C.uchar(d.Client), C.uchar(d.Port)
 }

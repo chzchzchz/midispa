@@ -2,14 +2,268 @@ package alsa
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/chzchzchz/midispa/midi"
 )
+
+func testPort(t *testing.T, aseq *Seq, label string, caps PortCaps) SeqDevice {
+	t.Helper()
+	name := fmt.Sprintf("seqcap-%d-%d-%s", os.Getpid(), aseq.Client, label)
+	if _, err := aseq.createPortAddrCaps(name, caps); err != nil {
+		t.Fatal(err)
+	}
+	dev, err := aseq.resolvePort(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev.Caps != caps {
+		t.Fatalf("port caps = %#x, want %#x", dev.Caps, caps)
+	}
+	return dev
+}
+
+func TestParseSeqAddr(t *testing.T) {
+	for _, addr := range []SeqAddr{{0, 0}, {24, 3}, {maxSeqAddress, maxSeqAddress}, SubsSeqAddr} {
+		parsed, err := parseSeqAddr(addr.String())
+		if err != nil || parsed != addr {
+			t.Fatalf("parse %v = %v, %v", addr, parsed, err)
+		}
+		client, port := addr.CAddrValues()
+		if int(client) != addr.Client || int(port) != addr.Port {
+			t.Fatalf("address narrowed incorrectly: %v", addr)
+		}
+	}
+	for _, bad := range []string{"", "x", "1:", ":2", "300:0", "0:-1", "-1:0", "0:256", "1:2:3", "1:2junk", "1:2 ", "99999999999999999999999:0"} {
+		if _, err := parseSeqAddr(bad); err == nil {
+			t.Errorf("parseSeqAddr(%q) should fail", bad)
+		}
+		if numericSeqName(bad) {
+			aseq := &Seq{}
+			if _, err := aseq.PortAddress(bad); err == nil {
+				t.Errorf("PortAddress(%q) should fail", bad)
+			}
+			if _, err := aseq.resolvePort(bad); err == nil {
+				t.Errorf("ResolvePort(%q) should fail", bad)
+			}
+		}
+	}
+}
+
+func TestAddressValidation(t *testing.T) {
+	aseq := &Seq{}
+	for _, addr := range []SeqAddr{{-1, 0}, {0, -1}, {maxSeqAddress + 1, 0}, {0, maxSeqAddress + 1}, {1 << 40, 0}} {
+		for name, operation := range map[string]func(SeqAddr) error{
+			"validate":   SeqAddr.validate,
+			"read":       aseq.OpenPortRead,
+			"write":      aseq.OpenPortWrite,
+			"duplex":     aseq.OpenPortDuplex,
+			"closeRead":  aseq.ClosePortRead,
+			"closeWrite": aseq.ClosePortWrite,
+			"legacy":     func(addr SeqAddr) error { return aseq.OpenPort(addr.Client, addr.Port) },
+			"event":      func(addr SeqAddr) error { return aseq.Write(SeqEvent{SeqAddr: addr, Data: []byte{0xf8}}) },
+		} {
+			if err := operation(addr); err == nil {
+				t.Errorf("%s accepted %v", name, addr)
+			}
+		}
+		t.Run(addr.String(), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("CAddrValues silently narrowed an invalid address")
+				}
+			}()
+			addr.CAddrValues()
+		})
+	}
+	if err := aseq.WritePort(MakeEvent([]byte{0xf8}), maxSeqAddress+1); err == nil {
+		t.Error("invalid local port accepted")
+	}
+	if _, err := aseq.DevicesFiltered(PortDir(-1)); err == nil {
+		t.Error("invalid discovery direction accepted")
+	}
+}
+
+func TestDevicesFiltered(t *testing.T) {
+	aseq := openTestSeq(t)
+	source := testPort(t, aseq, "source", PortCapRead|PortCapSubsRead)
+	dest := testPort(t, aseq, "dest", PortCapWrite|PortCapSubsWrite)
+	duplex := testPort(t, aseq, "duplex", PortCapRead|PortCapSubsRead|PortCapWrite|PortCapSubsWrite)
+	plain := testPort(t, aseq, "plain", PortCapRead|PortCapWrite|PortCapDuplex)
+	for _, dir := range []PortDir{PortSource, PortDest, PortDuplex, PortAny} {
+		devs, err := aseq.DevicesFiltered(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := make(map[SeqAddr]bool)
+		for _, dev := range devs {
+			found[dev.SeqAddr] = true
+		}
+		for _, check := range []struct {
+			dev  SeqDevice
+			want bool
+		}{
+			{source, dir == PortSource || dir == PortAny},
+			{dest, dir == PortDest || dir == PortAny},
+			{duplex, true},
+			{plain, dir == PortAny},
+		} {
+			if found[check.dev.SeqAddr] != check.want {
+				t.Errorf("direction %d port %s: found = %v, want %v", dir, check.dev.PortName, found[check.dev.SeqAddr], check.want)
+			}
+		}
+	}
+	legacy, err := aseq.Devices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dev := range legacy {
+		if !dev.Caps.Has(PortCapRead | PortCapSubsRead) {
+			t.Errorf("legacy discovery returned non-source: %+v", dev)
+		}
+	}
+}
+
+func TestResolvePort(t *testing.T) {
+	aseq := openTestSeq(t)
+	self, err := aseq.resolvePort(aseq.SeqAddr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byClient, err := aseq.resolvePort(self.ClientName)
+	if err != nil || byClient != self {
+		t.Fatalf("client name lookup: %+v, %v", byClient, err)
+	}
+	source := testPort(t, aseq, "shared", PortCapRead|PortCapSubsRead)
+	peer := openTestSeq(t, "peer")
+	if _, err := peer.createPortAddrCaps(source.PortName, PortCapWrite|PortCapSubsWrite); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{source.PortName, self.ClientName} {
+		_, err := aseq.PortAddress(name)
+		var ambiguous *AmbiguousPortError
+		if !errors.As(err, &ambiguous) || len(ambiguous.Matches) < 2 {
+			t.Fatalf("expected ambiguity for %q, got %v", name, err)
+		}
+		if !strings.Contains(err.Error(), source.SeqAddr.String()) {
+			t.Errorf("ambiguity error lacks matching address: %v", err)
+		}
+	}
+	resolved, err := aseq.resolvePortFiltered(source.PortName, PortSource)
+	if err != nil || resolved != source {
+		t.Fatalf("source resolution: %+v, %v", resolved, err)
+	}
+	dest, err := aseq.resolvePortFiltered(source.PortName, PortDest)
+	if err != nil || dest.Client != peer.Client {
+		t.Fatalf("destination resolution: %+v, %v", dest, err)
+	}
+	for _, name := range []string{dest.SeqAddr.String(), dest.ClientName + ":" + dest.PortName} {
+		resolved, err := aseq.resolvePort(name)
+		if err != nil || resolved != dest {
+			t.Fatalf("lookup %q: %+v, %v", name, resolved, err)
+		}
+	}
+	if _, err := aseq.resolvePortFiltered(dest.SeqAddr.String(), PortSource); err == nil {
+		t.Error("numeric destination accepted as source")
+	}
+	if _, err := peer.createPortAddrCaps(source.PortName, PortCapWrite|PortCapSubsWrite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := aseq.resolvePort(dest.ClientName + ":" + dest.PortName); err == nil {
+		t.Error("duplicate qualified name accepted")
+	}
+	if _, err := aseq.resolvePort(source.PortName + "-missing"); err == nil {
+		t.Error("missing name accepted")
+	}
+}
+
+func TestDirectionChecksAndRollback(t *testing.T) {
+	aseq := openTestSeq(t)
+	peer := openTestSeq(t, "peer")
+	source := testPort(t, peer, "source", PortCapRead|PortCapSubsRead)
+	dest := testPort(t, peer, "dest", PortCapWrite|PortCapSubsWrite)
+	duplex := testPort(t, peer, "duplex", PortCapRead|PortCapSubsRead|PortCapWrite|PortCapSubsWrite)
+	if err := aseq.OpenPortRead(dest.SeqAddr); err == nil {
+		t.Error("destination accepted as input")
+	}
+	if err := aseq.OpenPortWrite(source.SeqAddr); err == nil {
+		t.Error("source accepted as output")
+	}
+	if err := aseq.OpenPortNameRead(dest.PortName); err == nil {
+		t.Error("destination name accepted as input")
+	}
+	if err := aseq.OpenPortNameWrite(source.PortName); err == nil {
+		t.Error("source name accepted as output")
+	}
+	if err := aseq.OpenPortName(source.PortName); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.ClosePortWrite(source.SeqAddr); err == nil {
+		t.Error("legacy name helper created an output subscription")
+	}
+	if err := aseq.ClosePortRead(source.SeqAddr); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.OpenPortNameWrite(dest.PortName); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.ClosePortWrite(dest.SeqAddr); err != nil {
+		t.Fatal(err)
+	}
+	sourceAddr, err := aseq.PortAddress(source.PortName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.OpenPortDuplex(sourceAddr); err == nil {
+		t.Fatal("expected duplex to source-only port to fail")
+	}
+	if err := aseq.ClosePortRead(source.SeqAddr); err == nil {
+		t.Fatal("read subscription survived duplex rollback")
+	}
+	duplexAddr, err := aseq.PortAddress(duplex.PortName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.OpenPortDuplex(duplexAddr); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.ClosePortRead(duplex.SeqAddr); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.ClosePortWrite(duplex.SeqAddr); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.OpenPortWrite(duplex.SeqAddr); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.OpenPortDuplex(duplex.SeqAddr); err == nil {
+		t.Fatal("duplicate output subscription should fail")
+	}
+	if err := aseq.ClosePortRead(duplex.SeqAddr); err == nil {
+		t.Error("read subscription survived failed second subscription")
+	}
+	if err := aseq.ClosePortWrite(duplex.SeqAddr); err != nil {
+		t.Fatalf("rollback removed pre-existing output subscription: %v", err)
+	}
+	if err := aseq.OpenPortRead(duplex.SeqAddr); err != nil {
+		t.Fatal(err)
+	}
+	if err := aseq.OpenPortDuplex(duplex.SeqAddr); err == nil {
+		t.Fatal("duplicate input subscription should fail")
+	}
+	if err := aseq.ClosePortRead(duplex.SeqAddr); err != nil {
+		t.Fatalf("first failure removed pre-existing input subscription: %v", err)
+	}
+	if err := aseq.ClosePortWrite(duplex.SeqAddr); err == nil {
+		t.Error("first failure created output subscription")
+	}
+}
 
 func TestExpressionRoundTrip(t *testing.T) {
 	sender, receiver := openTestSeq(t), openTestSeq(t)
@@ -90,12 +344,12 @@ func TestWritePortRejectsInvalidExpression(t *testing.T) {
 
 const seqTestTimeout = time.Second
 
-func openTestSeq(t *testing.T) *Seq {
+func openTestSeq(t *testing.T, suffix ...string) *Seq {
 	t.Helper()
 	if _, err := os.Stat("/dev/snd/seq"); os.IsNotExist(err) {
 		t.Skip("ALSA sequencer is unavailable")
 	}
-	seq, err := OpenSeq(t.Name())
+	seq, err := OpenSeq(fmt.Sprintf("seqcap-%d-%s-%s", os.Getpid(), t.Name(), strings.Join(suffix, "-")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -58,11 +58,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		if err := aseq.OpenPortRead(sa); err != nil {
+		if err := aseq.OpenPortNameRead(inDev); err != nil {
 			panic(err)
-		}
-		if err := aseq.OpenPortWrite(sa); err != nil {
-			log.Printf("warning: could not writeback to %q", inDev)
 		}
 		in2sa[inDev] = sa
 	}
@@ -72,12 +69,19 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err := aseq.OpenPortWrite(saOut); err != nil {
+	if err := aseq.OpenPortNameWrite(assigns[0].OutDevice); err != nil {
 		panic(err)
+	}
+	feedback := make(map[string]bool)
+	for _, a := range assigns {
+		if _, ok := feedback[a.InDevice]; !ok {
+			feedback[a.InDevice] = aseq.OpenPortWrite(in2sa[a.InDevice]) == nil
+		}
 	}
 	for i := range assigns {
 		assigns[i].saOut = saOut
 		assigns[i].saIn = in2sa[assigns[i].InDevice]
+		assigns[i].writeback = feedback[assigns[i].InDevice]
 	}
 
 	turnOffButtons := func(a Assignments) {
@@ -87,7 +91,6 @@ func main() {
 			}
 			// TODO: have input channel.
 			msg := []byte{midi.NoteOn, 0, 0}
-			ev := alsa.SeqEvent{a.saIn, msg}
 			for _, name := range mc.Names() {
 				if _, ok := a.in2out[name]; !ok {
 					continue
@@ -97,7 +100,7 @@ func main() {
 					panic("did not have cc for " + name)
 				}
 				msg[1] = byte(cc)
-				if err := aseq.Write(ev); err != nil {
+				if err := a.feedback(aseq.Write, msg); err != nil {
 					log.Printf("failed to turn off %q: %v", name, err)
 				}
 			}

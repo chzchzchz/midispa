@@ -149,7 +149,7 @@ func (s *Seq) processEvent() error {
 		if isInputButton {
 			// Input was a button; writeback out value to change lit value.
 			ev.Data[2] = byte(val)
-			if err := s.aseq.Write(ev); err != nil {
+			if err := a.feedback(s.aseq.Write, ev.Data); err != nil {
 				log.Printf("failed writeback of %+v", ev)
 				return err
 			}
@@ -191,7 +191,7 @@ func (s *Seq) applyPatches() {
 		outName := outMcs.Name(msg[0], int(msg[1]))
 		log.Println("initializing", outName, "=", int(msg[2]))
 		msg[0] |= byte(s.outChan - 1)
-		evOut := alsa.SeqEvent{a.saOut, msg}
+		evOut := alsa.SeqEvent{SeqAddr: a.saOut, Data: msg}
 		if err := s.aseq.Write(evOut); err != nil {
 			panic(err)
 		}
@@ -203,8 +203,7 @@ func (s *Seq) applyPatches() {
 		if inMc == nil || inMc.Cmd != midi.NoteOn {
 			continue
 		}
-		evIn := alsa.SeqEvent{a.saIn, []byte{midi.NoteOn, byte(inCC), msg[2]}}
-		if err := s.aseq.Write(evIn); err != nil {
+		if err := a.feedback(s.aseq.Write, []byte{midi.NoteOn, byte(inCC), msg[2]}); err != nil {
 			panic(err)
 		}
 	}

@@ -38,8 +38,7 @@ func main() {
 	defer aseq.Close()
 	sa, err := aseq.PortAddress(*midiPort)
 	must(err)
-	must(aseq.OpenPortWrite(sa))
-	must(aseq.OpenPortRead(sa))
+	must(aseq.OpenPortNameWrite(*midiPort))
 
 	tickDur, tick := pat.TickDuration(), 0
 	beatdur := time.Duration(float64(time.Second) * (1.0 / (float64(pat.BPM) / 60.0)))

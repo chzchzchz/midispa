@@ -19,6 +19,15 @@ type Assignments struct {
 
 	saIn  alsa.SeqAddr
 	saOut alsa.SeqAddr
+
+	writeback bool
+}
+
+func (a *Assignments) feedback(write func(alsa.SeqEvent) error, data []byte) error {
+	if !a.writeback {
+		return nil
+	}
+	return write(alsa.SeqEvent{SeqAddr: a.saIn, Data: data})
 }
 
 type Mapping struct {
