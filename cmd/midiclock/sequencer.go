@@ -10,6 +10,7 @@ import (
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/sysex"
+	"github.com/chzchzchz/midispa/sysex/mmc"
 )
 
 type Sequencer struct {
@@ -147,12 +148,24 @@ func (s *Sequencer) Read() {
 	case midi.SysEx:
 		v := sysex.Decode(ev.Data)
 		switch v.(type) {
-		case *sysex.Play:
+		case *mmc.Play:
 			ev.Data = []byte{midi.Start}
 			s.start(ev)
-		case *sysex.Stop:
+		case *mmc.Stop:
 			ev.Data = []byte{midi.Stop}
 			s.stop(ev)
+		case *mmc.Pause:
+			ev.Data = []byte{midi.Stop}
+			s.stop(ev)
+		case *mmc.DeferredPlay:
+			ev.Data = []byte{midi.Start}
+			s.start(ev)
+		case *mmc.RecordStrobe:
+			log.Println("midiclock record strobe received")
+		case *mmc.Reset:
+			log.Println("midiclock MMC reset received")
+		case *mmc.Chase:
+			log.Println("midiclock MMC chase received")
 		}
 	default:
 		if midi.IsCC(cmd) {
