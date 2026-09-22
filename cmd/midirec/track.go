@@ -131,25 +131,43 @@ func (t *Track) save(midipath string) error {
 		rd := midireader.New(bytes.NewBuffer(data), func(m realtime.Message) {})
 		return rd.Read()
 	}
+	var writeErr error
 	writeMIDI := func(wr smf.Writer) {
 		// Microseconds per quarter note.
 		sig := meta.TimeSig{Numerator: 4, Denominator: 3, ClocksPerClick: 24, DemiSemiQuaverPerQuarter: 8}
-		must(wr.Write(sig))
-		must(wr.Write(meta.Tempo(uint32((60.0 / float64(t.bpm)) * 1e6))))
+		if writeErr != nil {
+			return
+		}
+		if writeErr = wr.Write(sig); writeErr != nil {
+			return
+		}
+		if writeErr = wr.Write(meta.Tempo(uint32((60.0 / float64(t.bpm)) * 1e6))); writeErr != nil {
+			return
+		}
 		lastClock := time.Duration(0)
 		evs := t.Events()
 		for _, ev := range evs {
 			wr.SetDelta(tpq.Ticks(uint32(t.bpm), ev.clock-lastClock))
 			mm, err := msg2midi(ev.data)
-			must(err)
-			must(wr.Write(mm))
+			if err != nil {
+				writeErr = err
+				return
+			}
+			if writeErr = wr.Write(mm); writeErr != nil {
+				return
+			}
 			lastClock = ev.clock
 		}
 		log.Printf("wrote %d events; last clock %v", len(evs), lastClock)
-		wr.Write(meta.EndOfTrack)
+		if writeErr = wr.Write(meta.EndOfTrack); writeErr != nil {
+			return
+		}
 	}
 	err := smfwriter.WriteFile(
 		midipath, writeMIDI, smfwriter.NumTracks(1), smfwriter.TimeFormat(tpq))
+	if writeErr != nil {
+		return writeErr
+	}
 	if err != smf.ErrFinished {
 		return err
 	}

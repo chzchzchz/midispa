@@ -11,6 +11,7 @@ import (
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/sysex"
+	"github.com/chzchzchz/midispa/sysex/mmc"
 )
 
 type Tempo struct {
@@ -199,12 +200,11 @@ func (s *Sequencer) startRunning() {
 
 func (s *Sequencer) processCC(data []byte) {
 	if midi.Channel(data[0]) == 0xf {
-		// TODO: tempo control
 		switch data[1] {
 		case CCTempoLSB:
-			panic("lsb")
+			log.Println("tempo LSB not yet implemented")
 		case CCTempoMSB:
-			panic("msb")
+			log.Println("tempo MSB not yet implemented")
 		}
 		return
 	}
@@ -214,23 +214,27 @@ func (s *Sequencer) processCC(data []byte) {
 func (s *Sequencer) processSysex(data []byte) error {
 	sx := sysex.Decode(data)
 	switch sx.(type) {
-	case *sysex.RecordStrobe:
+	case *mmc.RecordStrobe:
 		log.Println("midirec recording at tick", s.clockTicks)
 		s.track = Track{bpm: s.bpm}
 		s.startRec, s.startRecTicks = time.Now(), s.clockTicks
 		s.recording = true
-		// This used to toggle recording, but it shouldn't based
-		// on the MMC spec.
-		// I like resetting the recording data when strobing twice,
-		// but it's not strictly what is intended by the MMC spec.
-	case *sysex.RecordExit:
-		log.Println("midirec record exit")
-		s.recording = false
-	case *sysex.Eject, *sysex.Stop:
+	case *mmc.Play:
+		log.Println("midirec play received")
+	case *mmc.Stop, *mmc.Eject, *mmc.Pause:
 		err := s.save()
 		s.track = Track{bpm: s.bpm}
 		s.recording = false
 		return err
+	case *mmc.RecordExit:
+		log.Println("midirec record exit")
+		s.recording = false
+	case *mmc.Reset:
+		log.Println("midirec MMC reset received")
+		s.track = Track{bpm: s.bpm}
+		s.recording = false
+	case *mmc.RecordStrobeVariable:
+		log.Println("midirec variable record strobe")
 	}
 	return nil
 }
