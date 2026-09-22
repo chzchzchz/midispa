@@ -37,6 +37,29 @@ func TestEncodeDataBytes(t *testing.T) {
 	}
 }
 
+func TestDumpUnmarshalShortData(t *testing.T) {
+	// Data shorter than 7 bytes should not panic
+	d := &Dump{}
+	err := d.UnmarshalBinary([]byte{0xf0, 0, 0, 0xe, 5, 0})
+	if err == nil {
+		t.Error("expected error for short data")
+	}
+	// Data of exactly 7 bytes should also fail (too short for payload)
+	err = d.UnmarshalBinary([]byte{0xf0, 0, 0, 0xe, 5, 0, 0x01})
+	if err == nil {
+		t.Error("expected error for too-short payload")
+	}
+}
+
+func TestDumpUnmarshalBadHeader(t *testing.T) {
+	d := &Dump{}
+	// Bad header should return error
+	err := d.UnmarshalBinary([]byte{0xf0, 0, 0, 0xe, 5, 0, 0x01, 0xf7})
+	if err == nil {
+		t.Error("expected error for bad header")
+	}
+}
+
 func TestDump(t *testing.T) {
 	if midiPort == "" {
 		t.Skip("set MIDI_PORT to an SR16 MIDI port to run this hardware test")

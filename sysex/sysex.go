@@ -2,6 +2,7 @@ package sysex
 
 import (
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/chzchzchz/midispa/sysex/mmc"
 )
 
 const (
@@ -31,28 +32,101 @@ func DecodeRealTime(dd []byte) interface{} {
 	case SubIdDeviceControl:
 		switch data[2] {
 		case DeviceControlIdMasterVolume:
-			return MasterVolumeFromSysEx(data)
+			mv, err := MasterVolumeFromSysEx(data)
+			if err != nil {
+				return nil
+			}
+			return mv
 		case DeviceControlIdMasterBalance:
-			return MasterBalanceFromSysEx(data)
+			mb, err := MasterBalanceFromSysEx(data)
+			if err != nil {
+				return nil
+			}
+			return mb
 		case DeviceControlIdGlobalParameterControl:
-			return GlobalParameterControlFromSysEx(data)
+			gpc, err := GlobalParameterControlFromSysEx(data)
+			if err != nil {
+				return nil
+			}
+			return gpc
 		}
-	case SubIdMMCCommand:
+	case mmc.SubIdMMCCommand:
 		switch data[2] {
-		case MMCStop:
-			return &Stop{}
-		case MMCPlay:
-			return &Play{}
-		case MMCRewind:
-			return &Rewind{}
-		case MMCFastForward:
-			return &FastForward{}
-		case MMCRecordStrobe:
-			return &RecordStrobe{}
-		case MMCRecordExit:
-			return &RecordExit{}
-		case MMCEject:
-			return &Eject{}
+		case mmc.MMCStop:
+			return &mmc.Stop{DeviceId: int(data[0])}
+		case mmc.MMCPlay:
+			return &mmc.Play{DeviceId: int(data[0])}
+		case mmc.MMCRewind:
+			return &mmc.Rewind{DeviceId: int(data[0])}
+		case mmc.MMCFastForward:
+			return &mmc.FastForward{DeviceId: int(data[0])}
+		case mmc.MMCRecordStrobe:
+			return &mmc.RecordStrobe{DeviceId: int(data[0])}
+		case mmc.MMCRecordExit:
+			return &mmc.RecordExit{DeviceId: int(data[0])}
+		case mmc.MMCEject:
+			return &mmc.Eject{DeviceId: int(data[0])}
+		case mmc.MMCDeferredPlay:
+			return &mmc.DeferredPlay{DeviceId: int(data[0])}
+		case mmc.MMCRecordPause:
+			return &mmc.RecordPause{DeviceId: int(data[0])}
+		case mmc.MMCPause:
+			return &mmc.Pause{DeviceId: int(data[0])}
+		case mmc.MMCWait:
+			return &mmc.Wait{DeviceId: int(data[0])}
+		case mmc.MMCResume:
+			return &mmc.Resume{DeviceId: int(data[0])}
+		case mmc.MMCChase:
+			return &mmc.Chase{DeviceId: int(data[0])}
+		case mmc.MMCCommandErrorReset:
+			return &mmc.CommandErrorReset{DeviceId: int(data[0])}
+		case mmc.MMCReset:
+			return &mmc.Reset{DeviceId: int(data[0])}
+		case mmc.MMCWrite:
+			return &mmc.Write{DeviceId: int(data[0])}
+		case mmc.MMCMaskedWrite:
+			return &mmc.MaskedWrite{DeviceId: int(data[0])}
+		case mmc.MMCRead:
+			return &mmc.Read{DeviceId: int(data[0])}
+		case mmc.MMCUpdate:
+			return &mmc.Update{DeviceId: int(data[0])}
+		case mmc.MMCLocate:
+			if len(data) > 4 && data[4] == mmc.MMCLocateTarget {
+				return &mmc.LocateTarget{DeviceId: int(data[0])}
+			}
+			return &mmc.LocateIF{DeviceId: int(data[0])}
+		case mmc.MMCSearch:
+			return &mmc.Search{DeviceId: int(data[0])}
+		case mmc.MMCShuttle:
+			return &mmc.Shuttle{DeviceId: int(data[0])}
+		case mmc.MMCVariablePlay:
+			return &mmc.VariablePlay{DeviceId: int(data[0])}
+		case mmc.MMCStep:
+			return &mmc.Step{DeviceId: int(data[0])}
+		case mmc.MMCDeferredVariablePlay:
+			return &mmc.DeferredVariablePlay{DeviceId: int(data[0])}
+		case mmc.MMCRecordStrobeVariable:
+			return &mmc.RecordStrobeVariable{DeviceId: int(data[0])}
+		case mmc.MMCProcedure:
+			return &mmc.Procedure{DeviceId: int(data[0])}
+		case mmc.MMCEvent:
+			return &mmc.Event{DeviceId: int(data[0])}
+		case mmc.MMCGroup:
+			return &mmc.Group{DeviceId: int(data[0])}
+		case mmc.MMCCommandSegment:
+			return &mmc.CommandSegment{DeviceId: int(data[0])}
+		case mmc.MMCAdd:
+			return &mmc.Add{DeviceId: int(data[0])}
+		case mmc.MMCSubtract:
+			return &mmc.Subtract{DeviceId: int(data[0])}
+		case mmc.MMCDropFrameAdjust:
+			return &mmc.DropFrameAdjust{DeviceId: int(data[0])}
+		case mmc.MMCGeneratorCommand:
+			return &mmc.GeneratorCommand{DeviceId: int(data[0])}
+		case mmc.MMCTimeCodeCommand:
+			return &mmc.TimeCodeCommand{DeviceId: int(data[0])}
+		case mmc.MMCMove:
+			return &mmc.Move{DeviceId: int(data[0])}
 		}
 	}
 	return nil
@@ -67,46 +141,54 @@ func DecodeNonRealTime(data []byte) interface{} {
 		case DeviceInquiryIdResponse:
 			resp := &DeviceInquiryResponse{}
 			if err := resp.UnmarshalBinary(data); err != nil {
-				panic(err)
+				return nil
 			}
 			return resp
 		}
 	case SubIdFileDump:
 		switch data[2+2] {
 		case FileDumpIdHeader:
-			return FileDumpHeaderFromSysEx(data[2:])
+			h, err := FileDumpHeaderFromSysEx(data[2:])
+			if err != nil {
+				return nil
+			}
+			return h
 		case FileDumpIdDataPacket:
 			return FileDumpDataPacketFromSysEx(data[2:])
 		case FileDumpIdRequest:
 			return FileDumpRequestFromSysEx(data[2:])
 		}
-	case SubIdEOF, SubIdWait, SubIdCancel, SubIdNAK, SubIdACK:
-		return HandshakeFromSysEx(data[2:])
+	case FileDumpSubIdEOF, FileDumpSubIdWait, FileDumpSubIdCancel, FileDumpSubIdNAK, FileDumpSubIdACK:
+		hs, err := HandshakeFromSysEx(data[2:])
+		if err != nil {
+			return nil
+		}
+		return hs
 	}
 	return nil
 }
 
-func decode7bitInt(data []byte) (ret int) {
+func decode7bitInt(data []byte) (ret int, err error) {
 	for _, v := range data {
 		if v&0x80 != 0 {
-			panic("want 7-bit")
+			return 0, ErrBadRange
 		}
 		ret <<= 7
 		ret += int(uint8(v))
 	}
-	return ret
+	return ret, nil
 }
 
-func encode7bitInt(v, w int) []byte {
+func encode7bitInt(v, w int) ([]byte, error) {
 	ret := make([]byte, w)
-	for i := 0; i < w; i++ {
+	for i := w - 1; i >= 0; i-- {
 		ret[i] = byte(v & 0x7f)
 		v >>= 7
 	}
 	if v != 0 {
-		panic("value exceeded width")
+		return nil, ErrBadRange
 	}
-	return ret
+	return ret, nil
 }
 
 type SysEx struct{ Data []byte }

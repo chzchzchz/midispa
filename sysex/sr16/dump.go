@@ -24,7 +24,7 @@ func isHeaderOK(data []byte) bool {
 }
 
 func (d *Dump) UnmarshalBinary(data []byte) error {
-	if !isHeaderOK(data) || data[5] != 0 {
+	if !isHeaderOK(data) || len(data) < 7 || data[5] != 0 {
 		return fmt.Errorf("bad header")
 	}
 	payload := data[6 : len(data)-1]

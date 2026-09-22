@@ -76,7 +76,7 @@ func (cm *ChorusModDepth) MarshalBinary() ([]byte, error) {
 	cp := ChorusParameters{
 		DeviceId:  cm.DeviceId,
 		Parameter: ChorusParameterModDepth,
-		Value:     int(float32(cm.ModDepth/time.Millisecond) / 3.2),
+		Value:     int(float32(cm.ModDepth/time.Millisecond) + 1.0/3.2),
 	}
 	return cp.marshalBinary()
 }
@@ -90,6 +90,7 @@ func (cf *ChorusFeedback) MarshalBinary() ([]byte, error) {
 	cp := ChorusParameters{
 		DeviceId:  cf.DeviceId,
 		Parameter: ChorusParameterFeedback,
+		Value:     int(cf.Feedback / 0.763),
 	}
 	return cp.marshalBinary()
 }
@@ -103,7 +104,7 @@ func (cs *ChorusSendToReverb) MarshalBinary() ([]byte, error) {
 	cp := ChorusParameters{
 		DeviceId:  cs.DeviceId,
 		Parameter: ChorusParameterSendToReverb,
-		Value:     int((cs.SendToReverb * 100.0) / 0.787),
+		Value:     int((cs.SendToReverb / 0.763) * 100.0),
 	}
 	return cp.marshalBinary()
 }

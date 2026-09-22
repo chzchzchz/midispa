@@ -22,10 +22,10 @@ func (d *Drum) encode() ([]byte, error) {
 	if d.Volume < 0 || d.Volume > 99 {
 		return nil, fmt.Errorf("bad volume")
 	}
-	if d.Panning < 0 || d.Panning > 6 {
+	if d.Panning < 0 || d.Panning > 7 {
 		return nil, fmt.Errorf("bad panning")
 	}
-	if d.Assignment < 0 || d.Assignment > 6 {
+	if d.Assignment < 0 || d.Assignment > 3 {
 		return nil, fmt.Errorf("bad assignment")
 	}
 	if d.Tuning < 0 || d.Tuning > 7 {
@@ -47,8 +47,8 @@ func (d *Drum) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("wrong length")
 	}
 	d.SoundNumber = int(data[0])
-	d.OutputSelect = (data[1] & 0x80) == 1
-	d.Volume = int(data[1] & ((1 << 6) - 1))
+	d.OutputSelect = (data[1] & 0x80) != 0
+	d.Volume = int(data[1] & ((1 << 7) - 1))
 	d.Tuning = int(data[2] & 0x7)
 	d.Assignment = int((data[2] >> 3) & 0x3)
 	d.Panning = int((data[2] >> 5) & 0x7)
@@ -73,7 +73,7 @@ func (ds *DrumSet) MarshalBinary() ([]byte, error) {
 		payload = append(payload, (v&0x80)>>7)
 	}
 	if len(payload) != 72 {
-		panic("payload unexpected length")
+		return nil, fmt.Errorf("payload unexpected length")
 	}
 	data := []byte{
 		0xf0,             // sysex

@@ -33,10 +33,10 @@ func makePacket(b []byte) []byte {
 }
 
 func ParamCCBankOffset(n int) int {
-	if n >= 4 {
-		panic("bad bank")
+	if n < 4 {
+		return n * 4 * 4
 	}
-	return n * 4 * 4
+	return 0
 }
 
 func ParamNthCC(n int) int { return n * 4 }
