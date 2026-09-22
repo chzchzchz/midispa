@@ -45,9 +45,11 @@ func fileDump(seq *alsa.Seq, sa alsa.SeqAddr, f *os.File) error {
 			toWrite = fsz - i
 		}
 		buf := make([]byte, toWrite)
-		if _, err := f.Read(buf); err != nil {
+		n, err := f.Read(buf)
+		if err != nil {
 			return err
 		}
+		buf = buf[:n]
 		// Send data packet and loop until ack
 		// TODO: timeouts
 		data := &sysex.FileDumpDataPacket{1, pkt & 0x7f, buf}
@@ -65,19 +67,21 @@ func fileDump(seq *alsa.Seq, sa alsa.SeqAddr, f *os.File) error {
 			}
 			if hs, ok := msg.(*sysex.Handshake); ok {
 				if hs.Packet != data.Packet {
-					return errBadPacket
-				} else if hs.SubId == sysex.SubIdNAK {
-					continue
-				} else if hs.SubId == sysex.SubIdACK {
-					break
-				} else if hs.SubId == sysex.SubIdCancel {
-					return errCancel
-				}
+								return errBadPacket
+							} else if hs.SubId == sysex.FileDumpSubIdNAK {
+								continue
+							} else if hs.SubId == sysex.FileDumpSubIdACK {
+								break
+							} else if hs.SubId == sysex.FileDumpSubIdWait {
+								continue
+							} else if hs.SubId == sysex.FileDumpSubIdCancel {
+								return errCancel
+							}
 			}
 			return errNoHandshake
 		}
 		pkt++
 	}
-	eof := &sysex.Handshake{DeviceId: 1, SubId: sysex.SubIdEOF, Packet: pkt & 0x7f}
+	eof := &sysex.Handshake{DeviceId: 1, SubId: sysex.FileDumpSubIdEOF, Packet: pkt & 0x7f}
 	return send(eof)
 }

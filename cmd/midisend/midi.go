@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
@@ -13,22 +14,24 @@ type alsaWriter struct {
 	sa  alsa.SeqAddr
 }
 
-func newAlsaWriter(port string) *alsaWriter {
+func newAlsaWriter(port string) (*alsaWriter, error) {
 	seq, err := alsa.OpenSeq("midisend")
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("open seq: %w", err)
 	}
 	sa, err := seq.PortAddress(port)
 	if err != nil {
-		panic(err)
+		seq.Close()
+		return nil, fmt.Errorf("port address: %w", err)
 	}
 	if err := seq.OpenPortWrite(sa); err != nil {
-		panic(err)
+		seq.Close()
+		return nil, fmt.Errorf("open port write: %w", err)
 	}
 	return &alsaWriter{
 		seq: seq,
 		sa:  sa,
-	}
+	}, nil
 }
 
 func (aw *alsaWriter) Write(msg []byte) (int, error) {
@@ -64,7 +67,7 @@ func (jw *jackWriter) processMidi(w io.Writer) {
 	jw.mu.Unlock()
 }
 
-func newJackWriter(port string) *jackWriter {
+func newJackWriter(port string) (*jackWriter, error) {
 	jw := &jackWriter{}
 	pc := jack.PortConfig{
 		ClientName:   "midispa",
@@ -74,10 +77,10 @@ func newJackWriter(port string) *jackWriter {
 	}
 	p, err := jack.NewWritePort(pc)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("new write port: %w", err)
 	}
 	jw.p = p
-	return jw
+	return jw, nil
 }
 
 func (jw *jackWriter) Write(msg []byte) (int, error) {
