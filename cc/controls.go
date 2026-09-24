@@ -3,6 +3,7 @@ package cc
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 )
 
 type MidiControls struct {
@@ -18,6 +19,91 @@ type MidiControls struct {
 }
 
 type Control *int
+
+// ControlField exposes one ordered CC-tagged field. Separate fields remain
+// separate even when they share a controller number.
+type ControlField struct {
+	Name       string
+	Controller int
+	Value      *int
+}
+
+// ControlFields initializes and returns all cc-tagged fields in declaration
+// order, preserving duplicate controller numbers.
+func ControlFields(model any) ([]ControlField, error) {
+	fields, err := taggedControlFields(model, "cc", true)
+	if err != nil {
+		return nil, err
+	}
+	ret := make([]ControlField, 0, len(fields))
+	for _, field := range fields {
+		ret = append(ret, ControlField{
+			Name:       field.name,
+			Controller: field.controller,
+			Value:      field.value,
+		})
+	}
+	return ret, nil
+}
+
+type taggedControlField struct {
+	name       string
+	controller int
+	value      *int
+}
+
+func taggedControlFields(model any, tag string, initializeMissing bool) ([]taggedControlField, error) {
+	modelValue := reflect.ValueOf(model)
+	if !modelValue.IsValid() || modelValue.Kind() != reflect.Pointer || modelValue.IsNil() {
+		return nil, fmt.Errorf("model is not a non-nil struct pointer")
+	}
+	modelValue = modelValue.Elem()
+	if modelValue.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("model is not a struct pointer")
+	}
+
+	modelType := modelValue.Type()
+	fields := make([]taggedControlField, 0, modelType.NumField())
+	for index := 0; index < modelType.NumField(); index++ {
+		fieldType := modelType.Field(index)
+		controllerText := fieldType.Tag.Get(tag)
+		if controllerText == "" {
+			continue
+		}
+		controller, err := strconv.Atoi(controllerText)
+		if err != nil || controller < 0 || controller > 127 {
+			return nil, fmt.Errorf("field %s has invalid %s tag %q", fieldType.Name, tag, controllerText)
+		}
+
+		fieldValue := modelValue.Field(index)
+		if fieldValue.Kind() != reflect.Pointer || fieldValue.Type().Elem().Kind() != reflect.Int {
+			return nil, fmt.Errorf("field %s is not a pointer to an integer", fieldType.Name)
+		}
+		if fieldValue.IsNil() {
+			if !initializeMissing {
+				fields = append(fields, taggedControlField{name: fieldType.Name, controller: controller})
+				continue
+			}
+			fieldValue.Set(reflect.New(fieldValue.Type().Elem()).Convert(fieldValue.Type()))
+		}
+
+		var value *int
+		switch typedValue := fieldValue.Interface().(type) {
+		case Control:
+			value = (*int)(typedValue)
+		case *int:
+			value = typedValue
+		default:
+			return nil, fmt.Errorf("field %s has unsupported pointer type %s", fieldType.Name, fieldValue.Type())
+		}
+		fields = append(fields, taggedControlField{
+			name:       fieldType.Name,
+			controller: controller,
+			value:      value,
+		})
+	}
+	return fields, nil
+}
 
 type MidiControlsMap map[string]MidiControlsSlice
 
@@ -74,37 +160,24 @@ func NewMidiControlsNote(model interface{}) *MidiControls {
 	return newMidiControls("note", 0x90, model)
 }
 
-func newMidiControls(tag string, cmd byte, model interface{}) *MidiControls {
-	tt := reflect.TypeOf(model).Elem()
-	n := tt.NumField()
+func newMidiControls(tag string, cmd byte, model any) *MidiControls {
+	fields, err := taggedControlFields(model, tag, false)
+	if err != nil {
+		panic(err.Error())
+	}
 	ret := &MidiControls{
 		name2cc: make(map[string]*ccInfo),
 		cc2cc:   make(map[int]*ccInfo),
 		cc2name: make(map[int]string),
 		model:   model,
+		tag:     tag,
 		Cmd:     cmd,
 	}
-	for i := 0; i < n; i++ {
-		field := tt.Field(i)
-		// TODO: nrpns, msb/lsbs etc
-		tagValue := field.Tag.Get(tag)
-		if tagValue == "" {
-			continue
-		}
-		fPtr := reflect.ValueOf(model).Elem().FieldByName(field.Name)
-		cc := &ccInfo{min: 0, max: 127}
-		if _, err := fmt.Sscanf(field.Tag.Get(tag), "%d", &cc.msb); err != nil {
-			panic("field " + field.Name +
-				" failed to parse tag " + tag +
-				": " + err.Error())
-		}
-		if !fPtr.IsZero() {
-			v := int(reflect.Indirect(fPtr).Int())
-			cc.val = &v
-		}
-		ret.name2cc[field.Name], ret.cc2cc[cc.msb] = cc, cc
-		ret.cc2name[cc.msb] = field.Name
-		ret.ccInfos = append(ret.ccInfos, cc)
+	for _, field := range fields {
+		info := &ccInfo{msb: field.controller, min: 0, max: 127, val: field.value}
+		ret.name2cc[field.name], ret.cc2cc[info.msb] = info, info
+		ret.cc2name[info.msb] = field.name
+		ret.ccInfos = append(ret.ccInfos, info)
 	}
 	if len(ret.ccInfos) == 0 {
 		return nil

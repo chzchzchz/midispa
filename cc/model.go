@@ -1,5 +1,7 @@
 package cc
 
+import "fmt"
+
 type CraftSynth2 struct {
 	ModulationWheel Control `cc:"1"`
 	Glide           Control `cc:"5"` // 0 - 2.5 seconds, exponential
@@ -630,53 +632,135 @@ type ProVSMini struct {
 }
 
 type Model struct {
-	Model            string
-	*GMController    `json:"GMController,omitempty"`
-	*CraftSynth2     `json:"CraftSynth2,omitempty"`
-	*MeeblipSE       `json:"MeeblipSE,omitempty"`
-	*MeeblipTriode   `json:"MeeblipTriode,omitempty"`
-	*Skulpt          `json:"Skulpt,omitempty"`
-	*SoundController `json:"SoundController,omitempty"`
-	*VolcaBass       `json:"VolcaBass,omitempty"`
-	*VolcaBeats      `json:"VolcaBeats,omitempty"`
-	*VolcaKeys       `json:"VolcaKeys,omitempty"`
-	*VolcaKick       `json:"VolcaKick,omitempty"`
-	*VolcaDrum       `json:"VolcaDrum,omitempty"`
-	*UnoSynth        `json:"UnoSynth,omitempty"`
-	*ProVSMini       `json:"ProVSMini,omitempty"`
+	Model               string
+	*GMController       `json:"GMController,omitempty"`
+	*CraftSynth2        `json:"CraftSynth2,omitempty"`
+	*MeeblipSE          `json:"MeeblipSE,omitempty"`
+	*MeeblipTriode      `json:"MeeblipTriode,omitempty"`
+	*MidiMix            `json:"MidiMix,omitempty"`
+	*Skulpt             `json:"Skulpt,omitempty"`
+	*SoundController    `json:"SoundController,omitempty"`
+	*VolcaBass          `json:"VolcaBass,omitempty"`
+	*VolcaBeats         `json:"VolcaBeats,omitempty"`
+	*VolcaKeys          `json:"VolcaKeys,omitempty"`
+	*VolcaKick          `json:"VolcaKick,omitempty"`
+	*VolcaDrum          `json:"VolcaDrum,omitempty"`
+	*UnoSynth           `json:"UnoSynth,omitempty"`
+	*WorldeEasyControl9 `json:"WorldeEasyControl9,omitempty"`
+	*ProVSMini          `json:"ProVSMini,omitempty"`
 }
 
-func (m *Model) MidiParams() interface{} {
+var modelNames = []string{
+	"Craft Synth 2",
+	"Meeblip SE",
+	"Meeblip Triode",
+	"MidiMix",
+	"Skulpt",
+	"Sound Controller",
+	"Volca Bass",
+	"Volca Beats",
+	"Volca Keys",
+	"Volca Kick",
+	"Volca Drum",
+	"GM Controller",
+	"Uno Synth",
+	"WorldeEasyControl9",
+	"Pro VS Mini",
+}
+
+// ModelNames returns the canonical model names accepted by NewModelParams.
+func ModelNames() []string {
+	return append([]string(nil), modelNames...)
+}
+
+// NewModelParams initializes model-specific storage without exposing MidiParams'
+// panic-based unknown-model path to callers.
+func NewModelParams(name string) (any, error) {
+	for _, modelName := range modelNames {
+		if name == modelName {
+			model := &Model{Model: name}
+			return model.MidiParams(), nil
+		}
+	}
+	return nil, fmt.Errorf("unknown model %q", name)
+}
+
+func (m *Model) MidiParams() any {
 	switch m.Model {
 	case "Craft Synth 2":
+		if m.CraftSynth2 == nil {
+			m.CraftSynth2 = &CraftSynth2{}
+		}
 		return m.CraftSynth2
 	case "Meeblip SE":
+		if m.MeeblipSE == nil {
+			m.MeeblipSE = &MeeblipSE{}
+		}
 		return m.MeeblipSE
 	case "Meeblip Triode":
+		if m.MeeblipTriode == nil {
+			m.MeeblipTriode = &MeeblipTriode{}
+		}
 		return m.MeeblipTriode
 	case "MidiMix":
-		return &MidiMix{}
+		if m.MidiMix == nil {
+			m.MidiMix = &MidiMix{}
+		}
+		return m.MidiMix
 	case "Skulpt":
+		if m.Skulpt == nil {
+			m.Skulpt = &Skulpt{}
+		}
 		return m.Skulpt
 	case "Sound Controller":
+		if m.SoundController == nil {
+			m.SoundController = &SoundController{}
+		}
 		return m.SoundController
 	case "Volca Bass":
+		if m.VolcaBass == nil {
+			m.VolcaBass = &VolcaBass{}
+		}
 		return m.VolcaBass
 	case "Volca Beats":
+		if m.VolcaBeats == nil {
+			m.VolcaBeats = &VolcaBeats{}
+		}
 		return m.VolcaBeats
 	case "Volca Keys":
+		if m.VolcaKeys == nil {
+			m.VolcaKeys = &VolcaKeys{}
+		}
 		return m.VolcaKeys
 	case "Volca Kick":
+		if m.VolcaKick == nil {
+			m.VolcaKick = &VolcaKick{}
+		}
 		return m.VolcaKick
 	case "Volca Drum":
+		if m.VolcaDrum == nil {
+			m.VolcaDrum = &VolcaDrum{}
+		}
 		return m.VolcaDrum
 	case "GM Controller":
+		if m.GMController == nil {
+			m.GMController = &GMController{}
+		}
 		return m.GMController
 	case "Uno Synth":
+		if m.UnoSynth == nil {
+			m.UnoSynth = &UnoSynth{}
+		}
 		return m.UnoSynth
 	case "WorldeEasyControl9":
-		return &WorldeEasyControl9{}
+		if m.WorldeEasyControl9 == nil {
+			m.WorldeEasyControl9 = &WorldeEasyControl9{}
+		}
+		return m.WorldeEasyControl9
 	case "Pro VS Mini":
+		if m.ProVSMini == nil {
+			m.ProVSMini = &ProVSMini{}
+		}
 		return m.ProVSMini
 	default:
 		panic("unknown model " + m.Model)
