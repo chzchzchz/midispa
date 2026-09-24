@@ -50,9 +50,14 @@ A voice may override the device channel with its own `Channel`. MIDI notes are i
 
 ### Song mode
 
-- Left 48 pads: toggle measures in the current song.
-- Rightmost 16 pads: select a pattern.
+- Left 48 pads: toggle measures in the visible measure window.
+- Rightmost 16 pads: select a pattern from the visible pattern window.
+- Pattern up/down: scroll the pattern window by 16 slots.
+- `Shift` plus pattern up/down: move the selected pattern by one slot.
+- Grid left/right: scroll measures by 16, one 4x4 bank.
+- `Shift` plus grid left/right: scroll measures by 4.
 - `Shift` plus a measure pad: jump playback to that measure.
+- OLED row 3 shows the visible pattern and measure ranges.
 
 Patterns and songs are held in memory for the lifetime of the process.
 

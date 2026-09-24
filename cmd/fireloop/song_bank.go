@@ -10,9 +10,12 @@ import (
 type SongBank struct {
 	Songs      map[int]*Song
 	selSongIdx int // [1,999]
-	pb         *PatternBank
-	f          *Fire
-	playback   *Playback
+	// Viewport offsets stay independent from the selected pattern and measure.
+	patternStart int
+	measureStart int
+	pb           *PatternBank
+	f            *Fire
+	playback     *Playback
 }
 
 func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
@@ -23,6 +26,7 @@ func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
 		f:          f,
 	}
 	sb.Songs[sb.selSongIdx] = &Song{}
+	sb.resetArrangementView()
 	return sb
 }
 
@@ -32,12 +36,15 @@ func (sb *SongBank) CurrentSong() *Song {
 
 func (s *SongBank) Jump(n int) error {
 	newIdx := s.selSongIdx + n
-	if newIdx <= 0 || newIdx > 999 {
+	if newIdx <= 0 || newIdx > maxPatternIndex {
 		return nil
 	} else if _, ok := s.Songs[newIdx]; !ok {
 		s.Songs[newIdx] = &Song{}
 	}
 	s.selSongIdx = newIdx
+	if n != 0 || s.patternStart == 0 {
+		s.resetArrangementView()
+	}
 
 	must(s.PrintSong())
 	must(s.PrintPattern())
@@ -45,6 +52,7 @@ func (s *SongBank) Jump(n int) error {
 	must(s.printRow(3, " "))
 	must(s.printRow(4, " "))
 	must(s.printRow(5, " "))
+	must(s.printView())
 
 	must(s.DrawPadMeasures())
 	must(s.DrawPadPatterns())
@@ -52,13 +60,12 @@ func (s *SongBank) Jump(n int) error {
 }
 
 func (s *SongBank) JumpMeasure(x, y int) error {
-	if s.playback == nil {
+	idx, ok := s.measureIndex(x, y)
+	if !ok || s.playback == nil {
 		return nil
 	}
 	// Determine beat from grid position.
-	song := s.Songs[s.selSongIdx]
-	idx := (y * 4) + (x % 4) + (16 * (x / 4))
-	b := song.IndexToBeat(idx)
+	b := s.CurrentSong().IndexToBeat(idx)
 	lastSongBeat := s.playback.JumpSongBeat(b)
 	return s.printRow(4, fmt.Sprintf(
 		"Measure %03d->%03d",
@@ -67,9 +74,15 @@ func (s *SongBank) JumpMeasure(x, y int) error {
 }
 
 func (sb *SongBank) ToggleMeasure(x, y int) error {
-	song := sb.Songs[sb.selSongIdx]
-	p, _ := sb.pb.Patterns[sb.pb.selPatIdx]
-	idx := (y * 4) + (x % 4) + (16 * (x / 4))
+	idx, ok := sb.measureIndex(x, y)
+	if !ok {
+		return nil
+	}
+	song := sb.CurrentSong()
+	p := sb.pb.Patterns[sb.pb.selPatIdx]
+	if p == nil {
+		return nil
+	}
 	if sp := song.GetPattern(idx); sp == p {
 		song.SetPattern(nil, idx)
 		p = nil
@@ -81,30 +94,51 @@ func (sb *SongBank) ToggleMeasure(x, y int) error {
 }
 
 func (sb *SongBank) ToggleMeasureBrightness(lastMeasure, nextMeasure int) error {
-	s := sb.CurrentSong()
-	pi, i := s.BeatToPattern(float32(lastMeasure * 4))
-	pj, j := s.BeatToPattern(float32(nextMeasure * 4))
-
-	xi, yi := (i%4)+4*(i/16), (i%16)/4
-	xj, yj := (j%4)+4*(j/16), (j%16)/4
-
 	p2c := sb.patternsToColors()
-	pads := []akai.Pad{
-		makePad(xi, yi, Dim(p2c[pi], 16)),
-		makePad(xj, yj, p2c[pj]),
+	pads := make([]akai.Pad, 0, 2)
+	for _, item := range []struct {
+		measure int
+		bright  bool
+	}{
+		{measure: lastMeasure},
+		{measure: nextMeasure, bright: true},
+	} {
+		x, y, ok := sb.measurePadPosition(item.measure)
+		if !ok {
+			continue
+		}
+		pattern := sb.CurrentSong().GetPattern(item.measure)
+		color := Dim(p2c[pattern], 16)
+		if item.bright {
+			color = p2c[pattern]
+		}
+		pads = append(pads, makePad(x, y, color))
+	}
+	if len(pads) == 0 {
+		return nil
 	}
 	return sb.f.LightPadSlice(pads)
 }
 
 func (s *SongBank) SelectPattern(n int) error {
-	if n <= 0 || n > len(s.pb.Patterns) {
+	if s.pb == nil || n <= 0 || n > maxPatternIndex {
 		return nil
 	}
+	if s.pb.Patterns == nil {
+		s.pb.Patterns = make(map[int]*Pattern)
+	}
+	if _, ok := s.pb.Patterns[n]; !ok {
+		s.pb.Patterns[n] = &Pattern{}
+	}
 	s.pb.selPatIdx = n
+	s.ensurePatternVisible(n)
 	if err := s.DrawPadPatterns(); err != nil {
 		return err
 	}
-	return s.PrintPattern()
+	if err := s.PrintPattern(); err != nil {
+		return err
+	}
+	return s.printView()
 }
 
 func (s *SongBank) PrintSong() error {
@@ -121,15 +155,15 @@ func (s *SongBank) PrintTempo() error {
 
 func (s *SongBank) DrawPadMeasures() error {
 	p2c := s.patternsToColors()
-	song := s.Songs[s.selSongIdx]
-	// left three banks of 16 pads
-	pads := make([]akai.Pad, 16*3)
-	for i := 0; i < len(pads); i++ {
+	song := s.CurrentSong()
+	start, _ := s.measureWindow()
+	pads := make([]akai.Pad, measureViewSize)
+	for i := range pads {
 		col := i%4 + 4*(i/16)
 		row := (i / 4) % 4
 		color := oledBlack
-		if i < len(song.Patterns) {
-			color = Dim(p2c[song.Patterns[i]], 16)
+		if pattern := song.GetPattern(start + i); pattern != nil {
+			color = Dim(p2c[pattern], 16)
 		}
 		pads[i] = makePad(col, row, color)
 	}
@@ -137,26 +171,31 @@ func (s *SongBank) DrawPadMeasures() error {
 }
 
 func (s *SongBank) DrawPadPatterns() error {
-	padslice := make([]akai.Pad, 16)
-	for i := 0; i < len(padslice); i++ {
+	start, _ := s.patternWindow()
+	pads := make([]akai.Pad, patternViewSize)
+	for i := range pads {
+		index := start + i
 		color := oledBlack
-		if i < len(s.pb.Patterns) {
-			color = oledColorTable[(3*i)%len(oledColorTable)]
-		}
-		if i+1 != s.pb.selPatIdx {
-			color = Dim(color, 16)
+		if pattern := s.pb.Patterns[index]; pattern != nil {
+			color = oledColorTable[(3*(index-1))%len(oledColorTable)]
+			if index != s.pb.selPatIdx {
+				color = Dim(color, 16)
+			}
 		}
 		// rightmost bank of 16 pads
 		x, y := (i%4)+4*3, i/4
-		padslice[i] = makePad(x, y, color)
+		pads[i] = makePad(x, y, color)
 	}
-	return s.f.LightPadSlice(padslice)
+	return s.f.LightPadSlice(pads)
 }
 
 func (s *SongBank) patternsToColors() map[*Pattern][3]int {
 	ret := make(map[*Pattern][3]int)
-	for i := 1; i <= len(s.pb.Patterns); i++ {
-		ret[s.pb.Patterns[i]] = oledColorTable[(3*(i-1))%len(oledColorTable)]
+	for index, pattern := range s.pb.Patterns {
+		if pattern == nil || index < 1 || index > maxPatternIndex {
+			continue
+		}
+		ret[pattern] = oledColorTable[(3*(index-1))%len(oledColorTable)]
 	}
 	return ret
 }

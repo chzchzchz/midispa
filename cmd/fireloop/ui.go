@@ -51,7 +51,7 @@ func tapTempo() error {
 
 func handleSongGrid(aseq *alsa.Seq, x, y, vel int) error {
 	if x >= 12 {
-		return songbank.SelectPattern((x - 12 + 1) + (y * 4))
+		return songbank.SelectPatternSlot((x - 12) + (y * 4))
 	}
 	if shiftOn {
 		return songbank.JumpMeasure(x, y)
@@ -94,6 +94,27 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		} else {
 			return songbank.f.SetLed(NoteShift, 0)
 		}
+	// In song mode these controls navigate viewports; pads still edit the arrangement.
+	case NotePatternUp:
+		if shiftOn {
+			return songbank.MovePatternSelection(1)
+		}
+		return songbank.ScrollPatterns(1)
+	case NotePatternDown:
+		if shiftOn {
+			return songbank.MovePatternSelection(-1)
+		}
+		return songbank.ScrollPatterns(-1)
+	case NoteGridLeft:
+		if shiftOn {
+			return songbank.ScrollMeasures(-measureFinePageSize)
+		}
+		return songbank.ScrollMeasures(-measurePageSize)
+	case NoteGridRight:
+		if shiftOn {
+			return songbank.ScrollMeasures(measureFinePageSize)
+		}
+		return songbank.ScrollMeasures(measurePageSize)
 	case NotePatternSong:
 		processEvent = processPatternEvent
 		if err := patbank.f.SetLed(NotePatternSong, LEDOff); err != nil {
