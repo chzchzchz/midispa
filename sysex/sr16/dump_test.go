@@ -38,23 +38,23 @@ func TestEncodeDataBytes(t *testing.T) {
 }
 
 func TestDumpUnmarshalShortData(t *testing.T) {
-	// Data shorter than 7 bytes should not panic
 	d := &Dump{}
-	err := d.UnmarshalBinary([]byte{0xf0, 0, 0, 0xe, 5, 0})
-	if err == nil {
-		t.Error("expected error for short data")
-	}
-	// Data of exactly 7 bytes should also fail (too short for payload)
-	err = d.UnmarshalBinary([]byte{0xf0, 0, 0, 0xe, 5, 0, 0x01})
-	if err == nil {
-		t.Error("expected error for too-short payload")
+	// SR16-sysex.pdf, pp. 1-2: every seven decoded bytes occupy one complete eight-byte MIDI block.
+	for _, data := range [][]byte{
+		{0xf0, 0, 0, 0xe, 5, 0},
+		{0xf0, 0, 0, 0xe, 5, 0, 0xf7},
+		{0xf0, 0, 0, 0xe, 5, 0, 0x01, 0xf7},
+	} {
+		if err := d.UnmarshalBinary(data); err == nil {
+			t.Errorf("expected error for incomplete dump %v", data)
+		}
 	}
 }
 
 func TestDumpUnmarshalBadHeader(t *testing.T) {
 	d := &Dump{}
-	// Bad header should return error
-	err := d.UnmarshalBinary([]byte{0xf0, 0, 0, 0xe, 5, 0, 0x01, 0xf7})
+	// SR16-sysex.pdf, p. 1: Alesis is 00 00 0E, so 00 00 0D is deliberately invalid.
+	err := d.UnmarshalBinary([]byte{0xf0, 0, 0, 0xd, 5, 0, 0x01, 0xf7})
 	if err == nil {
 		t.Error("expected error for bad header")
 	}
@@ -76,14 +76,14 @@ func TestDump(t *testing.T) {
 	defer aseq.ClosePortRead(sa)
 
 	outMsg, _ := (&InquiryRequest{}).MarshalBinary()
-	ev := alsa.SeqEvent{sa, outMsg}
+	ev := alsa.SeqEvent{SeqAddr: sa, Data: outMsg}
 	noErr(t, aseq.Write(ev))
 
 	ev, err = aseq.Read()
 	noErr(t, err)
 
 	outMsg, _ = (&DumpRequest{}).MarshalBinary()
-	ev = alsa.SeqEvent{sa, outMsg}
+	ev = alsa.SeqEvent{SeqAddr: sa, Data: outMsg}
 	noErr(t, aseq.Write(ev))
 
 	ev, err = aseq.ReadSysEx()
@@ -112,7 +112,7 @@ func TestDump(t *testing.T) {
 		}
 	}
 	enc, _ := d.MarshalBinary()
-	if bytes.Compare(enc, ev.Data) != 0 {
+	if !bytes.Equal(enc, ev.Data) {
 		for i := 0; i < len(ev.Data); i++ {
 			if enc[i] != ev.Data[i] {
 				t.Errorf("0x%x = enc[0x%x] != ev.Data[0x%x] = 0x%x", enc[i], i, i, ev.Data[i])

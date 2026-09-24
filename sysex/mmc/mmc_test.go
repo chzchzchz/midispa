@@ -1,6 +1,7 @@
 package mmc
 
 import (
+	"bytes"
 	"testing"
 )
 
@@ -590,19 +591,18 @@ func TestUnmarshalMotionControlTally(t *testing.T) {
 // TestSignatureMarshalBinary verifies SIGNATURE encoding.
 func TestSignatureMarshalBinary(t *testing.T) {
 	s := &Signature{DeviceId: 0x10, VersionMajor: 0x01, VersionMinor: 0x00}
-	s.CommandBitmaps = [][]byte{{0x01, 0x02}, {0x03, 0x04}}
-	s.ResponseBitmaps = [][]byte{{0x05, 0x06}}
+	s.CommandBitmap = []byte{0x01, 0x02, 0x03, 0x04}
+	s.ResponseBitmap = []byte{0x05, 0x06}
 	b, err := s.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// F0 7F 10 07 40 <count=13> <data...> F7
-	if b[0] != 0xf0 || b[1] != 0x7f || b[3] != 0x07 || b[4] != 0x40 || b[5] != 0x0d {
-		t.Fatalf("bad framing: %v", b)
-	}
-	// Check version bytes (after count byte)
-	if b[6] != 0x01 || b[7] != 0x00 || b[8] != 0x00 || b[9] != 0x00 {
-		t.Fatalf("bad version bytes: %v", b)
+	// RP-013_v1-0_MIDI_Machine_Control_Specification_96-1-4.pdf, pp. 48-49,
+	// defines one length byte for each contiguous bitmap array.
+	expected := []byte{0xf0, 0x7f, 0x10, 0x07, 0x40, 0x0c, 0x01, 0x00, 0x00, 0x00,
+		0x04, 0x01, 0x02, 0x03, 0x04, 0x02, 0x05, 0x06, 0xf7}
+	if !bytes.Equal(b, expected) {
+		t.Errorf("SIGNATURE = %v, want %v", b, expected)
 	}
 }
 
@@ -787,14 +787,15 @@ func TestUnmarshalResume(t *testing.T) {
 
 // TestUnmarshalSignature verifies SIGNATURE decoding.
 func TestUnmarshalSignature(t *testing.T) {
-	// Build a valid signature response
+	// RP-013_v1-0_MIDI_Machine_Control_Specification_96-1-4.pdf, pp. 48-49.
+	// Build a valid SIGNATURE response.
 	// F0 7F 10 07 40 <count=0x0C> <data...> F7
 	// count=0x0C (12), vi=0x01, vf=0x00, va=0x00, vb=0x00
 	// command bitmap count=0x02, bytes=[0x01, 0x02]
-	// response bitmap count=0x03, bytes=[0x03, 0x04, 0x05, 0x06]
+	// response bitmap count=0x04, bytes=[0x03, 0x04, 0x05, 0x06]
 	// Total payload = 4(version) + 1(cmd_count) + 2(cmd_data) + 1(resp_count) + 4(resp_data) = 12
 	data := []byte{0xf0, 0x7f, 0x10, 0x07, 0x40, 0x0c, 0x01, 0x00, 0x00, 0x00,
-		0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0xf7}
+		0x02, 0x01, 0x02, 0x04, 0x03, 0x04, 0x05, 0x06, 0xf7}
 	s, err := UnmarshalSignature(data)
 	if err != nil {
 		t.Fatal(err)
@@ -805,11 +806,11 @@ func TestUnmarshalSignature(t *testing.T) {
 	if s.VersionMajor != 0x01 || s.VersionMinor != 0x00 {
 		t.Errorf("Version = 0x%02x/0x%02x, want 0x01/0x00", s.VersionMajor, s.VersionMinor)
 	}
-	if len(s.CommandBitmaps) != 1 || len(s.CommandBitmaps[0]) != 2 {
-		t.Errorf("CommandBitmaps = %v, want 1 bitmap of len 2", s.CommandBitmaps)
+	if !bytes.Equal(s.CommandBitmap, []byte{0x01, 0x02}) {
+		t.Errorf("CommandBitmap = %v, want [1 2]", s.CommandBitmap)
 	}
-	if len(s.ResponseBitmaps) != 1 || len(s.ResponseBitmaps[0]) != 4 {
-		t.Errorf("ResponseBitmaps = %v, want 1 bitmap of len 4", s.ResponseBitmaps)
+	if !bytes.Equal(s.ResponseBitmap, []byte{0x03, 0x04, 0x05, 0x06}) {
+		t.Errorf("ResponseBitmap = %v, want [3 4 5 6]", s.ResponseBitmap)
 	}
 	// Short data should fail
 	_, err = UnmarshalSignature([]byte{0xf0, 0x7f, 0x10, 0x07, 0x40, 0x04, 0x01, 0x00, 0x00, 0x00, 0xf7})

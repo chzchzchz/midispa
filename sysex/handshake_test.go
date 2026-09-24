@@ -6,7 +6,8 @@ import (
 
 func TestHandshakeFromSysExValid(t *testing.T) {
 	data := []byte{0xF0, 0x7e, 0x10, 0x7c, 0x01, 0xf7}
-	hs, err := HandshakeFromSysEx(data)
+	// MIDI_Specification.pdf, Generic Handshaking Messages: the parser receives data after the F0 7E frame.
+	hs, err := HandshakeFromSysEx(data[2:])
 	if err != nil {
 		t.Fatalf("HandshakeFromSysEx: %v", err)
 	}

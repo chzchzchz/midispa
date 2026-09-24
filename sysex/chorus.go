@@ -76,7 +76,9 @@ func (cm *ChorusModDepth) MarshalBinary() ([]byte, error) {
 	cp := ChorusParameters{
 		DeviceId:  cm.DeviceId,
 		Parameter: ChorusParameterModDepth,
-		Value:     int(float32(cm.ModDepth/time.Millisecond) + 1.0/3.2),
+		// MIDI_Specification.pdf, System Exclusive Messages: data is 7-bit;
+		// convert before division because time.Duration division is integer.
+		Value: int(float32(cm.ModDepth)/float32(time.Millisecond) + 1.0/3.2),
 	}
 	return cp.marshalBinary()
 }

@@ -6,6 +6,9 @@ import (
 	"github.com/chzchzchz/midispa/sysex"
 )
 
+// SR16-sysex.pdf, pp. 1-2: each block carries seven decoded bytes in eight MIDI bytes.
+const dumpBlockSize = 8
+
 type Dump struct {
 	Memory []byte
 }
@@ -28,6 +31,9 @@ func (d *Dump) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("bad header")
 	}
 	payload := data[6 : len(data)-1]
+	if len(payload) == 0 || len(payload)%dumpBlockSize != 0 {
+		return fmt.Errorf("incomplete dump block: %d bytes", len(payload))
+	}
 	d.Memory = sysex.LoHiDecodeDataBytes(payload)
 	return nil
 }

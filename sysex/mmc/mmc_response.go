@@ -166,13 +166,14 @@ type CommandErrorLevel struct {
 
 // Signature (40h) — dual bitmap array of supported commands and response fields.
 // Format: vi vf va vb <count_1> <c0...> <count_2> <r0...>
+// Reference: RP-013_v1-0_MIDI_Machine_Control_Specification_96-1-4.pdf, pp. 48-49.
 type Signature struct {
 	DeviceId     int
 	VersionMajor byte // MMC version integer part
 	VersionMinor byte // MMC version fractional part (00-63h)
 	// Extended version fields (va, vb) — reserved, must be 00
-	CommandBitmaps  [][]byte // array of command bitmap arrays
-	ResponseBitmaps [][]byte // array of response/information field bitmap arrays
+	CommandBitmap  []byte // contiguous command bitmap array
+	ResponseBitmap []byte // contiguous response/information field bitmap array
 }
 
 // MarshalBinary encodes SelectedTimeCode.
@@ -249,18 +250,13 @@ func (c *CommandErrorLevel) MarshalBinary() ([]byte, error) {
 
 // MarshalBinary encodes Signature.
 func (s *Signature) MarshalBinary() ([]byte, error) {
-	var data []byte
-	data = append(data, s.VersionMajor, s.VersionMinor, 0x00, 0x00)
-	// Command bitmaps
-	for _, bitmap := range s.CommandBitmaps {
-		data = append(data, byte(len(bitmap)))
-		data = append(data, bitmap...)
-	}
-	// Response bitmaps
-	for _, bitmap := range s.ResponseBitmaps {
-		data = append(data, byte(len(bitmap)))
-		data = append(data, bitmap...)
-	}
+	data := []byte{s.VersionMajor, s.VersionMinor, 0x00, 0x00}
+	// RP-013_v1-0_MIDI_Machine_Control_Specification_96-1-4.pdf, pp. 48-49:
+	// SIGNATURE has one length byte for each contiguous bitmap array.
+	data = append(data, byte(len(s.CommandBitmap)))
+	data = append(data, s.CommandBitmap...)
+	data = append(data, byte(len(s.ResponseBitmap)))
+	data = append(data, s.ResponseBitmap...)
 	return MarshalMMCResponseWithData(s.DeviceId, 0x40, data)
 }
 
@@ -461,7 +457,7 @@ func UnmarshalCommandErrorLevel(data []byte) (*CommandErrorLevel, error) {
 
 // UnmarshalSignature decodes a SIGNATURE response.
 func UnmarshalSignature(data []byte) (*Signature, error) {
-	if len(data) < 11 || data[0] != SysEx || data[1] != IdRealTime ||
+	if len(data) < 13 || data[0] != SysEx || data[1] != IdRealTime ||
 		data[3] != 0x07 || data[4] != 0x40 {
 		return nil, ErrBadHeader
 	}
@@ -469,32 +465,27 @@ func UnmarshalSignature(data []byte) (*Signature, error) {
 		return nil, ErrNoEox
 	}
 	count := int(data[5])
-	if count < 5 || len(data) < 7+count {
+	payloadEnd := 6 + count
+	if count < 6 || len(data) != payloadEnd+1 {
 		return nil, ErrBadHeader
 	}
-	sig := &Signature{
-		DeviceId:     int(data[2]),
-		VersionMajor: data[6],
-		VersionMinor: data[7],
+	payload := data[6:payloadEnd]
+	commandBitmapLen := int(payload[4])
+	responseCountPos := 5 + commandBitmapLen
+	if responseCountPos >= len(payload) {
+		return nil, ErrBadHeader
 	}
-	pos := 10
-	// Parse command bitmaps
-	for pos < 6+count {
-		bitmapLen := int(data[pos])
-		pos++
-		bitmap := make([]byte, bitmapLen)
-		copy(bitmap, data[pos:pos+bitmapLen])
-		sig.CommandBitmaps = append(sig.CommandBitmaps, bitmap)
-		pos += bitmapLen
+	responseBitmapLen := int(payload[responseCountPos])
+	if responseCountPos+1+responseBitmapLen != len(payload) {
+		return nil, ErrBadRange
 	}
-	// Parse response bitmaps (remaining bytes before EndSysEx)
-	for pos < len(data)-1 {
-		bitmapLen := int(data[pos])
-		pos++
-		bitmap := make([]byte, bitmapLen)
-		copy(bitmap, data[pos:pos+bitmapLen])
-		sig.ResponseBitmaps = append(sig.ResponseBitmaps, bitmap)
-		pos += bitmapLen
-	}
-	return sig, nil
+	// RP-013_v1-0_MIDI_Machine_Control_Specification_96-1-4.pdf, pp. 48-49,
+	// defines one leading count byte for each contiguous bitmap array.
+	return &Signature{
+		DeviceId:       int(data[2]),
+		VersionMajor:   payload[0],
+		VersionMinor:   payload[1],
+		CommandBitmap:  append([]byte(nil), payload[5:responseCountPos]...),
+		ResponseBitmap: append([]byte(nil), payload[responseCountPos+1:]...),
+	}, nil
 }
