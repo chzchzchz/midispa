@@ -39,8 +39,11 @@ func (pb *PatternBank) PatternIdxMap() map[*Pattern]int {
 func (p *PatternBank) SetPattern(pat *Pattern) error {
 	// Don't swap out pointer since song may already be using it.
 	oldPat := p.Patterns[p.selPatIdx]
+	pat.mu.RLock()
+	events := append([]Event(nil), pat.Events...)
+	pat.mu.RUnlock()
 	oldPat.mu.Lock()
-	oldPat.Events = pat.Events
+	oldPat.Events = events
 	oldPat.mu.Unlock()
 	return p.Jump(0)
 }
@@ -138,9 +141,10 @@ func (p *PatternBank) JogSelect(n int) error {
 func (p *PatternBank) redrawTrackPads(track int) error {
 	pat := p.Patterns[p.selPatIdx]
 	tv := p.vb.voices[p.trackVoices[track-1]]
+	evs := pat.FindBeat(0)
 	var rgb [16][3]int
 	for i := 0; i < 16; i++ {
-		for _, ev := range pat.Events {
+		for _, ev := range evs {
 			if ev.Voice == tv {
 				idx := int(ev.Beat * 4)
 				rgb[idx][1] = 50

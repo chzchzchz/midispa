@@ -48,7 +48,8 @@ func (p *Pattern) FindBeat(beat float32) (ret []Event) {
 	p.mu.RLock()
 	cmp := func(i int) bool { return p.Events[i].Beat >= beat }
 	l := sort.Search(len(p.Events), cmp)
-	ret = p.Events[l:]
+	// Copy the suffix before releasing the lock so playback can iterate while editing continues.
+	ret = append([]Event(nil), p.Events[l:]...)
 	p.mu.RUnlock()
 	return ret
 }

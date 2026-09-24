@@ -108,8 +108,12 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 
 func handlePatternMute(n int) error {
 	if altOn {
-		patbank.ClearTrackRow(n)
-		toggleAlt()
+		if err := patbank.ClearTrackRow(n); err != nil {
+			return err
+		}
+		if err := toggleAlt(); err != nil {
+			return err
+		}
 		return patbank.Jump(0)
 	}
 	return patbank.SelectTrackRow(n)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 )
 
 type Playback struct {
@@ -18,6 +19,14 @@ type Playback struct {
 
 	updatePads  func(curBeat float32) error
 	nextPattern func(curBeat float32) *Pattern
+}
+
+func beatDuration(bpm int) time.Duration {
+	if bpm <= 0 {
+		return 0
+	}
+	// BPM is a count per minute, so calculate the quotient before converting it to a duration.
+	return time.Duration(float64(time.Minute) / float64(bpm))
 }
 
 func (p *Playback) Start(aseq *alsa.Seq) context.CancelFunc {
@@ -58,7 +67,7 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 	start := time.Now()
 	for {
 		if p.songBeat == 0 {
-			ev := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{0xfa}}
+			ev := alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: []byte{midi.Start}}
 			if err := aseq.WritePort(ev, syncPort.Port); err != nil {
 				return err
 			}
@@ -82,14 +91,13 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 		}
 		var waitUntil time.Duration
 		if nextBeat != 0 {
-			scale := float32(time.Minute / time.Duration(curBpm))
-			waitTime := (nextBeat - p.patBeat) * scale
+			waitTime := time.Duration(float64(nextBeat-p.patBeat) * float64(beatDuration(curBpm)))
 			p.songBeat += nextBeat - p.patBeat
 			p.patBeat = nextBeat
-			waitUntil = time.Duration(waitTime)
+			waitUntil = waitTime
 		} else {
 			// Reset to next measure.
-			measureLength := 4 * (time.Minute / time.Duration(curBpm))
+			measureLength := 4 * beatDuration(curBpm)
 			start = start.Add(measureLength)
 			waitUntil = time.Until(start)
 			curBpm = bpm
@@ -108,7 +116,7 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 		select {
 		case <-time.After(waitUntil):
 		case <-ctx.Done():
-			ev := alsa.SeqEvent{alsa.SubsSeqAddr, []byte{0xfc}}
+			ev := alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: []byte{midi.Stop}}
 			return aseq.WritePort(ev, syncPort.Port)
 		}
 	}

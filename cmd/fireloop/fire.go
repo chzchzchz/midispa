@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 
+	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/sysex/akai"
 )
 
@@ -80,7 +81,7 @@ func Note2Grid(n int) (int, int, bool) {
 }
 
 // i++
-// return write([]byte{0xb0, byte(CCTopLeftLEDs), 0x10 | (i % 0xf)})
+// return write([]byte{midi.MakeCC(0), byte(CCTopLeftLEDs), 0x10 | (i % 0xf)})
 
 func (f *Fire) LedsOff() error {
 	if err := f.PadsOff(); err != nil {
@@ -111,7 +112,7 @@ func (f *Fire) PadsOff() error {
 }
 
 func (f *Fire) SetLed(n, v int) error {
-	return f.write([]byte{0xb0, byte(n), byte(v)})
+	return f.write([]byte{midi.MakeCC(0), byte(n), byte(v)})
 }
 
 // Print rasterizes a string using character coordinates.
@@ -164,6 +165,10 @@ func (f *Fire) ClearOLED() error {
 }
 
 func (f *Fire) ClearOLEDRows(y, n int) error {
+	// Validate the range before sizing the bitmap so malformed UI coordinates return an error instead of panicking.
+	if n <= 0 || y < 0 || y >= 8 || n > 8-y {
+		return errOutOfRange
+	}
 	su := akai.ScreenUpdate{
 		BandStart:   y,
 		BandEnd:     y + n - 1,
@@ -179,10 +184,11 @@ func (f *Fire) ClearOLEDRows(y, n int) error {
 }
 
 func (f *Fire) LightPad(x, y, r, g, b int) error {
-	idx := x + y*16
-	if idx < 0 || idx >= 64 {
+	if x < 0 || x >= 16 || y < 0 || y >= 4 {
 		return errOutOfRange
-	} else if r < 0 || g < 0 || b < 0 || r > 127 || g > 127 || b > 127 {
+	}
+	idx := x + y*16
+	if r < 0 || g < 0 || b < 0 || r > 127 || g > 127 || b > 127 {
 		return errOutOfRange
 	}
 	pad := akai.Pad{Idx: idx, Red: r, Green: g, Blue: b}
@@ -213,6 +219,9 @@ func (f *Fire) LightPadColumn(col int, vals [4][3]int) error {
 
 func (f *Fire) LightPadSlice(pads []akai.Pad) error {
 	lp := akai.LightPads{Pads: pads}
-	v, _ := lp.MarshalBinary()
+	v, err := lp.MarshalBinary()
+	if err != nil {
+		return err
+	}
 	return f.write(v)
 }
