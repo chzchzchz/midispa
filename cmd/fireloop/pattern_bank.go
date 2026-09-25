@@ -13,7 +13,6 @@ type PatternBank struct {
 	stepCursor    int
 	pressedPads   uint64
 	rowPadMasks   [4]uint16
-	rowPadCounts  [4]int
 	trackVoices   [4]int
 	f             *Fire
 	vb            *VoiceBank
@@ -48,7 +47,9 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 	if pat == nil {
 		return nil
 	}
-	stopPlayback()
+	if err := stopPlayback(); err != nil {
+		return err
+	}
 	oldPat, ok := p.Patterns[p.selPatIdx]
 	if !ok || oldPat == nil {
 		oldPat = &Pattern{}
@@ -84,7 +85,9 @@ func (p *PatternBank) Jump(n int) error {
 	}
 	changed := newIdx != p.selPatIdx
 	if changed {
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 	}
 	p.selPatIdx = newIdx
 	if _, ok := p.Patterns[p.selPatIdx]; !ok {
@@ -133,7 +136,9 @@ func (p *PatternBank) ClearTrackRow(n int) error {
 	if n < 1 || n > 4 {
 		return nil
 	}
-	stopPlayback()
+	if err := stopPlayback(); err != nil {
+		return err
+	}
 	v := p.vb.voices[p.trackVoices[n-1]]
 	pattern := p.CurrentPattern()
 	if pattern == nil {
@@ -162,7 +167,9 @@ func (p *PatternBank) SelectTrackRow(n int) error {
 	if n < 0 || n > 4 {
 		return nil
 	}
-	stopPlayback()
+	if err := stopPlayback(); err != nil {
+		return err
+	}
 	// Deselect currently selected row, if any.
 	if p.selTrackRow > 0 {
 		if p.f != nil {
@@ -220,7 +227,9 @@ func (p *PatternBank) JogSelect(n int) error {
 	if p.selTrackRow == 0 || len(p.vb.voices) == 0 {
 		return nil
 	}
-	stopPlayback()
+	if err := stopPlayback(); err != nil {
+		return err
+	}
 	p.editingNote = false
 	p.clearPadState()
 	if p.f != nil {

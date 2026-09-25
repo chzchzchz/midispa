@@ -160,7 +160,11 @@ func TestChromaticPatternEditingAndTieInvariants(t *testing.T) {
 }
 
 func TestChromaticPaletteAndModeEditing(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
+	writeCount := 0
+	fire := NewFire(func([]byte) error {
+		writeCount++
+		return nil
+	})
 	voiceBank := NewVoiceBank([]Device{{
 		Channel: 1,
 		Voices:  []Voice{{Name: "lead", Channel: 1}},
@@ -174,13 +178,13 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 		t.Fatal(err)
 	}
 	previousPatbank, previousSongbank := patbank, songbank
-	previousShift, previousAlt, previousCancel := shiftOn, altOn, cancelPlayback
+	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
 	t.Cleanup(func() {
 		patbank, songbank = previousPatbank, previousSongbank
-		shiftOn, altOn, cancelPlayback = previousShift, previousAlt, previousCancel
+		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
 	})
 	patbank, songbank = bank, nil
-	shiftOn, altOn, cancelPlayback = false, false, nil
+	shiftOn, altOn, playbackStop = false, false, nil
 	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
 		t.Fatal(err)
 	}
@@ -210,8 +214,12 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 		t.Fatalf("grid right moved cursor to %d, want 1", bank.StepCursor())
 	}
 	altOn = true
+	writeCount = 0
 	if err := handlePatternGrid(nil, 0, 0, 100); err != nil {
 		t.Fatal(err)
+	}
+	if writeCount != 3 {
+		t.Fatalf("Alt clear wrote %d Fire messages, want palette and status writes", writeCount)
 	}
 	if _, ok := bank.CurrentPattern().EventAtStep(1, voice); ok {
 		t.Fatal("Alt plus palette pad did not clear the current-step event")
@@ -222,7 +230,11 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 }
 
 func TestChromaticPadGesturesAndReleases(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
+	writeCount := 0
+	fire := NewFire(func([]byte) error {
+		writeCount++
+		return nil
+	})
 	voiceBank := NewVoiceBank([]Device{{
 		Channel: 1,
 		Voices:  []Voice{{Name: "lead", Channel: 1}},
@@ -242,16 +254,20 @@ func TestChromaticPadGesturesAndReleases(t *testing.T) {
 	if handled, err := bank.handleChromaticStepPress(0, 0); !handled || err != nil {
 		t.Fatalf("first pad press = %v/%v", handled, err)
 	}
+	writeCount = 0
 	if handled, err := bank.handleChromaticStepPress(0, 1); !handled || err != nil {
 		t.Fatalf("second pad press = %v/%v", handled, err)
+	}
+	if writeCount != 6 {
+		t.Fatalf("tie gesture wrote %d Fire messages, want row and status redraws", writeCount)
 	}
 	if event, _ := pattern.EventAtStep(0, voice); !event.Tie {
 		t.Fatal("two held pads did not tie adjacent events")
 	}
 	bank.releasePad(0, 0)
 	bank.releasePad(0, 1)
-	if bank.pressedPads != 0 || bank.rowPadCounts[0] != 0 {
-		t.Fatalf("pad state did not clear on release: mask=%x count=%d", bank.pressedPads, bank.rowPadCounts[0])
+	if bank.pressedPads != 0 || bank.rowPadMasks[0] != 0 {
+		t.Fatalf("pad state did not clear on release: held=%x row=%x", bank.pressedPads, bank.rowPadMasks[0])
 	}
 
 	bank.clearPadState()
@@ -291,14 +307,14 @@ func TestChromaticPadGesturesAndReleases(t *testing.T) {
 	if err := processPatternEvent(nil, releaseMessage(54)); err != nil {
 		t.Fatal(err)
 	}
-	if bank.pressedPads != 0 || bank.rowPadCounts[0] != 0 {
+	if bank.pressedPads != 0 || bank.rowPadMasks[0] != 0 {
 		t.Fatal("NoteOff was not treated as a release")
 	}
 	bank.handleChromaticStepPress(0, 0)
 	if err := processPatternEvent(nil, padMessage(54, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if bank.pressedPads != 0 || bank.rowPadCounts[0] != 0 {
+	if bank.pressedPads != 0 || bank.rowPadMasks[0] != 0 {
 		t.Fatal("NoteOn velocity zero was not treated as a release")
 	}
 }
@@ -400,13 +416,13 @@ func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 	if err := playback.playChromaticEvent(writer, Event{Voice: voice, ChromaticNote: 72, Velocity: 88}); err != nil {
 		t.Fatal(err)
 	}
-	previousPatbank, previousSongbank, previousCancel := patbank, songbank, cancelPlayback
+	previousPatbank, previousSongbank, previousCancel := patbank, songbank, playbackStop
 	t.Cleanup(func() {
-		patbank, songbank, cancelPlayback = previousPatbank, previousSongbank, previousCancel
+		patbank, songbank, playbackStop = previousPatbank, previousSongbank, previousCancel
 	})
 	patbank = &PatternBank{playback: playback}
 	songbank = nil
-	cancelPlayback = nil
+	playbackStop = nil
 	stopPlayback()
 	if playback.activeNoteCount() != 0 {
 		t.Fatal("stop left an active chromatic note")

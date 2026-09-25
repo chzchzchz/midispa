@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"sync"
 	"time"
@@ -15,6 +16,8 @@ type sequencerWriter interface {
 	midiWriter
 	WritePort(alsa.SeqEvent, int) error
 }
+
+type playbackStopFunc func() error
 
 // The active map is keyed by voice so different destinations can coexist in a mixed kit.
 type activeChromaticNote struct {
@@ -60,22 +63,31 @@ func patternDuration(pattern *Pattern, bpm int) time.Duration {
 	return time.Duration(float64(pattern.Beats()) * float64(beatDuration(bpm)))
 }
 
-func (p *Playback) Start(aseq *alsa.Seq) context.CancelFunc {
+func (p *Playback) Start(aseq *alsa.Seq) playbackStopFunc {
 	if aseq == nil {
 		p.reset()
-		return func() {}
+		return func() error { return nil }
 	}
 	return p.start(aseq)
 }
 
-func (p *Playback) start(aseq sequencerWriter) context.CancelFunc {
+func (p *Playback) start(aseq sequencerWriter) playbackStopFunc {
 	p.reset()
 	p.writer = aseq
 	ctx, cancel := context.WithCancel(context.Background())
-	go p.run(ctx, aseq)
-	return func() {
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		runErr = p.run(ctx, aseq)
+		if runErr != nil && ctx.Err() == nil {
+			log.Printf("fireloop playback stopped: %v", runErr)
+		}
+		close(done)
+	}()
+	return func() error {
 		cancel()
-		_ = p.releaseAll(aseq)
+		<-done
+		return runErr
 	}
 }
 
@@ -300,16 +312,25 @@ func writeSequencerPort(aseq sequencerWriter, data []byte) error {
 	return aseq.WritePort(alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: data}, syncPort.Port)
 }
 
-func (p *Playback) run(ctx context.Context, aseq sequencerWriter) error {
-	defer func() { _ = p.releaseAll(aseq) }()
-	curBpm := bpm
+func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error) {
+	started := false
+	defer func() {
+		if err := p.releaseAll(aseq); runErr == nil {
+			runErr = err
+		}
+		if started {
+			if err := writeSequencerPort(aseq, []byte{midi.Stop}); runErr == nil {
+				runErr = err
+			}
+		}
+	}()
+	curBpm := currentBPM()
 	var curPattern *Pattern
 	if p.nextPattern != nil {
 		curPattern = p.nextPattern(0)
 	}
 	// Compute measures w/r/t this start time + now() to avoid drift.
 	start := time.Now()
-	started := false
 	for {
 		songBeat, patBeat, _ := p.position()
 		if !started {
@@ -354,7 +375,7 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) error {
 			measureLength := patternDuration(curPattern, curBpm)
 			start = start.Add(measureLength)
 			waitUntil = time.Until(start)
-			curBpm = bpm
+			curBpm = currentBPM()
 			if requested, ok := p.takeNextSongBeat(); ok {
 				songBeat = requested
 			} else {
@@ -379,13 +400,12 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) error {
 		select {
 		case <-time.After(waitUntil):
 		case <-ctx.Done():
-			_ = p.releaseAll(aseq)
-			return writeSequencerPort(aseq, []byte{midi.Stop})
+			return nil
 		}
 	}
 }
 
-func (pb *PatternBank) startSequencer(aseq *alsa.Seq) context.CancelFunc {
+func (pb *PatternBank) startSequencer(aseq *alsa.Seq) playbackStopFunc {
 	var lastColumn int
 	// Reset to start of pattern.
 	next := func(beat float32) *Pattern {
@@ -415,7 +435,7 @@ func (pb *PatternBank) startSequencer(aseq *alsa.Seq) context.CancelFunc {
 	return p.Start(aseq)
 }
 
-func (sb *SongBank) startSequencer(aseq *alsa.Seq) context.CancelFunc {
+func (sb *SongBank) startSequencer(aseq *alsa.Seq) playbackStopFunc {
 	p := &Playback{}
 	sb.playback = p
 	// Move to next song pattern.

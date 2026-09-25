@@ -69,8 +69,7 @@ func (p *Pattern) FindBeat(beat float32) (ret []Event) {
 	l := sort.Search(len(evs), func(i int) bool {
 		return evs[i].Beat >= beat
 	})
-	// Copy the suffix before releasing the lock so playback can iterate while editing continues.
-	ret = append([]Event(nil), evs[l:]...)
+	ret = evs[l:]
 	return ret
 }
 
@@ -164,10 +163,6 @@ func (p *Pattern) SetChromaticNote(step int, v *Voice, note, velocity int) (Even
 	return p.Events[insertAt], true
 }
 
-func (p *Pattern) SetChromaticPitch(step int, v *Voice, note int) (Event, bool) {
-	return p.SetChromaticNote(step, v, note, midiNoteMax)
-}
-
 // TieEventsAtSteps links two existing events only when the earlier event's next event is the later one.
 func (p *Pattern) TieEventsAtSteps(firstStep, secondStep int, v *Voice) bool {
 	return p.setTieBetweenSteps(firstStep, secondStep, v, true)
@@ -175,10 +170,6 @@ func (p *Pattern) TieEventsAtSteps(firstStep, secondStep int, v *Voice) bool {
 
 func (p *Pattern) UntieEventsAtSteps(firstStep, secondStep int, v *Voice) bool {
 	return p.setTieBetweenSteps(firstStep, secondStep, v, false)
-}
-
-func (p *Pattern) SetTieBetweenSteps(firstStep, secondStep int, v *Voice, tie bool) bool {
-	return p.setTieBetweenSteps(firstStep, secondStep, v, tie)
 }
 
 func (p *Pattern) setTieBetweenSteps(firstStep, secondStep int, v *Voice, tie bool) bool {
@@ -222,13 +213,6 @@ func (p *Pattern) NextTiedEvent(step int, v *Voice) (Event, bool) {
 		}
 	}
 	return Event{}, false
-}
-
-// NormalizeTies removes ties that no longer point to the immediately following event.
-func (p *Pattern) NormalizeTies() {
-	p.mu.Lock()
-	p.normalizeLocked()
-	p.mu.Unlock()
 }
 
 func (p *Pattern) eventIndexAtStepLocked(step int, v *Voice) int {
@@ -372,8 +356,4 @@ func (p *Pattern) SetLengthSteps(steps int) int {
 	p.normalizeLocked()
 	p.mu.Unlock()
 	return steps
-}
-
-func (p *Pattern) lengthBeats() float32 {
-	return p.Beats()
 }

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -11,34 +11,58 @@ import (
 
 type eventProcessFunc func(*alsa.Seq, alsa.SeqEvent) error
 
+const defaultBPM = 139
+
 var processEvent eventProcessFunc
 var shiftOn = false
 var altOn = false
 var pendingNumber = 0
-var bpm = 139
-var cancelPlayback context.CancelFunc
+var bpm atomic.Int64
+var playbackStop playbackStopFunc
 var patternClipboard *Pattern
 var songbank *SongBank
 var patbank *PatternBank
 
 var tapTempoTimes []time.Time
 
-func stopPlayback() {
-	if cancelPlayback != nil {
-		cancelPlayback()
-		cancelPlayback = nil
+func init() {
+	bpm.Store(defaultBPM)
+}
+
+func currentBPM() int {
+	return int(bpm.Load())
+}
+
+func setBPM(value int) {
+	bpm.Store(int64(value))
+}
+
+func stopPlayback() error {
+	var firstErr error
+	if playbackStop != nil {
+		if err := playbackStop(); err != nil {
+			firstErr = err
+		}
+		playbackStop = nil
 	}
 	if patbank != nil {
-		if patbank.playback != nil {
-			_ = patbank.playback.releaseAll(patbank.playback.writer)
+		if playback := patbank.playback; playback != nil {
+			if err := playback.releaseAll(playback.writer); err != nil && firstErr == nil {
+				firstErr = err
+			}
 			patbank.playback = nil
 		}
 		patbank.clearPadState()
 	}
-	if songbank != nil && songbank.playback != nil {
-		_ = songbank.playback.releaseAll(songbank.playback.writer)
-		songbank.playback = nil
+	if songbank != nil {
+		if playback := songbank.playback; playback != nil {
+			if err := playback.releaseAll(playback.writer); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			songbank.playback = nil
+		}
 	}
+	return firstErr
 }
 
 func exitPatternEditModes() error {
@@ -77,12 +101,13 @@ func tapTempo() error {
 		dur += tapTempoTimes[i].Sub(tapTempoTimes[i-1])
 	}
 	dur /= time.Duration(len(tapTempoTimes) - 1)
-	bpm = int(60.0 / dur.Seconds())
-	s := fmt.Sprintf("Tempo: %03d", bpm)
+	tempo := int(60.0 / dur.Seconds())
+	setBPM(tempo)
+	s := fmt.Sprintf("Tempo: %03d", tempo)
 	return patbank.f.Print(4, 3, s)
 }
 
-func handleSongGrid(aseq *alsa.Seq, x, y, vel int) error {
+func handleSongGrid(x, y int) error {
 	if x >= 12 {
 		return songbank.SelectPatternSlot((x - 12) + (y * 4))
 	}
@@ -112,18 +137,18 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		if isPadRelease(status, velocity) {
 			return nil
 		}
-		return handleSongGrid(aseq, x, y, velocity)
+		return handleSongGrid(x, y)
 	}
 	if midi.IsNoteOn(status) && velocity == 0 {
 		return nil
 	}
 	switch int(ev.Data[1]) {
 	case NotePlay:
-		if cancelPlayback == nil {
-			cancelPlayback = songbank.startSequencer(aseq)
+		if playbackStop == nil {
+			playbackStop = songbank.startSequencer(aseq)
 		}
 	case NoteStop:
-		stopPlayback()
+		return stopPlayback()
 	case NoteShift:
 		shiftOn = !shiftOn
 		if shiftOn {
@@ -153,7 +178,9 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		}
 		return songbank.ScrollMeasures(measurePageSize)
 	case NotePatternSong:
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 		if err := exitPatternEditModes(); err != nil {
 			return err
 		}
@@ -169,7 +196,9 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 }
 
 func handlePatternMute(n int) error {
-	stopPlayback()
+	if err := stopPlayback(); err != nil {
+		return err
+	}
 	if altOn {
 		if err := patbank.ClearTrackRow(n); err != nil {
 			return err
@@ -213,7 +242,7 @@ func handlePatternGrid(aseq *alsa.Seq, x, y, vel int) error {
 	if err != nil {
 		return err
 	}
-	if cancelPlayback != nil || patEv.Velocity == 0 {
+	if playbackStop != nil || patEv.Velocity == 0 {
 		return nil
 	}
 	return writeMidiMsgs(aseq, eventDestination(patEv), patEv.ToMidi())
@@ -246,7 +275,7 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 				return err
 			}
 			if pendingNumber > 20 && pendingNumber < 300 {
-				bpm = pendingNumber
+				setBPM(pendingNumber)
 				pendingNumber = 0
 				return patbank.Jump(0)
 			}
@@ -255,20 +284,28 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		}
 	// Overview exposes the per-pattern length while the encoder changes steps.
 	case NoteOverview:
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 		return patbank.ToggleLengthMode()
 	case NoteMode:
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 		return patbank.ToggleNoteMode()
 	case NoteGridLeft:
 		return patbank.MoveStepCursor(-1)
 	case NoteGridRight:
 		return patbank.MoveStepCursor(1)
 	case NotePatternUp:
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 		return patbank.Jump(1)
 	case NotePatternDown:
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 		return patbank.Jump(-1)
 	case NoteAlt:
 		if !altOn && shiftOn {
@@ -296,26 +333,30 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	case NotePlay:
 		if patternClipboard != nil {
 			// Copy and paste.
-			stopPlayback()
+			if err := stopPlayback(); err != nil {
+				return err
+			}
 			if err := patbank.SetPattern(patternClipboard); err != nil {
 				return err
 			}
 			patternClipboard = nil
 			return patbank.f.SetLed(NoteRecord, LEDOff)
 		}
-		if cancelPlayback == nil {
-			cancelPlayback = patbank.startSequencer(aseq)
+		if playbackStop == nil {
+			playbackStop = patbank.startSequencer(aseq)
 		}
 	case NoteStop:
 		if altOn {
 			// Clear pattern.
-			stopPlayback()
+			if err := stopPlayback(); err != nil {
+				return err
+			}
 			if err := patbank.SetPattern(&Pattern{}); err != nil {
 				return err
 			}
 			return toggleAlt()
 		}
-		stopPlayback()
+		return stopPlayback()
 	case NoteTap:
 		return tapTempo()
 	case NoteRecord:
@@ -326,7 +367,9 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		patternClipboard = patbank.CurrentPattern().Copy()
 		return patbank.f.SetLed(NoteRecord, LEDGreen)
 	case NotePatternSong:
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 		if err := exitPatternEditModes(); err != nil {
 			return err
 		}

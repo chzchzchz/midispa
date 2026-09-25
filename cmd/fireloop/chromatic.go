@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math/bits"
 	"strings"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -116,32 +117,26 @@ func (p *PatternBank) clearPadState() {
 	}
 	p.pressedPads = 0
 	p.rowPadMasks = [4]uint16{}
-	p.rowPadCounts = [4]int{}
 }
 
-func (p *PatternBank) pressPad(row, col int) (bool, int) {
+func (p *PatternBank) pressPad(row, col int) bool {
 	if p == nil || row < 0 || row >= len(p.rowPadMasks) || col < 0 || col >= chromaticPaletteColumns {
-		return false, 0
+		return false
 	}
 	bit := uint64(1) << uint(row*chromaticPaletteColumns+col)
 	if p.pressedPads&bit != 0 {
-		return false, p.rowPadCounts[row]
+		return false
 	}
 	p.pressedPads |= bit
 	p.rowPadMasks[row] |= uint16(1) << uint(col)
-	p.rowPadCounts[row]++
-	return true, p.rowPadCounts[row]
+	return true
 }
 
 func (p *PatternBank) heldPadCount() int {
 	if p == nil {
 		return 0
 	}
-	count := 0
-	for mask := p.pressedPads; mask != 0; mask &= mask - 1 {
-		count++
-	}
-	return count
+	return bits.OnesCount64(p.pressedPads)
 }
 
 func (p *PatternBank) releasePad(row, col int) {
@@ -154,10 +149,6 @@ func (p *PatternBank) releasePad(row, col int) {
 	}
 	p.pressedPads &^= bit
 	p.rowPadMasks[row] &^= uint16(1) << uint(col)
-	p.rowPadCounts[row]--
-	if p.rowPadCounts[row] < 0 {
-		p.rowPadCounts[row] = 0
-	}
 }
 
 // Only a newly pressed pad can complete a two-pad tie gesture.
@@ -166,7 +157,7 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 	if voice == nil || !voice.IsChromatic() || p.editingNote {
 		return false, nil
 	}
-	newPad, count := p.pressPad(row, col)
+	newPad := p.pressPad(row, col)
 	if !newPad {
 		return true, nil
 	}
@@ -187,7 +178,7 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 		}
 		return false, nil
 	}
-	if count != 2 || p.heldPadCount() != 2 {
+	if bits.OnesCount16(p.rowPadMasks[row]) != 2 || p.heldPadCount() != 2 {
 		return true, nil
 	}
 	steps := make([]int, 0, 2)
@@ -203,7 +194,11 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 	if pattern == nil {
 		return true, nil
 	}
-	pattern.TieEventsAtSteps(steps[0], steps[1], voice)
+	if pattern.TieEventsAtSteps(steps[0], steps[1], voice) {
+		if err := p.redrawPatternRows(); err != nil {
+			return true, err
+		}
+	}
 	return true, p.printChromaticStatus()
 }
 
@@ -220,7 +215,7 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, velocity int)
 	step := p.stepCursor
 	if altOn {
 		pattern.RemoveEventAtStep(step, voice)
-		if err := p.redrawPatternRows(); err != nil {
+		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
 		return p.printChromaticStatus()

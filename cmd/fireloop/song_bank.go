@@ -35,7 +35,9 @@ func (sb *SongBank) CurrentSong() *Song {
 
 func (s *SongBank) Jump(n int) error {
 	if n != 0 {
-		stopPlayback()
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 	}
 	newIdx := s.selSongIdx + n
 	if newIdx <= 0 || newIdx > maxPatternIndex {
@@ -48,17 +50,31 @@ func (s *SongBank) Jump(n int) error {
 		s.resetArrangementView()
 	}
 
-	must(s.PrintSong())
-	must(s.PrintPattern())
-	must(s.PrintTempo())
-	must(s.printRow(3, " "))
-	must(s.printRow(4, " "))
-	must(s.printRow(5, " "))
-	must(s.printView())
-
-	must(s.DrawPadMeasures())
-	must(s.DrawPadPatterns())
-	return nil
+	if err := s.PrintSong(); err != nil {
+		return err
+	}
+	if err := s.PrintPattern(); err != nil {
+		return err
+	}
+	if err := s.PrintTempo(); err != nil {
+		return err
+	}
+	if err := s.printRow(3, " "); err != nil {
+		return err
+	}
+	if err := s.printRow(4, " "); err != nil {
+		return err
+	}
+	if err := s.printRow(5, " "); err != nil {
+		return err
+	}
+	if err := s.printView(); err != nil {
+		return err
+	}
+	if err := s.DrawPadMeasures(); err != nil {
+		return err
+	}
+	return s.DrawPadPatterns()
 }
 
 func (s *SongBank) JumpMeasure(x, y int) error {
@@ -127,7 +143,9 @@ func (s *SongBank) SelectPattern(n int) error {
 	if s.pb == nil || n <= 0 || n > maxPatternIndex {
 		return nil
 	}
-	stopPlayback()
+	if err := stopPlayback(); err != nil {
+		return err
+	}
 	s.pb.editingNote = false
 	s.pb.clearPadState()
 	if s.pb.Patterns == nil {
@@ -160,7 +178,7 @@ func (s *SongBank) PrintPattern() error {
 }
 
 func (s *SongBank) PrintTempo() error {
-	return s.printRow(2, fmt.Sprintf("Tempo %03d", bpm))
+	return s.printRow(2, fmt.Sprintf("Tempo %03d", currentBPM()))
 }
 
 func (s *SongBank) DrawPadMeasures() error {
