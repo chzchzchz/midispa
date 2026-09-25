@@ -129,6 +129,7 @@ func (p *Playback) takeNextSongBeat() (float32, bool) {
 	return beat, true
 }
 
+// JumpSongBeat schedules the seek to take effect at the next pattern boundary.
 func (p *Playback) JumpSongBeat(beat float32) (oldSongBeat float32) {
 	_ = p.releaseAll(p.writer)
 	p.positionMu.Lock()
@@ -331,6 +332,12 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 	}
 	// Compute measures w/r/t this start time + now() to avoid drift.
 	start := time.Now()
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	for {
 		songBeat, patBeat, _ := p.position()
 		if !started {
@@ -397,8 +404,13 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 			}
 			p.setPosition(songBeat, 0)
 		}
+		if timer == nil {
+			timer = time.NewTimer(waitUntil)
+		} else {
+			timer.Reset(waitUntil)
+		}
 		select {
-		case <-time.After(waitUntil):
+		case <-timer.C:
 		case <-ctx.Done():
 			return nil
 		}

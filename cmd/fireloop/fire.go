@@ -11,6 +11,8 @@ var errOutOfRange = errors.New("out of range")
 
 type writeFunc func([]byte) error
 
+// Fire hardware definitions. Do not remove entries just because they are
+// currently unused; their values map directly to Fire notes and controls.
 var (
 	CCTopLeftLEDs = 0x1B
 

@@ -9,9 +9,7 @@ type Event struct {
 	Beat          float32
 	ChromaticNote int // MIDI note 0 through 127; chromatic voices only
 	Tie           bool // this event continues into the next event for this voice
-	Velocity      int  // [0,127]
-	Pan           float32
-	Swing         int // [0,50%]
+	Velocity      int // [0,127]
 }
 
 // IsChromatic reports whether the event's configured voice supplies its own pitch.
