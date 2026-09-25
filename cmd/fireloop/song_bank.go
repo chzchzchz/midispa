@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/chzchzchz/midispa/sysex/akai"
 )
@@ -67,10 +66,11 @@ func (s *SongBank) JumpMeasure(x, y int) error {
 	// Determine beat from grid position.
 	b := s.CurrentSong().IndexToBeat(idx)
 	lastSongBeat := s.playback.JumpSongBeat(b)
-	return s.printRow(4, fmt.Sprintf(
-		"Measure %03d->%03d",
-		int(math.Floor(float64((lastSongBeat/4.0)))),
-		int(math.Floor(float64(b/4.0)))))
+	lastMeasure := -1
+	if lastSongBeat >= 0 {
+		_, lastMeasure = s.CurrentSong().BeatToPattern(lastSongBeat)
+	}
+	return s.printRow(4, fmt.Sprintf("Measure %03d->%03d", lastMeasure+1, idx+1))
 }
 
 func (sb *SongBank) ToggleMeasure(x, y int) error {
@@ -146,7 +146,11 @@ func (s *SongBank) PrintSong() error {
 }
 
 func (s *SongBank) PrintPattern() error {
-	return s.printRow(1, fmt.Sprintf("Pattern %03d", s.pb.selPatIdx))
+	steps := defaultPatternSteps
+	if pattern := s.pb.CurrentPattern(); pattern != nil {
+		steps = pattern.LengthSteps()
+	}
+	return s.printRow(1, fmt.Sprintf("Pattern %03d L%02d", s.pb.selPatIdx, steps))
 }
 
 func (s *SongBank) PrintTempo() error {

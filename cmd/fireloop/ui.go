@@ -193,6 +193,9 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		} else {
 			return patbank.f.SetLed(NoteShift, LEDRed)
 		}
+	// Overview exposes the per-pattern length while the encoder changes steps.
+	case NoteOverview:
+		return patbank.ToggleLengthMode()
 	case NotePatternUp:
 		return patbank.Jump(1)
 	case NotePatternDown:
@@ -215,6 +218,9 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		dir := 1
 		if int(ev.Data[2]) == EncoderLeft {
 			dir = -1
+		}
+		if patbank.editingLength {
+			return patbank.AdjustLength(dir)
 		}
 		return patbank.JogSelect(dir)
 	case NotePlay:
@@ -249,6 +255,11 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		patternClipboard = patbank.CurrentPattern().Copy()
 		return patbank.f.SetLed(NoteRecord, LEDGreen)
 	case NotePatternSong:
+		if patbank.editingLength {
+			if err := patbank.setLengthMode(false); err != nil {
+				return err
+			}
+		}
 		processEvent = processSongEvent
 		if err := patbank.f.SetLed(NotePatternSong, LEDGreen); err != nil {
 			return err

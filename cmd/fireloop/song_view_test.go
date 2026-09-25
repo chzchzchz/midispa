@@ -181,6 +181,47 @@ func TestSongModeScrollBindings(t *testing.T) {
 	}
 }
 
+func TestPatternLengthControls(t *testing.T) {
+	_, patternBank := newArrangementTest(t)
+	previousPatbank := patbank
+	t.Cleanup(func() {
+		patbank = previousPatbank
+	})
+	patbank = patternBank
+	patternBank.CurrentPattern().SetLengthSteps(8)
+	if event, err := patternBank.ToggleEvent(0, 8, 127); err != nil {
+		t.Fatal(err)
+	} else if event.Velocity != 0 {
+		t.Fatalf("out-of-range step created velocity %d", event.Velocity)
+	}
+
+	if err := processPatternEvent(nil, arrangementNote(NoteOverview)); err != nil {
+		t.Fatal(err)
+	}
+	if !patternBank.editingLength {
+		t.Fatal("Overview did not enter length mode")
+	}
+	if err := processPatternEvent(nil, arrangementNote(CCSelect)); err != nil {
+		t.Fatal(err)
+	}
+	if got := patternBank.CurrentPattern().LengthSteps(); got != 9 {
+		t.Fatalf("encoder increased length to %d, want 9", got)
+	}
+	left := alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCSelect), byte(EncoderLeft)}}
+	if err := processPatternEvent(nil, left); err != nil {
+		t.Fatal(err)
+	}
+	if got := patternBank.CurrentPattern().LengthSteps(); got != 8 {
+		t.Fatalf("encoder decreased length to %d, want 8", got)
+	}
+	if err := processPatternEvent(nil, arrangementNote(NoteOverview)); err != nil {
+		t.Fatal(err)
+	}
+	if patternBank.editingLength {
+		t.Fatal("Overview did not leave length mode")
+	}
+}
+
 func TestSongModePatternPadUsesViewport(t *testing.T) {
 	songBank, patternBank := newArrangementTest(t)
 	previousSongbank, previousShift := songbank, shiftOn

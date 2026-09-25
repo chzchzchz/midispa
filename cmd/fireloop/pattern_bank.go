@@ -5,12 +5,13 @@ import (
 )
 
 type PatternBank struct {
-	Patterns    map[int]*Pattern
-	selPatIdx   int
-	selTrackRow int // valid rows [1,4]
-	trackVoices [4]int
-	f           *Fire
-	vb          *VoiceBank
+	Patterns      map[int]*Pattern
+	selPatIdx     int
+	selTrackRow   int // valid rows [1,4]
+	editingLength bool
+	trackVoices   [4]int
+	f             *Fire
+	vb            *VoiceBank
 }
 
 func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
@@ -41,9 +42,14 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 	oldPat := p.Patterns[p.selPatIdx]
 	pat.mu.RLock()
 	events := append([]Event(nil), pat.Events...)
+	lengthSteps := pat.lengthSteps
 	pat.mu.RUnlock()
+	if lengthSteps == 0 {
+		lengthSteps = defaultPatternSteps
+	}
 	oldPat.mu.Lock()
 	oldPat.Events = events
+	oldPat.lengthSteps = lengthSteps
 	oldPat.mu.Unlock()
 	return p.Jump(0)
 }
@@ -70,6 +76,9 @@ func (p *PatternBank) Jump(n int) error {
 		if err := p.printTrackRow(i+1, i+1 == p.selTrackRow); err != nil {
 			return err
 		}
+	}
+	if p.editingLength {
+		return p.printLength()
 	}
 	return nil
 }
@@ -146,7 +155,10 @@ func (p *PatternBank) redrawTrackPads(track int) error {
 	for i := 0; i < 16; i++ {
 		for _, ev := range evs {
 			if ev.Voice == tv {
-				idx := int(ev.Beat * 4)
+				idx := int(ev.Beat * patternStepsPerBeat)
+				if idx < 0 || idx >= len(rgb) {
+					continue
+				}
 				rgb[idx][1] = 50
 			}
 		}
@@ -184,8 +196,8 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 	for row := 0; row < 4; row++ {
 		rgb[row] = f(nil)
 	}
-	thisBeat := float32(col) / 4.0
-	nextBeat := thisBeat + float32(1.0/4.0)
+	thisBeat := float32(col) * patternBeatsPerStep
+	nextBeat := thisBeat + patternBeatsPerStep
 	evs := p.Patterns[p.selPatIdx].FindBeat(thisBeat)
 	for _, ev := range evs {
 		if ev.Beat < thisBeat {
@@ -205,9 +217,13 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 }
 
 func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
+	pattern := p.Patterns[p.selPatIdx]
+	if pattern == nil || col < 0 || col >= pattern.LengthSteps() {
+		return Event{}, nil
+	}
 	ev := Event{
 		Voice:    p.vb.voices[p.trackVoices[row]],
-		Beat:     float32(col) / 4.0,
+		Beat:     float32(col) * patternBeatsPerStep,
 		Velocity: v,
 	}
 	g := 50

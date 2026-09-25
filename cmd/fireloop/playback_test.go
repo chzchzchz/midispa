@@ -23,3 +23,16 @@ func TestBeatDuration(t *testing.T) {
 		})
 	}
 }
+
+func TestPatternDuration(t *testing.T) {
+	short := &Pattern{}
+	short.SetLengthSteps(4)
+	long := &Pattern{}
+	long.SetLengthSteps(8)
+	if got := patternDuration(short, 120); got != 500*time.Millisecond {
+		t.Fatalf("one-beat pattern duration = %s, want 500ms", got)
+	}
+	if got := patternDuration(long, 120); got != time.Second {
+		t.Fatalf("two-beat pattern duration = %s, want 1s", got)
+	}
+}

@@ -21,6 +21,7 @@ func (s *Song) GetPattern(ndx int) (p *Pattern) {
 	return p
 }
 
+// BeatToPattern resolves a beat using each pattern slot's configured duration.
 func (s *Song) BeatToPattern(beat float32) (p *Pattern, idx int) {
 	// TODO: logn lookup
 	curBeat := float32(0)

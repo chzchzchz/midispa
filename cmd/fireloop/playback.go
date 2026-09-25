@@ -29,6 +29,10 @@ func beatDuration(bpm int) time.Duration {
 	return time.Duration(float64(time.Minute) / float64(bpm))
 }
 
+func patternDuration(pattern *Pattern, bpm int) time.Duration {
+	return time.Duration(float64(pattern.Beats()) * float64(beatDuration(bpm)))
+}
+
 func (p *Playback) Start(aseq *alsa.Seq) context.CancelFunc {
 	ctx, cancel := context.WithCancel(context.Background())
 	go p.run(ctx, aseq)
@@ -75,13 +79,18 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 		if curPattern == nil {
 			curPattern = &emptyPattern
 		}
+		// A live length edit can move the playhead past the new end; rewind only the current pattern.
+		if p.patBeat >= curPattern.Beats() {
+			p.songBeat -= p.patBeat
+			p.patBeat = 0
+		}
 		nextBeat, err := p.playBeat(aseq, curPattern)
 		if err != nil {
 			return err
 		}
 		// Find next event time, if any.
-		next16th := float32(math.Floor(float64(p.patBeat*4.0))+1.0) / 4.0
-		if (nextBeat == 0 || nextBeat > next16th) && p.patBeat < 4.0 {
+		next16th := float32(math.Floor(float64(p.patBeat*patternStepsPerBeat))+1.0) * patternBeatsPerStep
+		if (nextBeat == 0 || nextBeat > next16th) && p.patBeat < curPattern.Beats() {
 			// TODO: this should be PPQ for midi clock mastering.
 			nextBeat = next16th
 		}
@@ -97,7 +106,7 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 			waitUntil = waitTime
 		} else {
 			// Reset to next measure.
-			measureLength := 4 * beatDuration(curBpm)
+			measureLength := patternDuration(curPattern, curBpm)
 			start = start.Add(measureLength)
 			waitUntil = time.Until(start)
 			curBpm = bpm
@@ -162,17 +171,22 @@ func (sb *SongBank) startSequencer(aseq *alsa.Seq) context.CancelFunc {
 	// Light playing measure.
 	lastSongBeat := float32(-99999)
 	p.updatePads = func(beat float32) error {
-		lastMeasure := int(math.Floor(float64(lastSongBeat)) / 4)
-		givenMeasure := int(math.Floor(float64(beat)) / 4)
+		s := sb.CurrentSong()
+		_, lastMeasure := s.BeatToPattern(lastSongBeat)
+		pat, givenMeasure := s.BeatToPattern(beat)
+		if givenMeasure < 0 {
+			return nil
+		}
 		lastSongBeat = beat
 		if lastMeasure == givenMeasure {
 			return nil
 		}
-		must(sb.ToggleMeasureBrightness(lastMeasure, givenMeasure))
-		must(sb.printRow(4, fmt.Sprintf("Measure %03d", givenMeasure+1)))
-
-		s := sb.CurrentSong()
-		pat, _ := s.BeatToPattern(beat)
+		if err := sb.ToggleMeasureBrightness(lastMeasure, givenMeasure); err != nil {
+			return err
+		}
+		if err := sb.printRow(4, fmt.Sprintf("Measure %03d", givenMeasure+1)); err != nil {
+			return err
+		}
 		pidx := sb.pb.PatternIdxMap()[pat]
 		return sb.printRow(5, fmt.Sprintf("Pat-bar %03d", pidx))
 	}

@@ -40,6 +40,8 @@ A voice may override the device channel with its own `Channel`. MIDI notes are i
 - Pad grid: toggle steps in the selected pattern.
 - Mute 1 through 4: select a track row.
 - Encoder: change the voice assigned to the selected row.
+- Overview: enter or leave length-edit mode.
+- Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events.
 - `Shift` plus a pad, then release `Shift`: enter a tempo.
 - `Alt` plus a mute button: clear that track row.
 - `Alt` plus stop: clear the current pattern.
@@ -59,7 +61,7 @@ A voice may override the device channel with its own `Channel`. MIDI notes are i
 - `Shift` plus a measure pad: jump playback to that measure.
 - OLED row 3 shows the visible pattern and measure ranges.
 
-Patterns and songs are held in memory for the lifetime of the process.
+Patterns and songs are held in memory for the lifetime of the process. Each song slot uses its pattern's 1–16 step duration.
 
 ## Development
 

@@ -5,9 +5,18 @@ import (
 	"sync"
 )
 
+const (
+	maxPatternSteps     = 16
+	defaultPatternSteps = maxPatternSteps
+	patternStepsPerBeat = 4
+	patternBeatsPerStep = 1.0 / patternStepsPerBeat
+)
+
 type Pattern struct {
 	Events []Event
-	mu     sync.RWMutex
+	// lengthSteps is measured in sixteenth notes; zero keeps the legacy four-beat default.
+	lengthSteps int
+	mu          sync.RWMutex
 }
 
 var emptyPattern Pattern
@@ -17,11 +26,14 @@ func (p *Pattern) Copy() *Pattern {
 	defer p.mu.RUnlock()
 	evs := make([]Event, len(p.Events))
 	copy(evs, p.Events)
-	return &Pattern{Events: evs}
+	return &Pattern{Events: evs, lengthSteps: p.lengthSteps}
 }
 
 // ToggleEvent returns true if event is added, false if deleted.
 func (p *Pattern) ToggleEvent(ev Event) bool {
+	if ev.Beat < 0 || ev.Beat >= p.lengthBeats() {
+		return false
+	}
 	isAdd := true
 	i := 0
 	p.mu.Lock()
@@ -67,4 +79,40 @@ func (p *Pattern) ClearVoice(v *Voice) {
 	p.mu.Unlock()
 }
 
-func (p *Pattern) Beats() float32 { return 4.0 }
+// Beats returns the configured pattern duration, defaulting to four beats.
+func (p *Pattern) Beats() float32 { return p.lengthBeats() }
+
+func (p *Pattern) LengthSteps() int {
+	p.mu.RLock()
+	steps := p.lengthSteps
+	p.mu.RUnlock()
+	if steps == 0 {
+		return defaultPatternSteps
+	}
+	return steps
+}
+
+func (p *Pattern) SetLengthSteps(steps int) int {
+	if steps < 1 {
+		steps = 1
+	}
+	if steps > maxPatternSteps {
+		steps = maxPatternSteps
+	}
+	p.mu.Lock()
+	p.lengthSteps = steps
+	end := float32(steps) * patternBeatsPerStep
+	kept := p.Events[:0]
+	for _, event := range p.Events {
+		if event.Beat < end {
+			kept = append(kept, event)
+		}
+	}
+	p.Events = kept
+	p.mu.Unlock()
+	return steps
+}
+
+func (p *Pattern) lengthBeats() float32 {
+	return float32(p.LengthSteps()) * patternBeatsPerStep
+}
