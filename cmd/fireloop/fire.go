@@ -93,7 +93,7 @@ func (f *Fire) LedsOff() error {
 		CCMuteLED1, CCMuteLED2, CCMuteLED3, CCMuteLED4,
 		NotePatternUp, NotePatternDown, NoteBrowser,
 		NoteGridLeft, NoteGridRight,
-		NoteAccent, NoteSnap, NoteTap, NoteOverview, NoteShift, NoteAlt,
+		NoteAccent, NoteSnap, NoteTap, NoteOverview, NoteShift, NoteAlt, NoteMode,
 		NoteMetronome, NoteWait, NoteCountdown, NoteLoopRec,
 	} {
 		if err := f.SetLed(n, 0); err != nil {

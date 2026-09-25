@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -9,7 +11,6 @@ import (
 	"sort"
 
 	"github.com/chzchzchz/midispa/alsa"
-	"github.com/chzchzchz/midispa/util"
 )
 
 var syncPort alsa.SeqAddr
@@ -21,32 +22,68 @@ const (
 
 // Validate routing values before opening ports because invalid channels otherwise fail during playback.
 func validateDevices(devices []Device) error {
-	for i, dev := range devices {
-		if dev.MidiPort == "" {
-			return fmt.Errorf("device %d has an empty MidiPort", i)
-		}
-		if dev.Channel < 0 || dev.Channel > midiChannelMax {
-			return fmt.Errorf("device %q has invalid channel %d", dev.Name, dev.Channel)
-		}
-		if len(dev.Voices) == 0 {
-			return fmt.Errorf("device %q has no voices", dev.Name)
-		}
-		for j, voice := range dev.Voices {
-			if voice.Note < 0 || voice.Note > midiNoteMax {
-				return fmt.Errorf("device %q voice %d has invalid note %d", dev.Name, j, voice.Note)
-			}
-			if voice.Channel < 0 || voice.Channel > midiChannelMax {
-				return fmt.Errorf("device %q voice %d has invalid channel %d", dev.Name, j, voice.Channel)
-			}
-			if dev.Channel == 0 && voice.Channel == 0 {
-				return fmt.Errorf("device %q voice %d has no MIDI channel", dev.Name, j)
-			}
+	for index := range devices {
+		if err := validateDevice(index, &devices[index]); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func writeMidiMsgs(aseq *alsa.Seq, sa alsa.SeqAddr, msgs [][]byte) error {
+func validateDevice(index int, dev *Device) error {
+	if dev.MidiPort == "" {
+		return fmt.Errorf("device %d has an empty MidiPort", index)
+	}
+	if !validChannel(dev.Channel) {
+		return fmt.Errorf("device %q has invalid channel %d", dev.Name, dev.Channel)
+	}
+	if len(dev.Voices) == 0 {
+		return fmt.Errorf("device %q has no voices", dev.Name)
+	}
+	for voiceIndex := range dev.Voices {
+		if err := validateVoice(dev, voiceIndex); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateVoice(dev *Device, index int) error {
+	voice := &dev.Voices[index]
+	if voice.Note != nil && (*voice.Note < 0 || *voice.Note > midiNoteMax) {
+		return fmt.Errorf("device %q voice %d has invalid note %d", dev.Name, index, *voice.Note)
+	}
+	if !validChannel(voice.Channel) {
+		return fmt.Errorf("device %q voice %d has invalid channel %d", dev.Name, index, voice.Channel)
+	}
+	if resolveChannel(dev.Channel, voice.Channel) == 0 {
+		return fmt.Errorf("device %q voice %d has no MIDI channel", dev.Name, index)
+	}
+	return nil
+}
+
+func validChannel(channel int) bool {
+	return channel >= 0 && channel <= midiChannelMax
+}
+
+type midiWriter interface {
+	Write(alsa.SeqEvent) error
+}
+
+func isNilMidiWriter(aseq midiWriter) bool {
+	if aseq == nil {
+		return true
+	}
+	if seq, ok := aseq.(*alsa.Seq); ok {
+		return seq == nil
+	}
+	return false
+}
+
+func writeMidiMsgs(aseq midiWriter, sa alsa.SeqAddr, msgs [][]byte) error {
+	if isNilMidiWriter(aseq) {
+		return nil
+	}
 	for _, msg := range msgs {
 		if err := aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: msg}); err != nil {
 			return err
@@ -55,15 +92,38 @@ func writeMidiMsgs(aseq *alsa.Seq, sa alsa.SeqAddr, msgs [][]byte) error {
 	return nil
 }
 
-// A kit can be one JSON file or a directory of JSON files, so multi-device
-// setups can keep each device's routing configuration separate.
+// loadDeviceFile accepts the preferred top-level device array and keeps single-device files working.
+func loadDeviceFile(path string) ([]Device, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty kit file")
+	}
+	if data[0] == '[' {
+		var devices []Device
+		if err := json.Unmarshal(data, &devices); err != nil {
+			return nil, err
+		}
+		return devices, nil
+	}
+	var device Device
+	if err := json.Unmarshal(data, &device); err != nil {
+		return nil, err
+	}
+	return []Device{device}, nil
+}
+
+// A kit file contains a device array, or a directory can contain JSON files with device arrays.
 func loadDevices(path string) ([]Device, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
-		devices, err := util.LoadJSONFile[Device](path)
+		devices, err := loadDeviceFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("load kit %q: %w", path, err)
 		}
@@ -83,7 +143,7 @@ func loadDevices(path string) ([]Device, error) {
 			continue
 		}
 		filePath := filepath.Join(path, entry.Name())
-		fileDevices, err := util.LoadJSONFile[Device](filePath)
+		fileDevices, err := loadDeviceFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("load kit %q: %w", filePath, err)
 		}

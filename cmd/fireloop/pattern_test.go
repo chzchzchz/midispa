@@ -94,7 +94,7 @@ func TestSongUsesVariablePatternLengths(t *testing.T) {
 func TestSetPatternCopiesEvents(t *testing.T) {
 	vb := NewVoiceBank([]Device{{
 		Channel: 1,
-		Voices:  []Voice{{Name: "voice", Note: 60, Channel: 1}},
+		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
 	}})
 	pb := &PatternBank{
 		Patterns:  map[int]*Pattern{1: {}},

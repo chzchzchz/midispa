@@ -34,6 +34,9 @@ func (sb *SongBank) CurrentSong() *Song {
 }
 
 func (s *SongBank) Jump(n int) error {
+	if n != 0 {
+		stopPlayback()
+	}
 	newIdx := s.selSongIdx + n
 	if newIdx <= 0 || newIdx > maxPatternIndex {
 		return nil
@@ -124,6 +127,9 @@ func (s *SongBank) SelectPattern(n int) error {
 	if s.pb == nil || n <= 0 || n > maxPatternIndex {
 		return nil
 	}
+	stopPlayback()
+	s.pb.editingNote = false
+	s.pb.clearPadState()
 	if s.pb.Patterns == nil {
 		s.pb.Patterns = make(map[int]*Pattern)
 	}

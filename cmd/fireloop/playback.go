@@ -4,11 +4,30 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
 )
+
+type sequencerWriter interface {
+	midiWriter
+	WritePort(alsa.SeqEvent, int) error
+}
+
+// The active map is keyed by voice so different destinations can coexist in a mixed kit.
+type activeChromaticNote struct {
+	channel     int
+	note        int
+	destination alsa.SeqAddr
+	tie         bool
+}
+
+type chromaticOutbound struct {
+	destination alsa.SeqAddr
+	data        []byte
+}
 
 type Playback struct {
 	songBeat float32
@@ -19,6 +38,11 @@ type Playback struct {
 
 	updatePads  func(curBeat float32) error
 	nextPattern func(curBeat float32) *Pattern
+
+	positionMu sync.Mutex
+	activeMu   sync.Mutex
+	active     map[*Voice]activeChromaticNote
+	writer     midiWriter
 }
 
 func beatDuration(bpm int) time.Duration {
@@ -30,79 +54,300 @@ func beatDuration(bpm int) time.Duration {
 }
 
 func patternDuration(pattern *Pattern, bpm int) time.Duration {
+	if pattern == nil {
+		return 0
+	}
 	return time.Duration(float64(pattern.Beats()) * float64(beatDuration(bpm)))
 }
 
 func (p *Playback) Start(aseq *alsa.Seq) context.CancelFunc {
+	if aseq == nil {
+		p.reset()
+		return func() {}
+	}
+	return p.start(aseq)
+}
+
+func (p *Playback) start(aseq sequencerWriter) context.CancelFunc {
+	p.reset()
+	p.writer = aseq
 	ctx, cancel := context.WithCancel(context.Background())
 	go p.run(ctx, aseq)
-	return cancel
+	return func() {
+		cancel()
+		_ = p.releaseAll(aseq)
+	}
+}
+
+func (p *Playback) reset() {
+	_ = p.releaseAll(p.writer)
+	p.positionMu.Lock()
+	p.songBeat = 0
+	p.patBeat = 0
+	p.nextSongBeat = -1
+	p.positionMu.Unlock()
+	p.activeMu.Lock()
+	p.active = make(map[*Voice]activeChromaticNote)
+	p.activeMu.Unlock()
+	p.writer = nil
+}
+
+func (p *Playback) position() (songBeat, patBeat, nextSongBeat float32) {
+	p.positionMu.Lock()
+	songBeat, patBeat, nextSongBeat = p.songBeat, p.patBeat, p.nextSongBeat
+	p.positionMu.Unlock()
+	return songBeat, patBeat, nextSongBeat
+}
+
+func (p *Playback) setPosition(songBeat, patBeat float32) {
+	p.positionMu.Lock()
+	p.songBeat = songBeat
+	p.patBeat = patBeat
+	p.positionMu.Unlock()
+}
+
+func (p *Playback) takeNextSongBeat() (float32, bool) {
+	p.positionMu.Lock()
+	defer p.positionMu.Unlock()
+	if p.nextSongBeat < 0 {
+		return 0, false
+	}
+	beat := p.nextSongBeat
+	p.nextSongBeat = -1
+	return beat, true
 }
 
 func (p *Playback) JumpSongBeat(beat float32) (oldSongBeat float32) {
+	_ = p.releaseAll(p.writer)
+	p.positionMu.Lock()
 	oldSongBeat = p.songBeat
 	p.nextSongBeat = beat
+	p.positionMu.Unlock()
 	return oldSongBeat
 }
 
-func (p *Playback) playBeat(aseq *alsa.Seq, pat *Pattern) (float32, error) {
-	evs := pat.FindBeat(p.patBeat)
-	nextBeat := float32(0)
-	i := 0
-	for i < len(evs) {
-		if evs[i].Beat > p.patBeat {
-			// No more events to send.
-			nextBeat = evs[i].Beat
-			break
-		}
-		msgs := evs[i].ToMidi()
-		if err := writeMidiMsgs(aseq, evs[i].device.SeqAddr, msgs); err != nil {
+func (p *Playback) playBeat(aseq midiWriter, pat *Pattern) (float32, error) {
+	if pat == nil {
+		return 0, nil
+	}
+	_, patBeat, _ := p.position()
+	if patBeat >= pat.Beats() {
+		if err := p.releaseAll(aseq); err != nil {
 			return 0, err
 		}
-		i++
 	}
-	return nextBeat, p.updatePads(p.songBeat)
+	currentStep := eventStep(Event{Beat: patBeat})
+	evs := pat.FindBeat(patBeat)
+	nextBeat := float32(0)
+	for _, ev := range evs {
+		step := eventStep(ev)
+		if step < currentStep {
+			continue
+		}
+		if step > currentStep {
+			// No more events to send.
+			nextBeat = stepBeat(step)
+			break
+		}
+		if ev.Voice == nil {
+			continue
+		}
+		if ev.IsChromatic() {
+			if err := p.playChromaticEvent(aseq, ev); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if err := writeMidiMsgs(aseq, eventDestination(ev), ev.ToMidi()); err != nil {
+			return 0, err
+		}
+	}
+	if p.updatePads != nil {
+		songBeat, _, _ := p.position()
+		if err := p.updatePads(songBeat); err != nil {
+			return 0, err
+		}
+	}
+	return nextBeat, nil
 }
 
-func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
-	p.nextSongBeat = -1
-	curBpm, curPattern := bpm, p.nextPattern(0)
+func chromaticMidiOn(channel, note, velocity int) []byte {
+	return []byte{
+		midi.MakeNoteOn(channel - 1),
+		byte(clampMidiDataValue(note)),
+		byte(clampMidiDataValue(velocity)),
+	}
+}
+
+func chromaticMidiOff(channel, note int) []byte {
+	return []byte{
+		midi.MakeNoteOff(channel - 1),
+		byte(clampMidiDataValue(note)),
+		0,
+	}
+}
+
+// Tied same-pitch transitions emit no messages; tied pitch changes emit note-on before note-off.
+
+func chromaticOutboundMessages(previous *activeChromaticNote, current activeChromaticNote, velocity int) []chromaticOutbound {
+	if previous == nil {
+		return []chromaticOutbound{{
+			destination: current.destination,
+			data:        chromaticMidiOn(current.channel, current.note, velocity),
+		}}
+	}
+	if previous.tie && previous.note == current.note {
+		return nil
+	}
+	if previous.tie {
+		return []chromaticOutbound{
+			{
+				destination: current.destination,
+				data:        chromaticMidiOn(current.channel, current.note, velocity),
+			},
+			{
+				destination: previous.destination,
+				data:        chromaticMidiOff(previous.channel, previous.note),
+			},
+		}
+	}
+	return []chromaticOutbound{
+		{
+			destination: previous.destination,
+			data:        chromaticMidiOff(previous.channel, previous.note),
+		},
+		{
+			destination: current.destination,
+			data:        chromaticMidiOn(current.channel, current.note, velocity),
+		},
+	}
+}
+
+// playChromaticEvent performs the note transition before updating the active voice state.
+func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
+	if event.Voice == nil || !event.IsChromatic() {
+		return nil
+	}
+	channel := event.Voice.EffectiveChannel()
+	if channel == 0 {
+		return nil
+	}
+	current := activeChromaticNote{
+		channel:     channel,
+		note:        event.NoteNumber(),
+		destination: eventDestination(event),
+		tie:         event.Tie,
+	}
+	p.activeMu.Lock()
+	defer p.activeMu.Unlock()
+	previous, hasPrevious := p.active[event.Voice]
+	var previousNote *activeChromaticNote
+	if hasPrevious {
+		previousNote = &previous
+	}
+	messages := chromaticOutboundMessages(previousNote, current, event.Velocity)
+	for _, message := range messages {
+		if isNilMidiWriter(aseq) {
+			continue
+		}
+		if err := aseq.Write(alsa.SeqEvent{SeqAddr: message.destination, Data: message.data}); err != nil {
+			return err
+		}
+	}
+	if p.active == nil {
+		p.active = make(map[*Voice]activeChromaticNote)
+	}
+	p.active[event.Voice] = current
+	return nil
+}
+
+// releaseAll drains the map before writing, preventing duplicate releases during cancellation.
+func (p *Playback) releaseAll(aseq midiWriter) error {
+	p.activeMu.Lock()
+	if len(p.active) == 0 {
+		p.activeMu.Unlock()
+		return nil
+	}
+	active := p.active
+	p.active = make(map[*Voice]activeChromaticNote)
+	p.activeMu.Unlock()
+	var firstErr error
+	for _, note := range active {
+		if isNilMidiWriter(aseq) {
+			continue
+		}
+		message := chromaticMidiOff(note.channel, note.note)
+		if err := aseq.Write(alsa.SeqEvent{SeqAddr: note.destination, Data: message}); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (p *Playback) activeNoteCount() int {
+	p.activeMu.Lock()
+	defer p.activeMu.Unlock()
+	return len(p.active)
+}
+
+func writeSequencerPort(aseq sequencerWriter, data []byte) error {
+	if aseq == nil {
+		return nil
+	}
+	if seq, ok := aseq.(*alsa.Seq); ok && seq == nil {
+		return nil
+	}
+	return aseq.WritePort(alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: data}, syncPort.Port)
+}
+
+func (p *Playback) run(ctx context.Context, aseq sequencerWriter) error {
+	defer func() { _ = p.releaseAll(aseq) }()
+	curBpm := bpm
+	var curPattern *Pattern
+	if p.nextPattern != nil {
+		curPattern = p.nextPattern(0)
+	}
 	// Compute measures w/r/t this start time + now() to avoid drift.
 	start := time.Now()
+	started := false
 	for {
-		if p.songBeat == 0 {
-			ev := alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: []byte{midi.Start}}
-			if err := aseq.WritePort(ev, syncPort.Port); err != nil {
+		songBeat, patBeat, _ := p.position()
+		if !started {
+			if err := writeSequencerPort(aseq, []byte{midi.Start}); err != nil {
 				return err
 			}
+			started = true
 		}
 		if curPattern == nil {
 			curPattern = &emptyPattern
 		}
 		// A live length edit can move the playhead past the new end; rewind only the current pattern.
-		if p.patBeat >= curPattern.Beats() {
-			p.songBeat -= p.patBeat
-			p.patBeat = 0
+		if patBeat >= curPattern.Beats() {
+			_ = p.releaseAll(aseq)
+			p.setPosition(songBeat-patBeat, 0)
+			_, patBeat, _ = p.position()
 		}
 		nextBeat, err := p.playBeat(aseq, curPattern)
 		if err != nil {
 			return err
 		}
+		_, patBeat, _ = p.position()
 		// Find next event time, if any.
-		next16th := float32(math.Floor(float64(p.patBeat*patternStepsPerBeat))+1.0) * patternBeatsPerStep
-		if (nextBeat == 0 || nextBeat > next16th) && p.patBeat < curPattern.Beats() {
+		next16th := float32(math.Floor(float64(patBeat*patternStepsPerBeat))+1.0) * patternBeatsPerStep
+		patternBeats := curPattern.Beats()
+		if (nextBeat == 0 || nextBeat > next16th) && patBeat < patternBeats {
 			// TODO: this should be PPQ for midi clock mastering.
 			nextBeat = next16th
 		}
-		if nextBeat >= curPattern.Beats() {
+		if nextBeat >= patternBeats {
 			// Past measure; reset.
 			nextBeat = 0
 		}
 		var waitUntil time.Duration
 		if nextBeat != 0 {
-			waitTime := time.Duration(float64(nextBeat-p.patBeat) * float64(beatDuration(curBpm)))
-			p.songBeat += nextBeat - p.patBeat
-			p.patBeat = nextBeat
+			waitTime := time.Duration(float64(nextBeat-patBeat) * float64(beatDuration(curBpm)))
+			songBeat, _, _ = p.position()
+			p.setPosition(songBeat+nextBeat-patBeat, nextBeat)
 			waitUntil = waitTime
 		} else {
 			// Reset to next measure.
@@ -110,23 +355,32 @@ func (p *Playback) run(ctx context.Context, aseq *alsa.Seq) error {
 			start = start.Add(measureLength)
 			waitUntil = time.Until(start)
 			curBpm = bpm
-			if p.nextSongBeat < 0 {
-				p.songBeat += curPattern.Beats() - p.patBeat
+			if requested, ok := p.takeNextSongBeat(); ok {
+				songBeat = requested
 			} else {
-				p.songBeat = p.nextSongBeat
-				p.nextSongBeat = -1
+				songBeat, _, _ = p.position()
+				songBeat += curPattern.Beats() - patBeat
 			}
-			curPattern, p.patBeat = p.nextPattern(p.songBeat), 0
+			_ = p.releaseAll(aseq)
+			if p.nextPattern != nil {
+				curPattern = p.nextPattern(songBeat)
+			} else {
+				curPattern = nil
+			}
 			if curPattern == nil {
 				// Loop.
-				curPattern, p.songBeat = p.nextPattern(0), 0
+				songBeat = 0
+				if p.nextPattern != nil {
+					curPattern = p.nextPattern(0)
+				}
 			}
+			p.setPosition(songBeat, 0)
 		}
 		select {
 		case <-time.After(waitUntil):
 		case <-ctx.Done():
-			ev := alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: []byte{midi.Stop}}
-			return aseq.WritePort(ev, syncPort.Port)
+			_ = p.releaseAll(aseq)
+			return writeSequencerPort(aseq, []byte{midi.Stop})
 		}
 	}
 }
@@ -143,7 +397,7 @@ func (pb *PatternBank) startSequencer(aseq *alsa.Seq) context.CancelFunc {
 	}
 	// Light up column if new position.
 	update := func(beat float32) error {
-		thisColumn := int(math.Floor(float64(beat*4))) % 16
+		thisColumn := int(math.Floor(float64(beat*patternStepsPerBeat))) % 16
 		if thisColumn == lastColumn {
 			// No update.
 			return nil
@@ -156,7 +410,8 @@ func (pb *PatternBank) startSequencer(aseq *alsa.Seq) context.CancelFunc {
 		lastColumn = thisColumn
 		return pb.drawPadColumnInvert(thisColumn)
 	}
-	p := Playback{updatePads: update, nextPattern: next}
+	p := &Playback{updatePads: update, nextPattern: next}
+	pb.playback = p
 	return p.Start(aseq)
 }
 

@@ -1,3 +1,4 @@
+[
 {
   "Name" : "gm_drums",
   "MidiPort" : "USB Midi 4i4o MIDI 4",
@@ -50,5 +51,7 @@
    	{ "Name" : "Open Cuica", "Note" : 79},
    	{ "Name" : "Mute Triangle", "Note" : 80},
    	{ "Name" : "Open Triangle", "Note" : 81}
+
    ]
 }
+]

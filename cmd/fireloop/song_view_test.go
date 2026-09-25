@@ -12,7 +12,7 @@ func newArrangementTest(t *testing.T) (*SongBank, *PatternBank) {
 	fire := NewFire(func([]byte) error { return nil })
 	voiceBank := NewVoiceBank([]Device{{
 		Channel: 1,
-		Voices:  []Voice{{Name: "voice", Note: 60, Channel: 1}},
+		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
 	}})
 	patternBank := NewPatternBank(fire, voiceBank)
 	if err := patternBank.Jump(1); err != nil {

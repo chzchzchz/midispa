@@ -9,9 +9,15 @@ type PatternBank struct {
 	selPatIdx     int
 	selTrackRow   int // valid rows [1,4]
 	editingLength bool
+	editingNote   bool
+	stepCursor    int
+	pressedPads   uint64
+	rowPadMasks   [4]uint16
+	rowPadCounts  [4]int
 	trackVoices   [4]int
 	f             *Fire
 	vb            *VoiceBank
+	playback      *Playback
 }
 
 func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
@@ -39,7 +45,15 @@ func (pb *PatternBank) PatternIdxMap() map[*Pattern]int {
 
 func (p *PatternBank) SetPattern(pat *Pattern) error {
 	// Don't swap out pointer since song may already be using it.
-	oldPat := p.Patterns[p.selPatIdx]
+	if pat == nil {
+		return nil
+	}
+	stopPlayback()
+	oldPat, ok := p.Patterns[p.selPatIdx]
+	if !ok || oldPat == nil {
+		oldPat = &Pattern{}
+		p.Patterns[p.selPatIdx] = oldPat
+	}
 	pat.mu.RLock()
 	events := append([]Event(nil), pat.Events...)
 	lengthSteps := pat.lengthSteps
@@ -50,7 +64,16 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 	oldPat.mu.Lock()
 	oldPat.Events = events
 	oldPat.lengthSteps = lengthSteps
+	oldPat.normalizeLocked()
 	oldPat.mu.Unlock()
+	p.editingNote = false
+	p.stepCursor = 0
+	p.clearPadState()
+	if p.f != nil {
+		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+			return err
+		}
+	}
 	return p.Jump(0)
 }
 
@@ -59,9 +82,27 @@ func (p *PatternBank) Jump(n int) error {
 	if newIdx <= 0 || newIdx > 999 {
 		return nil
 	}
+	changed := newIdx != p.selPatIdx
+	if changed {
+		stopPlayback()
+	}
 	p.selPatIdx = newIdx
 	if _, ok := p.Patterns[p.selPatIdx]; !ok {
 		p.Patterns[p.selPatIdx] = &Pattern{}
+	}
+	if changed {
+		p.editingNote = false
+		p.stepCursor = 0
+		p.clearPadState()
+		if p.f != nil {
+			if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+				return err
+			}
+		}
+	}
+	p.clampStepCursor()
+	if p.f == nil {
+		return nil
 	}
 	if err := p.f.Print(0, 0, fmt.Sprintf("Pattern %03d", p.selPatIdx)); err != nil {
 		return err
@@ -80,12 +121,32 @@ func (p *PatternBank) Jump(n int) error {
 	if p.editingLength {
 		return p.printLength()
 	}
-	return nil
+	if p.editingNote {
+		if err := p.drawNotePalette(); err != nil {
+			return err
+		}
+	}
+	return p.printChromaticStatus()
 }
 
 func (p *PatternBank) ClearTrackRow(n int) error {
+	if n < 1 || n > 4 {
+		return nil
+	}
+	stopPlayback()
 	v := p.vb.voices[p.trackVoices[n-1]]
-	p.Patterns[p.selPatIdx].ClearVoice(v)
+	pattern := p.CurrentPattern()
+	if pattern == nil {
+		return nil
+	}
+	pattern.ClearVoice(v)
+	p.editingNote = false
+	p.clearPadState()
+	if p.f != nil {
+		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+			return err
+		}
+	}
 	for i := 0; i < 4; i++ {
 		if p.trackVoices[n-1] != p.trackVoices[i] {
 			continue
@@ -94,45 +155,78 @@ func (p *PatternBank) ClearTrackRow(n int) error {
 			return err
 		}
 	}
-	return nil
+	return p.printChromaticStatus()
 }
 
 func (p *PatternBank) SelectTrackRow(n int) error {
+	if n < 0 || n > 4 {
+		return nil
+	}
+	stopPlayback()
 	// Deselect currently selected row, if any.
 	if p.selTrackRow > 0 {
-		if err := p.f.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
-			return err
+		if p.f != nil {
+			if err := p.f.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
+				return err
+			}
 		}
 		if err := p.printTrackRow(p.selTrackRow, false); err != nil {
 			return err
 		}
 	}
+	p.editingNote = false
+	p.clearPadState()
+	if p.f != nil {
+		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+			return err
+		}
+	}
 	if p.selTrackRow == n {
 		p.selTrackRow = 0
-		return nil
+		return p.printChromaticStatus()
 	}
 	// Select new row.
 	p.selTrackRow = n
 	if err := p.printTrackRow(n, true); err != nil {
 		return err
 	}
-	return p.f.SetLed(CCMuteLED1+(n-1), LEDGreen)
+	if p.f != nil {
+		if err := p.f.SetLed(CCMuteLED1+(n-1), LEDGreen); err != nil {
+			return err
+		}
+	}
+	if err := p.redrawTrackPads(n); err != nil {
+		return err
+	}
+	return p.printChromaticStatus()
 }
 
 func (p *PatternBank) printTrackRow(n int, inv bool) error {
+	if p.f == nil {
+		return nil
+	}
 	if err := p.f.ClearOLEDRows(n+1, 1); err != nil {
 		return err
 	}
 	v := p.vb.voices[p.trackVoices[n-1]]
+	name := voiceDisplayName(v)
 	if inv {
-		return p.f.PrintInvert(0, n+1, v.Name)
+		return p.f.PrintInvert(0, n+1, name)
 	}
-	return p.f.Print(0, n+1, v.Name)
+	return p.f.Print(0, n+1, name)
 }
 
 func (p *PatternBank) JogSelect(n int) error {
-	if p.selTrackRow == 0 {
+	if p.selTrackRow == 0 || len(p.vb.voices) == 0 {
 		return nil
+	}
+	stopPlayback()
+	p.editingNote = false
+	p.clearPadState()
+	if p.f != nil {
+		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+			return err
+		}
 	}
 	tv := &p.trackVoices[p.selTrackRow-1]
 	*tv = *tv + n
@@ -144,23 +238,39 @@ func (p *PatternBank) JogSelect(n int) error {
 	if err := p.printTrackRow(p.selTrackRow, true); err != nil {
 		return err
 	}
-	return p.redrawTrackPads(p.selTrackRow)
+	if err := p.redrawTrackPads(p.selTrackRow); err != nil {
+		return err
+	}
+	return p.printChromaticStatus()
 }
 
 func (p *PatternBank) redrawTrackPads(track int) error {
-	pat := p.Patterns[p.selPatIdx]
+	if p == nil || p.f == nil || track < 1 || track > 4 {
+		return nil
+	}
+	pat := p.CurrentPattern()
+	if pat == nil {
+		return nil
+	}
 	tv := p.vb.voices[p.trackVoices[track-1]]
 	evs := pat.FindBeat(0)
 	var rgb [16][3]int
-	for i := 0; i < 16; i++ {
-		for _, ev := range evs {
-			if ev.Voice == tv {
-				idx := int(ev.Beat * patternStepsPerBeat)
-				if idx < 0 || idx >= len(rgb) {
-					continue
-				}
-				rgb[idx][1] = 50
-			}
+	for _, ev := range evs {
+		if ev.Voice != tv {
+			continue
+		}
+		idx := eventStep(ev)
+		if idx < 0 || idx >= len(rgb) {
+			continue
+		}
+		rgb[idx] = chromaticEventColor(ev)
+		if ev.Tie {
+			rgb[idx] = markTieColor(rgb[idx])
+		}
+	}
+	if !p.editingNote {
+		if p.stepCursor >= 0 && p.stepCursor < len(rgb) {
+			rgb[p.stepCursor] = markCursorColor(rgb[p.stepCursor])
 		}
 	}
 	return p.f.LightPadRow(track-1, rgb)
@@ -190,26 +300,34 @@ type evColorFunc func(*Event) [3]int
 
 func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 	if col < 0 || col > 15 {
-		panic("bad column")
+		return errOutOfRange
+	}
+	if p == nil || p.f == nil {
+		return nil
+	}
+	pattern := p.CurrentPattern()
+	if pattern == nil {
+		return nil
 	}
 	var rgb [4][3]int
 	for row := 0; row < 4; row++ {
 		rgb[row] = f(nil)
 	}
-	thisBeat := float32(col) * patternBeatsPerStep
-	nextBeat := thisBeat + patternBeatsPerStep
-	evs := p.Patterns[p.selPatIdx].FindBeat(thisBeat)
+	evs := pattern.FindBeat(stepBeat(col))
 	for _, ev := range evs {
-		if ev.Beat < thisBeat {
-			fmt.Printf("%+v\n\n%+v vs %v\n", evs, ev, nextBeat)
-			panic("oops")
+		idx := eventStep(ev)
+		if idx < col {
+			continue
 		}
-		if ev.Beat >= nextBeat {
+		if idx >= col+1 {
 			break
 		}
 		for row, v := range p.trackVoices {
 			if ev.Voice == p.vb.voices[v] {
 				rgb[row] = f(&ev)
+				if ev.Tie {
+					rgb[row] = markTieColor(rgb[row])
+				}
 			}
 		}
 	}
@@ -217,24 +335,47 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 }
 
 func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
-	pattern := p.Patterns[p.selPatIdx]
+	if p == nil || p.vb == nil || row < 0 || row >= len(p.trackVoices) {
+		return Event{}, nil
+	}
+	pattern := p.CurrentPattern()
 	if pattern == nil || col < 0 || col >= pattern.LengthSteps() {
 		return Event{}, nil
 	}
+	voice := p.vb.voices[p.trackVoices[row]]
+	if voice.IsChromatic() {
+		if event, ok := pattern.EventAtStep(col, voice); ok {
+			pattern.RemoveEventAtStep(col, voice)
+			event.Velocity = 0
+			return event, nil
+		}
+		return Event{}, nil
+	}
+	if v < 0 {
+		v = 0
+	}
+	if v > midiNoteMax {
+		v = midiNoteMax
+	}
 	ev := Event{
-		Voice:    p.vb.voices[p.trackVoices[row]],
-		Beat:     float32(col) * patternBeatsPerStep,
+		Voice:    voice,
+		Beat:     stepBeat(col),
 		Velocity: v,
 	}
-	g := 50
-	if !p.Patterns[p.selPatIdx].ToggleEvent(ev) {
-		g = 0
+	added := pattern.ToggleEvent(ev)
+	if !added {
 		ev.Velocity = 0
 	}
-	for i := 0; i < 4; i++ {
-		if p.trackVoices[i] == p.trackVoices[row] {
-			if err := p.f.LightPad(col, i, 0, g, 0); err != nil {
-				return ev, err
+	if p.f != nil {
+		g := 50
+		if !added {
+			g = 0
+		}
+		for i := 0; i < 4; i++ {
+			if p.trackVoices[i] == p.trackVoices[row] {
+				if err := p.f.LightPad(col, i, 0, g, 0); err != nil {
+					return ev, err
+				}
 			}
 		}
 	}

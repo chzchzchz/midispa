@@ -1,0 +1,10 @@
+[
+{
+  "Name": "chromatic",
+  "MidiPort": "MIDI4x4 MIDI 4",
+  "Channel": 1,
+  "Voices": [
+    { "Name": "Lead", "Channel": 2 }
+  ]
+}
+]

@@ -10,6 +10,12 @@ func (p *PatternBank) ToggleLengthMode() error {
 }
 
 func (p *PatternBank) setLengthMode(active bool) error {
+	p.clearPadState()
+	if active && p.editingNote {
+		if err := p.setNoteEdit(false); err != nil {
+			return err
+		}
+	}
 	p.editingLength = active
 	if active {
 		if err := p.f.SetLed(NoteOverview, LEDRed); err != nil {
@@ -20,7 +26,7 @@ func (p *PatternBank) setLengthMode(active bool) error {
 	if err := p.f.SetLed(NoteOverview, LEDOff); err != nil {
 		return err
 	}
-	return p.f.ClearOLEDRows(lengthDisplayRow, 1)
+	return p.printChromaticStatus()
 }
 
 func (p *PatternBank) AdjustLength(delta int) error {
