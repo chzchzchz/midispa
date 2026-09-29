@@ -248,7 +248,7 @@ func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
 	current := activeChromaticNote{
 		channel:     channel,
 		note:        event.NoteNumber(),
-		destination: eventDestination(event),
+		destination: midiDestination(eventDestination(event)),
 		tie:         event.Tie,
 	}
 	p.activeMu.Lock()
@@ -259,8 +259,9 @@ func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
 		previousNote = &previous
 	}
 	messages := chromaticOutboundMessages(previousNote, current, event.Velocity)
+	writerActive := !isNilMidiWriter(aseq)
 	for _, message := range messages {
-		if isNilMidiWriter(aseq) {
+		if !writerActive {
 			continue
 		}
 		if err := aseq.Write(alsa.SeqEvent{SeqAddr: message.destination, Data: message.data}); err != nil {

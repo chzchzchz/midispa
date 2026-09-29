@@ -14,6 +14,7 @@ import (
 )
 
 var syncPort alsa.SeqAddr
+var sharedMIDIDestination bool
 
 const (
 	midiChannelMax = 16
@@ -80,10 +81,18 @@ func isNilMidiWriter(aseq midiWriter) bool {
 	return false
 }
 
+func midiDestination(destination alsa.SeqAddr) alsa.SeqAddr {
+	if sharedMIDIDestination {
+		return alsa.SubsSeqAddr
+	}
+	return destination
+}
+
 func writeMidiMsgs(aseq midiWriter, sa alsa.SeqAddr, msgs [][]byte) error {
 	if isNilMidiWriter(aseq) {
 		return nil
 	}
+	sa = midiDestination(sa)
 	for _, msg := range msgs {
 		if err := aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: msg}); err != nil {
 			return err
@@ -167,6 +176,7 @@ func must(err error) {
 func main() {
 	kitFlag := flag.String("kit", "kit.json", "kit of devices to load")
 	midiPort := flag.String("port", "FL STUDIO FIRE Jack 1", "midi port for akai fire")
+	flag.BoolVar(&sharedMIDIDestination, "shared-midi-destination", false, "broadcast MIDI output to all connected destinations")
 	flag.Parse()
 
 	log.Println("loading kit", *kitFlag)
