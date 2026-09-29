@@ -1,5 +1,7 @@
 package yamaha
 
+import "github.com/chzchzchz/midispa/sysex"
+
 const (
 	bulkVoiceCount       = 32
 	bulkDataSize         = bulkVoiceCount * packedVoiceSize
@@ -161,7 +163,7 @@ func (o *Osc) UnmarshalBinary(data []byte) error {
 
 // SingleVoice.MarshalBinary encodes the one-voice SysEx message.
 func (sv *SingleVoice) MarshalBinary() ([]byte, error) {
-	if err := checkTaggedFields(sv); err != nil {
+	if err := sysex.CheckTaggedFields(sv); err != nil {
 		return nil, err
 	}
 	if err := sv.Voice.check(); err != nil {
@@ -199,7 +201,7 @@ func (sv *SingleVoice) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	candidate := SingleVoice{Channel: int(data[2]), Voice: voice}
-	if err := checkTaggedFields(&candidate); err != nil {
+	if err := sysex.CheckTaggedFields(&candidate); err != nil {
 		return err
 	}
 	*sv = candidate

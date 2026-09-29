@@ -2,6 +2,8 @@ package yamaha
 
 import (
 	"fmt"
+
+	"github.com/chzchzchz/midispa/sysex"
 )
 
 var errBadRange = fmt.Errorf("bad range")
@@ -31,7 +33,7 @@ type BulkData struct {
 }
 
 func (b *BulkData) encode() ([]byte, error) {
-	if err := checkTaggedFields(b); err != nil {
+	if err := sysex.CheckTaggedFields(b); err != nil {
 		return nil, err
 	}
 	ret := []byte{
@@ -76,7 +78,7 @@ func (pc *ParameterChange) encode() ([]byte, error) {
 }
 
 func (pc *ParameterChange) check() error {
-	if err := checkTaggedFields(pc); err != nil {
+	if err := sysex.CheckTaggedFields(pc); err != nil {
 		return err
 	}
 	if pc.Group == parameterGroupFunction && (pc.Parameter < 64 || pc.Parameter > 77) {
@@ -165,7 +167,7 @@ type Voice struct {
 }
 
 func (v *Voice) check() error {
-	return checkTaggedFields(v)
+	return sysex.CheckTaggedFields(v)
 }
 
 // Voice.encode stores operators in wire order and packs the global voice parameters.
@@ -229,7 +231,7 @@ type Osc struct {
 }
 
 func (o *Osc) check() error {
-	return checkTaggedFields(o)
+	return sysex.CheckTaggedFields(o)
 }
 
 // Osc.encode combines the parameters that share packed bytes in the bulk format.
