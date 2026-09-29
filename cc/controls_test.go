@@ -2,6 +2,7 @@ package cc
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -303,6 +304,63 @@ func TestNRPNFieldsRejectsMalformedTags(t *testing.T) {
 	}
 	if _, err := NRPNFields(&tooWide{}); err == nil {
 		t.Fatal("accepted an NRPN LSB outside 0-127")
+	}
+}
+
+// The Perform-VE implements every controller in one place, its "MIDI CC
+// List" of Appendix B, and the manual describes none of them as user
+// remappable. Pinning the set catches a mistyped controller number and
+// catches a field added that the unit does not actually answer.
+func TestPerformVEAddressesTheWholeManualCCList(t *testing.T) {
+	fields, err := ControlFields(&PerformVE{})
+	if err != nil {
+		t.Fatalf("ControlFields: %v", err)
+	}
+	want := []int{
+		1,
+		16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+		41, 42, 43, 44, 45, 46, 47, 48,
+		51, 52, 53, 54, 55, 56, 58, 59,
+		64,
+		72, 73,
+		80, 81, 82, 83,
+	}
+	got := make([]int, 0, len(fields))
+	seen := make(map[int]string, len(fields))
+	for _, field := range fields {
+		if other, dup := seen[field.Controller]; dup {
+			t.Errorf("%s and %s both address CC %d", other, field.Name, field.Controller)
+		}
+		seen[field.Controller] = field.Name
+		got = append(got, field.Controller)
+	}
+	sort.Ints(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("addressed controllers are %v, want %v", got, want)
+	}
+}
+
+// The Perform-VE implements no non-registered parameters and no note
+// triggers. Appendix B lists only control changes, and the unit's own MIDI
+// settings, the channel and the split point, are reached by holding SET and
+// playing a note rather than through an addressable parameter (p. 7, p. 24).
+// An nrpn- or note-tagged field here would make the router emit a
+// three-message NRPN sequence, or a note, for something the unit does not
+// listen for.
+func TestPerformVEHasNoNRPNOrNoteFields(t *testing.T) {
+	nrpn, err := NRPNFields(&PerformVE{})
+	if err != nil {
+		t.Fatalf("NRPNFields: %v", err)
+	}
+	if len(nrpn) != 0 {
+		t.Fatalf("model has %d NRPN fields, want none: %+v", len(nrpn), nrpn)
+	}
+	note, err := taggedControlFields(&PerformVE{}, noteTag, true)
+	if err != nil {
+		t.Fatalf("taggedControlFields: %v", err)
+	}
+	if len(note) != 0 {
+		t.Fatalf("model has %d note fields, want none: %+v", len(note), note)
 	}
 }
 

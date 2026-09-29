@@ -1149,6 +1149,254 @@ type MicroKorg struct {
 	SyncCtrl Control `cc:"90"`
 }
 
+// PerformVE is the TC-Helicon Perform-VE vocal manipulator. The unit answers
+// Control Change, Program Change and MIDI Tempo (Appendix B, manual p. 27) but
+// never sends MIDI itself, so unlike the microKORG XL there is no separate
+// transmit map to describe here. Presets are Program Change 0, 1 and 2, and
+// incoming MIDI Tempo retunes the Tap Tempo, but neither is a continuous
+// control, so neither has a field here.
+//
+// Most fields belong to one of the six effect processors (DOUBLE, MORPH,
+// HARDTUNE, XFX, ECHO, FILTER) or to the LOOPER and SAMPLE sections, so the
+// fields are grouped that way instead of sorted by controller number. The few
+// that belong to none of them, the mod wheel, the top mix, the shared
+// envelope and the sustain pedal, sit at the ends. The controller numbers come
+// from the "MIDI CC List" of Appendix B, the parameter behaviour from
+// section 5, and the style enumerations from Appendix A. Where those three
+// pages disagree, the disagreement is noted on the field.
+//
+// Three things a reader might expect here are absent, each for a reason. The
+// Control Knob has no CC of its own: it edits the top mix, which the device
+// addresses as two, see TopMixLeadLevel below. The LED ring is the display
+// for whichever parameter is being edited, so it has no address. And the
+// unit's own settings, the mic gain, the MIDI channel and the split point,
+// are reached by holding SET and playing a note rather than by a CC
+// (p. 7, p. 24).
+type PerformVE struct {
+	// CC 1 is the standard MIDI modulation wheel, which the manual names
+	// "Vibrato (Mod Wheel)" in Appendix B. Along with the sustain pedal at
+	// the end of this struct, it is one of only two controllers here that are
+	// a MIDI standard rather than a Perform-VE specific parameter.
+	Vibrato Control `cc:"1"` // 0-127
+
+	// Top mix: the balance between the processed singer, the LEAD voice, and
+	// the up to eight note-triggered MIDI Voices (manual p. 6). It is the
+	// Control Knob's default job, applies to all three presets, and is not
+	// stored when the unit powers down. Appendix B notes that LEAD is "set
+	// independent of MIDI via CC" and MIDI is "set independent of LEAD via
+	// CC", which is the decoupling the unit's single knob does not have.
+	TopMixLeadLevel Control `cc:"41"` // 0-127
+	TopMixMidiLevel Control `cc:"42"` // 0-127
+
+	// DOUBLE, on the LEAD voice. Simulates the "double tracked" studio
+	// vocal that is common across genres (manual section 5.1, p. 9).
+	DoubleStyle  Control `cc:"17"` // 0 UNISON, 1 OCTAVE DOWN, 2 OCTAVE UP, 3 OCTAVE UP/DOWN
+	DoubleLevel  Control `cc:"45"` // 0-127, printed on the unit as "Off, -10 to 0 dB"
+	DoubleEnable Control `cc:"51"` // 0-63 OFF, 64-127 ON
+
+	// MORPH is the one processor with a split personality (manual p. 9):
+	// Shift and Gender act on the LEAD voice while Mode and Style act on
+	// the MIDI Voices. Switching MORPH on replaces the MIDI Voices' plain
+	// notes harmony with whatever Style selects, so Mode and Style only
+	// become audible once MorphEnable is on.
+	//
+	// Mode is the mono/poly switch for the Notes, Vocoder and Sample
+	// voices. It reads as one 26 position knob made of two halves: the
+	// first 13 positions are Poly and set the note release time, the last
+	// 13 are Mono and set the portamento time. The manual shows this as a
+	// green half and a red half of the LED ring (p. 11), and Appendix B
+	// states the split as 0-12 for Poly Release and 13-25 for Mono
+	// Portamento. Poly voices need the singer to keep voicing after the
+	// note release to hear the fade out.
+	MorphMode Control `cc:"23"` // 0-12 POLY RELEASE, 13-25 MONO PORTAMENTO
+
+	// The eleven positions are the two harmony treatments and the nine
+	// vocoder patches. Appendix A (p. 26) enumerates 1 Natural Shift, 2 Warp
+	// Shift and 3 to 11 as the vocoder patches, which matches the 0-10 range
+	// in Appendix B, but section 5.2 (p. 9) instead says there are "eight
+	// different Synth Vocoder styles". The two pages disagree by one and the
+	// longer Appendix A list is the one used here. Section 5.2 names only
+	// the first two; the patches are described as synthesizer presets "named
+	// accordingly" in the unit's own display, so their individual names are
+	// not reproducible from the manual.
+	MorphStyle Control `cc:"24"` // 0 NATURAL SHIFT, 1 WARP SHIFT, 2-10 ANALOG SYNTH MODELED VOCODER
+
+	// Shift transposes the LEAD voice. The knob on the unit only reaches
+	// plus or minus 12 semitones, but the manual calls out that MIDI widens
+	// this to plus or minus 36 "for even more extreme effects and automated
+	// sweeps" (p. 11). The 0-72 working range is linear with 36 as centre,
+	// so 0 is -36, 36 is 0 and 72 is +36 semitones.
+	MorphShift Control `cc:"43"` // 0 = -36, 36 = 0, 72 = +36 semitones
+
+	// Gender expands (positive) or compresses (negative) the formant
+	// signature of the LEAD voice, which is what makes it read as more
+	// female or more male (p. 11).
+	MorphGender Control `cc:"44"` // 0-127
+
+	// Notes Voice Smoothing appears only in Appendix B; section 5 never
+	// describes it, so what it smooths and over what range is undocumented.
+	// It is grouped with MORPH because the "Notes" in its name matches the
+	// notes-harmony voices that Mode and Style select, but the manual does
+	// not confirm that is what it acts on.
+	NotesVoiceSmoothing Control `cc:"26"` // 0-127
+
+	MorphEnable Control `cc:"52"` // 0-63 OFF, 64-127 ON
+
+	// HARDTUNE, on the LEAD voice. Pitch correction that varies from subtle
+	// to T-Pain style (manual section 5.3, p. 12).
+	//
+	// Key picks the scale to correct toward. The manual describes it as
+	// "NaturalPlay Pop Major Scale, Pop Major Scale in all 12 keys, or
+	// Chromatic scale" (p. 12), which is 1 + 12 + 1 = 14 positions and
+	// matches the 0-13 range in Appendix B. That sentence is the only place
+	// the enumeration appears, so the order below is the natural reading of
+	// it rather than something the manual states outright.
+	HardTuneKey Control `cc:"19"` // 0 NATURALPLAY, 1-12 POP MAJOR IN C..B, 13 CHROMATIC
+
+	// NaturalPlay is the entry that makes the unit track the key itself
+	// from the chords in the incoming MIDI or on the AUX input, instead of
+	// holding a key the user picked. Getting it right matters most for the
+	// Pop Major scale, which looks odd once transposed away from C, so the
+	// unit has to be set to the composition's real key.
+	//
+	// Amount scales how hard correction pulls the voice in; the unit prints
+	// it as "Natural to Slammed!".
+	HardTuneAmount Control `cc:"20"` // 0-127
+
+	HardTuneEnable Control `cc:"53"` // 0-63 OFF, 64-127 ON
+
+	// XFX, short for "EXTREME EFFECTS" (manual section 5.4, p. 13). It is the
+	// only processor that reaches beyond the vocal: Flange, SideChain
+	// Pumping and LPF/HPF also act on the looper's recorded audio, and
+	// Flange and LPF/HPF additionally reach the looper's drums.
+	//
+	// Style is a mini-preset that resets a batch of internal parameters
+	// which have no CC of their own, and the two Mods then act as the
+	// "tweaks" matched to that style (manual p. 6). Neither Mod has a
+	// meaning of its own: for the rhythmic styles Mod1 is the division and
+	// Mod2 the level or depth, but for SideChain Pumping they are the
+	// compressor threshold and release time instead. Appendix A (p. 26)
+	// lists the mapping for each style.
+	XFXStyle Control `cc:"16"` // 0 STUTTER, 1 MONO CHOPPER, 2 STEREO CHOPPER, 3 RING MOD, 4 STEREO FLANGER, 5 MONO FLANGER, 6 SIDE CHAIN PUMPING
+	XFXMod1  Control `cc:"21"` // 0-127, meaning set by XFXStyle
+	XFXMod2  Control `cc:"22"` // 0-127, meaning set by XFXStyle
+
+	// Selecting Stutter arms it to sample the LEAD voice immediately, and
+	// turning XFX off puts the stutter on hold without losing that sample
+	// (p. 13). Ring Mod multiplies the voice by an internal sine wave, and
+	// SideChain Pumping compresses everything but the drums whenever the
+	// kick crosses a threshold, which is why it is meant to be used with
+	// the looper's built-in drum sequencer (p. 15).
+	XFXEnable Control `cc:"54"` // 0-63 OFF, 64-127 ON
+
+	// ECHO, on the LEAD vocal and the MIDI Voices. A combined delay and
+	// reverb processor: either on its own, or both together (manual
+	// section 5.5, p. 16).
+	//
+	// Style selects the reverb, and is the one style list the manual names
+	// in prose: two natural reverbs, Hall and Arena, and two
+	// electromechanical ones, Spring and Plate (p. 16). The order below
+	// follows the order that prose lists them in; the LED ring's own
+	// ordering is not documented. The range is 0-3 even though Appendix B
+	// annotates the row "See Style List", because that note covers every
+	// style parameter in the unit rather than this one in particular.
+	EchoStyle Control `cc:"28"` // 0 HALL, 1 ARENA, 2 SPRING, 3 PLATE
+
+	// Div is one knob doing two jobs at once: it picks the delay's rhythmic
+	// division and its stereo placement (p. 16). The divisions themselves
+	// exist in the manual only as a picture of the LED ring, so the 0-12
+	// range is taken from Appendix B and the individual values cannot be
+	// recovered from the text. What the text does pin down is the placement
+	// per colour: blue positions ping-pong the echoes between left and
+	// right, green positions play them on both sides, a single red position
+	// is a short single-repeat slapback, and a white LED marks a straight
+	// quarter note.
+	EchoDiv Control `cc:"27"` // 0-12
+
+	// Delay and Reverb are master parameters rather than single controls.
+	// Delay edits the feedback and the output level together, so raising it
+	// adds both level and repeat count, and at 100% the delay feeds back
+	// forever. Reverb edits the decay time and the output level together,
+	// so raising it makes the reverb sound bigger rather than simply
+	// louder (p. 16).
+	Delay  Control `cc:"46"` // 0-127
+	Reverb Control `cc:"47"` // 0-127
+
+	EchoEnable Control `cc:"55"` // 0-63 OFF, 64-127 ON
+
+	// FILTER, on the LEAD vocal and the MIDI Voices. Everything that
+	// equalises, filters or distorts the voice (manual section 5.6, p. 17).
+	//
+	// Style 0 is a plain sweepable low pass/high pass pair for shaping
+	// musical audio, and it is the only Filter style that reaches the
+	// looper's drums. The other four are transducer emulations that colour
+	// the signal as though it came through a particular amp or enclosure
+	// (Appendix A, p. 26), and those leave the drums alone.
+	FilterStyle Control `cc:"18"` // 0 LPF/HPF, 1 RADIO, 2 MEGAPHONE, 3 GUITAR AMP, 4 DISTORTION
+
+	// Mod is the transducer's cutoff frequency for the four transducer
+	// styles, and the cutoff of whichever of the low pass or high pass
+	// filters is active under the LPF/HPF style (p. 17). The transducer
+	// styles rework the EQ hard enough to feed back more readily than the
+	// other effects, and the manual singles out Megaphone as the one to
+	// watch in front of a loud PA.
+	FilterMod Control `cc:"48"` // 0-127
+
+	FilterEnable Control `cc:"56"` // 0-63 OFF, 64-127 ON
+
+	// SAMPLE. VS Synthesis, short for Vocal SampleSynthesis: record a short
+	// phrase and play it back at the pitch of incoming MIDI notes, with the
+	// nuance of the performance intact (manual section 7, p. 22).
+	//
+	// Mode is how the recording responds to note input. Re-trigger starts
+	// the sample over on every new note, Legato syncs each new note to the
+	// one already playing, and Looped keeps the sample going past its end
+	// while the key is held (p. 22, Appendix A p. 26).
+	SampleMode Control `cc:"25"` // 0 RE-TRIGGER, 1 LEGATO, 2 LOOPED RE-TRIGGER, 3 LOOPED LEGATO
+
+	// Enable turns the sample-backed voices on, and the two switches arm
+	// recording and start playback of the recording as it was performed.
+	// Enabling SAMPLE also changes how the vocoder runs: the recording
+	// becomes the modulator for up to eight synth voices and the lead
+	// vocal passes through to the rest of the chain, instead of the lead
+	// vocal acting as the modulator (p. 10).
+	SampleEnable Control `cc:"80"` // 0-63 OFF, 64-127 ON
+	SampleRecord Control `cc:"58"` // 0-63 OFF, 64-127 ON
+	SamplePlay   Control `cc:"59"` // 0-63 OFF, 64-127 ON
+
+	// LOOPER drum triggers. The looper acts as both a drum machine and an
+	// audio looper (manual section 6, p. 19), but only the three drum
+	// triggers are addressable. Arming, recording, playing back and erasing
+	// the audio loop are front panel button gestures, and the manual's
+	// looper cookbook (p. 21) describes them as presses with no CC
+	// equivalent.
+	//
+	// These are edge triggers, not levels, and they are the one place in
+	// this struct where the threshold is 0 against everything above rather
+	// than 64: every positive value fires the drum, not just 127. The kick
+	// and snare can be sounded at any time regardless of looper activity,
+	// but the manual notes the hi-hat only triggers while the looper button
+	// is lit or pulsing (p. 19). Selecting a different snare sample selects
+	// a matching hi-hat alongside it (p. 19).
+	LooperKickTrigger  Control `cc:"81"` // 0 OFF, 1-127 ON
+	LooperSnareTrigger Control `cc:"82"` // 0 OFF, 1-127 ON
+	LooperHiHatTrigger Control `cc:"83"` // 0 OFF, 1-127 ON
+
+	// Appendix B names these only "Envelope Release" and "Envelope Attack".
+	// The manual gives them no section, no range, and never says what they
+	// act on. They sit after the LOOPER triggers because the drum samples are
+	// the only envelopes the unit is described as having anywhere in the
+	// manual, but that is an inference, not something the manual states. The
+	// table also lists release before attack, which is why the field order
+	// here follows attack first.
+	EnvelopeAttack  Control `cc:"73"` // 0-127
+	EnvelopeRelease Control `cc:"72"` // 0-127
+
+	// CC 64 is the MIDI standard sustain pedal. The manual lists it in the
+	// CC table but never says what the unit holds while it is down.
+	SustainPedal Control `cc:"64"` // 0-63 OFF, 64-127 ON
+}
+
 type Model struct {
 	Model               string
 	*GMController       `json:"GMController,omitempty"`
@@ -1157,6 +1405,7 @@ type Model struct {
 	*MeeblipTriode      `json:"MeeblipTriode,omitempty"`
 	*MidiMix            `json:"MidiMix,omitempty"`
 	*MicrokorgXL        `json:"MicrokorgXL,omitempty"`
+	*PerformVE          `json:"PerformVE,omitempty"`
 	*Skulpt             `json:"Skulpt,omitempty"`
 	*SoundController    `json:"SoundController,omitempty"`
 	*VolcaBass          `json:"VolcaBass,omitempty"`
@@ -1188,6 +1437,7 @@ var modelNames = []string{
 	"Pro VS Mini",
 	"microKORG XL",
 	"MicroKorg",
+	"Perform-VE",
 }
 
 // ModelNames returns the canonical model names accepted by NewModelParams.
@@ -1294,6 +1544,11 @@ func (m *Model) MidiParams() any {
 			m.MicroKorg = &MicroKorg{}
 		}
 		return m.MicroKorg
+	case "Perform-VE":
+		if m.PerformVE == nil {
+			m.PerformVE = &PerformVE{}
+		}
+		return m.PerformVE
 	default:
 		panic("unknown model " + m.Model)
 	}
