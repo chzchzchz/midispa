@@ -631,6 +631,229 @@ type ProVSMini struct {
 	VoiceDCoarse     Control `cc:"118"` // 0-99
 }
 
+// MicrokorgXL is the Korg microKORG XL. The instrument addresses its front
+// panel controls two different ways, so this struct mixes both tags.
+//
+// cc:  a direct control change; one message reaches the parameter. Only the
+// parameters the manual lists in "Front panel knob/button control change
+// assignments" (p. 90) are reachable this way out of the box, and the numbers
+// below are the factory CC MAP assignments. CC MAP is user editable
+// (p. 61): any of CC#00-CC#95 and CC#102-CC#119 can be moved to a different
+// parameter, so these numbers describe the default patch, not the hardware.
+// A control the user has remapped away will not respond to the number here.
+//
+// nrpn: a non-registered parameter, addressed as "<msb>.<lsb>" in decimal.
+// Reaching one takes three messages: CC#99 with the MSB, CC#98 with the LSB,
+// then CC#6 data entry MSB with the value. The microKORG XL implements data
+// entry MSB only, so every NRPN value is 0...127. Unlike CC MAP, the NRPN map
+// is fixed in the firmware and cannot be remapped.
+//
+// Both mechanisms are transmitted and received on the global MIDI channel
+// (p. 86), except that in MULTI voice mode timbre 2 uses its own channel.
+//
+// Several parameters are asymmetric: the value the instrument transmits when
+// a knob moves is not always the value it accepts from a knob, so the two are
+// noted separately where they differ.
+type MicrokorgXL struct {
+	// Unison stacks up to five detuned oscillators inside a single oscillator
+	// (manual p. 35).
+	UnisonMode Control `cc:"3"` // 0-31 OFF, 32-63 2 VOICE, 64-95 3 VOICE, 96-127 4 VOICE
+
+	Portamento Control `cc:"5"` // 0 = no portamento, 127 = slowest glide
+
+	// Oscillator 1 selects its algorithm with OSC1Mod and then gives that
+	// algorithm a shape with OSC1Control1 and a second dimension with
+	// OSC1Control2. What the two controls actually do depends on the
+	// waveform and modulation type, so consult manual p. 37-40 before
+	// interpreting a value.
+	OSC1Wave     Control `cc:"8"`  // 0-15 SAW, 16-31 PULSE, 32-47 TRIANGLE, 48-63 SINE, 64-79 FORMANT, 80-95 NOISE, 96-111 PCM/DWGS, 112-127 AUDIO IN
+	OSC1Mod      Control `cc:"9"`  // 0-31 WAVEFORM, 32-63 CROSS, 64-95 UNISON, 96-127 VPM
+	OSC1Control1 Control `cc:"15"` // 0-127
+	OSC1Control2 Control `cc:"17"` // Transmitted 0-127; received 0-127, or 1-32 mapped to 0-127 when OSC1Mod is VPM
+
+	// Oscillator 2 can be ringed, synced or both against oscillator 1.
+	OSC2Wave Control `cc:"18"` // 0-31 SAW, 32-63 PULSE, 64-95 TRIANGLE, 96-127 SINE
+	OSC2Mod  Control `cc:"19"` // 0-31 OFF, 32-63 RING, 64-95 SYNC, 96-127 RING.SYNC
+	// Semitone is -24...+24, spread over only 49 of the 128 steps; manual
+	// p. 92 gives the value mapping.
+	OSC2Semitone Control `cc:"20"`
+	OSC2Tune     Control `cc:"21"` // 0-127, +/- 2 octaves relative to oscillator 1
+
+	// The mixer feeds the filters, so a level here also sets how hard the
+	// DRIVE waveshaper clips.
+	OSC1Level  Control `cc:"23"`
+	OSC2Level  Control `cc:"24"`
+	NoiseLevel Control `cc:"25"`
+
+	// Filter 1 is the continuously variable filter; filter 2 is a simpler
+	// three-way filter that only participates when routing says so. Filter
+	// 1's TypeBalance sweeps across the filter types rather than selecting
+	// one; manual p. 92 maps 0-127 onto the LPF24...THRU continuum.
+	Filter1Routing      Control `cc:"26"` // 0-31 SINGLE, 32-63 SERIAL, 64-95 PARALLEL, 96-127 INDIV
+	Filter1TypeBalance  Control `cc:"27"`
+	Filter1KeyTrack     Control `cc:"28"` // 0/1 -2, 64 0, 127 +2 octaves per key
+	Filter1Cutoff       Control `cc:"74"`
+	Filter1Resonance    Control `cc:"71"`
+	Filter1EG1Intensity Control `cc:"79"` // 0/1 -63, 64 0, 127 +63
+
+	Filter2Type         Control `cc:"29"` // 0-42 LPF, 43-83 HPF, 85-127 BPF
+	Filter2Cutoff       Control `cc:"30"`
+	Filter2KeyTrack     Control `cc:"82"` // 0/1 -2, 64 0, 127 +2 octaves per key
+	Filter2Resonance    Control `cc:"68"`
+	Filter2EG1Intensity Control `cc:"69"` // 0/1 -63, 64 0, 127 +63
+
+	AmpLevel  Control `cc:"7"`  // Also the standard MIDI volume controller
+	AmpPanpot Control `cc:"10"` // 0/1 far left, 64 centre, 127 far right
+
+	// DriveWaveShapeDepth is the mix between the untouched signal and the
+	// waveshaped one; which waveshaper is selected is an edit parameter that
+	// has no CC.
+	DriveWaveShapeDepth Control `cc:"83"`
+
+	// EG1 is the filter EG, EG2 the amplifier EG. EG3 exists on the panel but
+	// is not bound to a knob or button, so it has no CC here.
+	EG1Attack  Control `cc:"85"`
+	EG1Decay   Control `cc:"86"`
+	EG1Sustain Control `cc:"87"`
+	EG1Release Control `cc:"88"`
+
+	EG2Attack  Control `cc:"73"`
+	EG2Decay   Control `cc:"75"`
+	EG2Sustain Control `cc:"70"`
+	EG2Release Control `cc:"72"`
+
+	LFO1Wave Control `cc:"89"` // 0-25 SAW, 26-50 SQUARE, 51-76 TRIANGLE, 77-101 S/H, 102-127 RANDOM
+	// LFO1Freq doubles as the sync note when the LFO's BPM SYNC is on; the
+	// two share one knob, so the same CC value means different things
+	// depending on that setting (manual p. 93).
+	LFO1Freq Control `cc:"90"`
+
+	LFO2Wave Control `cc:"102"` // 0-25 SAW, 26-50 SQUARE, 51-76 SINE, 77-101 S/H, 102-127 RANDOM
+	LFO2Freq Control `cc:"76"`  // See LFO1Freq for the BPM SYNC caveat
+
+	// The six virtual patches. A patch is a source, a destination and an
+	// intensity; only the intensity is bound to a knob, and a patch with
+	// nothing assigned to it can still be driven over NRPN (see PatchNSource
+	// and PatchNDest below).
+	Patch1Intensity Control `cc:"103"` // 0/1 -63, 64 0, 127 +63
+	Patch2Intensity Control `cc:"104"` // 0/1 -63, 64 0, 127 +63
+	Patch3Intensity Control `cc:"105"` // 0/1 -63, 64 0, 127 +63
+	Patch4Intensity Control `cc:"106"` // 0/1 -63, 64 0, 127 +63
+	Patch5Intensity Control `cc:"107"` // 0/1 -63, 64 0, 127 +63
+	Patch6Intensity Control `cc:"108"` // 0/1 -63, 64 0, 127 +63
+
+	// Two-band shelving EQ, +/- 15 dB. The value mapping is non-linear at
+	// the top end (manual p. 93).
+	EQLowGain  Control `cc:"110"`
+	EQHighGain Control `cc:"109"`
+
+	// Each master effect has a dry/wet balance plus two control inputs whose
+	// meaning depends on the effect type, so CTRL-1/2 are only meaningful
+	// once the effect is known.
+	FX1DryWet   Control `cc:"115"` // Transmitted 0-127; received 0 dry, 1-126 mixed, 127 wet
+	FX1Control1 Control `cc:"12"`
+	FX1Control2 Control `cc:"112"`
+	FX2DryWet   Control `cc:"116"` // Transmitted 0-127; received 0 dry, 1-126 mixed, 127 wet
+	FX2Control1 Control `cc:"13"`
+	FX2Control2 Control `cc:"113"`
+
+	// Arpeggiator, NRPN MSB 0 (manual p. 86). These are the front panel
+	// buttons and knobs that CC MAP cannot cover.
+	ArpOnOff        Control `nrpn:"0.2"`  // Transmitted 0 off / 127 on; received 0-63 off, 64-127 on
+	ArpLatch        Control `nrpn:"0.4"`  // Transmitted 0 off / 127 on; received 0-63 off, 64-127 on
+	ArpType         Control `nrpn:"0.7"`  // 0-21 UP, 22-42 DOWN, 43-63 ALT1, 64-85 ALT2, 86-106 RANDOM, 107-127 TRIGGER
+	ArpGate         Control `nrpn:"0.10"` // Gate time; the 0-127 value is a compressed percent scale (manual p. 87)
+	ArpTimbreSelect Control `nrpn:"0.11"` // 0-42 TIMBRE1, 43-85 TIMBRE2, 86-127 TIMBRE1+2
+
+	// The six virtual patches again, now over NRPN, MSB 4 (manual p. 87).
+	// Source and destination share one 0-127 scale; the ranges are listed in
+	// the manual. The sources are EG1 0-10, EG2 11-20, EG3 21-31, LFO1
+	// 32-42, LFO2 43-52, VELOCITY 53-63, PITCH BEND 64-74, MOD WHEEL
+	// 75-84, KEY TRACK 85-95, MIDI1 96-106, MIDI2 107-116, MIDI3 117-127.
+	//
+	// NRPN 4.0 is this field in a synth program and the vocoder's
+	// FC.MOD.SRC in a vocoder program, so it carries one name. The microKORG
+	// XL manual states the address twice, once under "Controlling the Timbre
+	// parameters" (p. 87) and once under "Controlling the vocoder
+	// parameters" (p. 88), without noting that they collide. The original
+	// microKORG's MIDI implementation is explicit: it heads a block of rows
+	// with "(Synth Mode / Vocoder Mode)" and gives 04 00 the single row
+	// "Patch1 Source/Fc Mod Source". The device therefore has one active
+	// meaning per address, chosen by the loaded program, not two parameters
+	// that can be set together.
+	Patch1Source Control `nrpn:"4.0"`
+	Patch2Source Control `nrpn:"4.1"`
+	Patch3Source Control `nrpn:"4.2"`
+	Patch4Source Control `nrpn:"4.3"`
+	Patch5Source Control `nrpn:"4.4"`
+	Patch6Source Control `nrpn:"4.5"`
+
+	// Destinations are grouped in fours: Pitch 0-2, OSC2 Tune 3-5, OSC1
+	// Control 1 6-9, OSC1 Level 10-12, OSC2 Level 13-15, Noise Level
+	// 16-18, Filter 1 Type Balance 19-21, Filter 1 Cutoff 22-25, Filter 1
+	// Resonance 26-28, Filter 2 Cutoff 29-31, Drive/WS Depth 32-34, AMP
+	// Level 35-37, Panpot 38-41, LFO1 Frequency 42-44, LFO2 Frequency
+	// 45-47, Portamento 48-50, OSC1 Control 2 51-53, Filter 1 EG1 Int
+	// 54-57, Filter 1 Key Track 58-60, Filter 2 Resonance 61-63, Filter 2
+	// EG1 Int 64-66, Filter 2 Key Track 67-69, EG1 ADSR 70-82, EG2 ADSR
+	// 83-95, EG3 ADSR 96-108, Patch 1-6 intensity 109-127.
+	Patch1Dest Control `nrpn:"4.8"`
+	Patch2Dest Control `nrpn:"4.9"`
+	Patch3Dest Control `nrpn:"4.10"`
+	Patch4Dest Control `nrpn:"4.11"`
+	Patch5Dest Control `nrpn:"4.12"`
+	Patch6Dest Control `nrpn:"4.13"`
+
+	// The voice mode decides how many timbres a program has and which MIDI
+	// channel they live on (manual p. 32).
+	VoiceMode Control `nrpn:"5.0"` // 0-31 SINGLE, 32-63 LAYER, 64-95 SPLIT, 96-127 MULTI
+
+	// Vocoder on/off. The manual's summary table prints the LSB as 04(00)
+	// while the prose above it gives the message as [Bn, 62, 04]; the prose
+	// is used here.
+	VocoderSwitch Control `nrpn:"5.4"` // Transmitted 0 off / 127 on; received 0-63 off, 64-127 on
+
+	// The vocoder's sixteen carrier band-pass filters each have a level and a
+	// pan, MSB 4, LSB 0x40...0x5F (manual p. 88). Sending a level or pan to
+	// one microKORG XL makes it track on every other, so both units need the
+	// same program loaded. These addresses are only live in a vocoder program;
+	// a synth program ignores them, the same way the original microKORG leaves
+	// its band rows blank on the synth side of that column.
+	VocoderBandLevel1  Control `nrpn:"4.64"` // 0-127
+	VocoderBandLevel2  Control `nrpn:"4.65"`
+	VocoderBandLevel3  Control `nrpn:"4.66"`
+	VocoderBandLevel4  Control `nrpn:"4.67"`
+	VocoderBandLevel5  Control `nrpn:"4.68"`
+	VocoderBandLevel6  Control `nrpn:"4.69"`
+	VocoderBandLevel7  Control `nrpn:"4.70"`
+	VocoderBandLevel8  Control `nrpn:"4.71"`
+	VocoderBandLevel9  Control `nrpn:"4.72"`
+	VocoderBandLevel10 Control `nrpn:"4.73"`
+	VocoderBandLevel11 Control `nrpn:"4.74"`
+	VocoderBandLevel12 Control `nrpn:"4.75"`
+	VocoderBandLevel13 Control `nrpn:"4.76"`
+	VocoderBandLevel14 Control `nrpn:"4.77"`
+	VocoderBandLevel15 Control `nrpn:"4.78"`
+	VocoderBandLevel16 Control `nrpn:"4.79"`
+
+	VocoderBandPan1  Control `nrpn:"4.80"` // 0/1 far left, 64 centre, 127 far right
+	VocoderBandPan2  Control `nrpn:"4.81"`
+	VocoderBandPan3  Control `nrpn:"4.82"`
+	VocoderBandPan4  Control `nrpn:"4.83"`
+	VocoderBandPan5  Control `nrpn:"4.84"`
+	VocoderBandPan6  Control `nrpn:"4.85"`
+	VocoderBandPan7  Control `nrpn:"4.86"`
+	VocoderBandPan8  Control `nrpn:"4.87"`
+	VocoderBandPan9  Control `nrpn:"4.88"`
+	VocoderBandPan10 Control `nrpn:"4.89"`
+	VocoderBandPan11 Control `nrpn:"4.90"`
+	VocoderBandPan12 Control `nrpn:"4.91"`
+	VocoderBandPan13 Control `nrpn:"4.92"`
+	VocoderBandPan14 Control `nrpn:"4.93"`
+	VocoderBandPan15 Control `nrpn:"4.94"`
+	VocoderBandPan16 Control `nrpn:"4.95"`
+}
+
 type Model struct {
 	Model               string
 	*GMController       `json:"GMController,omitempty"`
@@ -638,6 +861,7 @@ type Model struct {
 	*MeeblipSE          `json:"MeeblipSE,omitempty"`
 	*MeeblipTriode      `json:"MeeblipTriode,omitempty"`
 	*MidiMix            `json:"MidiMix,omitempty"`
+	*MicrokorgXL        `json:"MicrokorgXL,omitempty"`
 	*Skulpt             `json:"Skulpt,omitempty"`
 	*SoundController    `json:"SoundController,omitempty"`
 	*VolcaBass          `json:"VolcaBass,omitempty"`
@@ -666,6 +890,7 @@ var modelNames = []string{
 	"Uno Synth",
 	"WorldeEasyControl9",
 	"Pro VS Mini",
+	"microKORG XL",
 }
 
 // ModelNames returns the canonical model names accepted by NewModelParams.
@@ -762,6 +987,11 @@ func (m *Model) MidiParams() any {
 			m.ProVSMini = &ProVSMini{}
 		}
 		return m.ProVSMini
+	case "microKORG XL":
+		if m.MicrokorgXL == nil {
+			m.MicrokorgXL = &MicrokorgXL{}
+		}
+		return m.MicrokorgXL
 	default:
 		panic("unknown model " + m.Model)
 	}

@@ -19,13 +19,18 @@ func main() {
 	dms := mustLoadDeviceModels(os.Args[1])
 	devs := make(map[string]*DeviceModel)
 	mcs := make(cc.MidiControlsMap)
+	// One controller set per tag the model uses. Each constructor returns nil
+	// when the model declares no field for that tag.
+	controlSets := []func(any) *cc.MidiControls{
+		cc.NewMidiControlsCC, cc.NewMidiControlsNote, cc.NewMidiControlsNRPN,
+	}
 	for i, m := range dms {
 		devs[m.Device] = &dms[i]
-		if mc := cc.NewMidiControlsCC(m.MidiParams()); mc != nil {
-			mcs[m.Device] = append(mcs[m.Device], mc)
-		}
-		if mc := cc.NewMidiControlsNote(m.MidiParams()); mc != nil {
-			mcs[m.Device] = append(mcs[m.Device], mc)
+		params := m.MidiParams()
+		for _, newControls := range controlSets {
+			if mc := newControls(params); mc != nil {
+				mcs[m.Device] = append(mcs[m.Device], mc)
+			}
 		}
 	}
 

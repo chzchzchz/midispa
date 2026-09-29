@@ -22,6 +22,7 @@ func TestModelNames(t *testing.T) {
 		"Uno Synth",
 		"WorldeEasyControl9",
 		"Pro VS Mini",
+		"microKORG XL",
 	}
 	got := ModelNames()
 	if !reflect.DeepEqual(got, want) {

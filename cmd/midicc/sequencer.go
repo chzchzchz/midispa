@@ -138,13 +138,19 @@ func (s *Seq) processEvent() error {
 				outName, a.OutDevice)
 			return nil
 		}
-		ch := byte(outCh - 1)
-		evOut := alsa.SeqEvent{
-			SeqAddr: a.saOut,
-			Data:    []byte{outMC.Cmd | ch, byte(outCC), byte(val)},
+		msgs := outMC.ToMessages(outCC)
+		if msgs == nil {
+			log.Printf("no messages for outName=%s on device %q\n",
+				outName, a.OutDevice)
+			return nil
 		}
-		if err := s.aseq.Write(evOut); err != nil {
-			return err
+		ch := byte(outCh - 1)
+		for _, msg := range msgs {
+			msg[0] |= ch
+			evOut := alsa.SeqEvent{SeqAddr: a.saOut, Data: msg}
+			if err := s.aseq.Write(evOut); err != nil {
+				return err
+			}
 		}
 		if isInputButton {
 			// Input was a button; writeback out value to change lit value.
@@ -187,15 +193,17 @@ func (s *Seq) applyPatches() {
 	if outMcs == nil {
 		panic("no out mcs" + a.OutDevice)
 	}
-	for _, msg := range outMcs.ToControlCodes() {
-		outName := outMcs.Name(msg[0], int(msg[1]))
-		log.Println("initializing", outName, "=", int(msg[2]))
-		msg[0] |= byte(s.outChan - 1)
-		evOut := alsa.SeqEvent{SeqAddr: a.saOut, Data: msg}
-		if err := s.aseq.Write(evOut); err != nil {
-			panic(err)
+	for _, group := range outMcs.ControlCodes() {
+		log.Println("initializing", group.Name)
+		for _, msg := range group.Messages {
+			log.Println("  ", int(msg[1]), "=", int(msg[2]))
+			msg[0] |= byte(s.outChan - 1)
+			evOut := alsa.SeqEvent{SeqAddr: a.saOut, Data: msg}
+			if err := s.aseq.Write(evOut); err != nil {
+				panic(err)
+			}
 		}
-		inName, ok := a.out2in[outName]
+		inName, ok := a.out2in[group.Name]
 		if !ok {
 			continue
 		}
@@ -203,7 +211,7 @@ func (s *Seq) applyPatches() {
 		if inMc == nil || inMc.Cmd != midi.NoteOn {
 			continue
 		}
-		if err := a.feedback(s.aseq.Write, []byte{midi.NoteOn, byte(inCC), msg[2]}); err != nil {
+		if err := a.feedback(s.aseq.Write, []byte{midi.NoteOn, byte(inCC), group.Value()}); err != nil {
 			panic(err)
 		}
 	}
