@@ -23,6 +23,11 @@ type patch interface {
 	geneStore() *patchGenes
 	mutableGeneCount() int
 	validateFixedValues() error
+	// encodable reports whether this patch can be written to its wire format
+	// at all. A record can hold a value that the message it uses has nowhere
+	// to put, which no value range catches, and such a candidate is worth
+	// discarding rather than failing the session over.
+	encodable() error
 	encode(channelIndex int) ([][]byte, error)
 }
 

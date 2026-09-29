@@ -46,6 +46,15 @@ func (runner *mutationRunner) run(ctx context.Context) error {
 			if err := runner.writeChanges(patch, candidate.reference); err != nil {
 				return err
 			}
+			// A record can be wider than the message it is written as, so a
+			// candidate can hold a value with nowhere to go. Dropping it
+			// costs one slot in this round; failing would cost the session.
+			if err := patch.encodable(); err != nil {
+				if _, err := fmt.Fprintf(runner.output, "  skipped: %v\n", err); err != nil {
+					return err
+				}
+				continue
+			}
 			score, err := judgeMutation(ctx, func() error {
 				return runner.auditioner.audition(ctx, patch)
 			}, judgeInput, runner.output)
@@ -58,6 +67,13 @@ func (runner *mutationRunner) run(ctx context.Context) error {
 			scored = append(scored, scoredPatch{patch: patch, score: score})
 		}
 
+		if len(scored) == 0 && len(population) > 0 {
+			// Every candidate in the round held a value the message could
+			// not carry. That is a different fault from an engine that
+			// produced nothing, and the error should say which happened
+			// rather than leaving the reader hunting in the engine.
+			return fmt.Errorf("generation %04d: none of the %d candidates could be written to the instrument", runner.engine.generation, len(population))
+		}
 		ranked, err := rankPatches(scored)
 		if err != nil {
 			return err

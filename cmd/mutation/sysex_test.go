@@ -44,7 +44,7 @@ func newTestSysexPatch(t *testing.T) *SysexPatch {
 
 func newTestSysexPatchFrom(t *testing.T, message []byte, semantics map[string]geneSemantic) *SysexPatch {
 	t.Helper()
-	format := dx7Format{}
+	format := newDX7Format(0)
 	candidate, err := newSysexPatch(format, format.NewRoot(), semantics)
 	if err != nil {
 		t.Fatalf("newSysexPatch: %v", err)
@@ -85,22 +85,21 @@ func TestSysexPatchReadsEveryTaggedVoiceField(t *testing.T) {
 	}
 }
 
-func TestSysexPatchKeepsMetadataOutOfTheBudget(t *testing.T) {
+// A field the record marks as not a sound parameter is not in the catalog at
+// all, so it can never be reported as changed and can never be named in a
+// gene rule. This is a property of the DX7 struct tags, not of the format.
+func TestSysexPatchOmitsMetadata(t *testing.T) {
 	candidate := newTestSysexPatch(t)
 	for _, gene := range candidate.genes {
-		switch {
-		case gene.name == "Channel", gene.name == "OperatorOn", strings.HasPrefix(gene.name, "VoiceName["):
-			if gene.policy != genePolicyImmutable {
-				t.Fatalf("%s is %v, want immutable", gene.name, gene.policy)
-			}
-		default:
-			if gene.policy != genePolicyMutable {
-				t.Fatalf("%s is %v, want mutable", gene.name, gene.policy)
-			}
+		if gene.name == "Channel" || strings.HasPrefix(gene.name, "VoiceName[") {
+			t.Fatalf("%s is not a sound parameter and must not be a gene", gene.name)
+		}
+		if gene.policy != genePolicyMutable {
+			t.Fatalf("%s is %v, want mutable", gene.name, gene.policy)
 		}
 	}
-	if candidate.mutableGeneCount() == len(candidate.genes) {
-		t.Fatal("no gene is excluded from the mutation budget")
+	if candidate.mutableGeneCount() != len(candidate.genes) {
+		t.Fatal("every catalogued gene should be mutable")
 	}
 }
 
@@ -143,7 +142,7 @@ func TestSysexEncodeRejectsAnOutOfDomainValue(t *testing.T) {
 }
 
 func TestSysexEncodeAppliesTheConfiguredChannel(t *testing.T) {
-	format := dx7Format{channel: 9}
+	format := newDX7Format(9)
 	candidate, err := newSysexPatch(format, format.NewRoot(), nil)
 	if err != nil {
 		t.Fatalf("newSysexPatch: %v", err)
@@ -204,7 +203,7 @@ func TestSysexSeedRejectsUnusableDumps(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			path := writeTestSeed(t, test.message)
-			format := sysexPatchFactory{format: dx7Format{}}
+			format := sysexPatchFactory{format: newDX7Format(0)}
 			if err := format.loadSeed(path, newTestSysexPatch(t)); err == nil {
 				t.Fatal("accepted an unusable seed file")
 			}
@@ -232,7 +231,7 @@ func TestSysexSeedAcceptsANonPrintableVoiceName(t *testing.T) {
 	seedPath := writeTestSeed(t, message)
 	settings := defaultEvolutionSettings()
 	settings.roundSize = minimumRoundSize
-	engine, err := newMutation(sysexPatchFactory{format: dx7Format{}}, settings, rand.New(rand.NewSource(41)), nil, seedPath)
+	engine, err := newMutation(sysexPatchFactory{format: newDX7Format(0)}, settings, rand.New(rand.NewSource(41)), nil, seedPath)
 	if err != nil {
 		t.Fatalf("a seed with a padded voice name was rejected: %v", err)
 	}
@@ -266,28 +265,31 @@ func TestSysexGeneSemanticsUseReflectedNames(t *testing.T) {
 }
 
 func TestSysexFixedValueMustFitItsOwnField(t *testing.T) {
+	// A DX7 field carries its own bounds, so a value that is a legal MIDI
+	// data byte can still be outside what the instrument accepts.
 	outOfRange := 50
-	notPrintable := 7
-	tests := []struct {
-		name      string
-		semantics map[string]geneSemantic
-	}{
-		{name: "range", semantics: map[string]geneSemantic{"Transpose": {Policy: "fixed", Value: &outOfRange}}},
-		{name: "ascii", semantics: map[string]geneSemantic{"VoiceName[0]": {Policy: "fixed", Value: &notPrintable}}},
+	candidate := newTestSysexPatchFrom(t, testSingleVoiceMessage(t, 0), map[string]geneSemantic{
+		"Transpose": {Policy: "fixed", Value: &outOfRange},
+	})
+	if err := candidate.validateFixedValues(); err == nil {
+		t.Fatal("accepted a fixed value outside its field")
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := newTestSysexPatchFrom(t, testSingleVoiceMessage(t, 0), test.semantics)
-			if err := candidate.validateFixedValues(); err == nil {
-				t.Fatal("accepted a fixed value outside its field")
-			}
-		})
+}
+
+func TestSysexRuleCannotNameASkippedField(t *testing.T) {
+	// A field the record marks as not a sound parameter is not in the
+	// catalog, so a rule naming it is a mistake rather than a silent no-op.
+	_, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), map[string]geneSemantic{
+		"VoiceName[0]": {Policy: "fixed"},
+	})
+	if err == nil {
+		t.Fatal("accepted a rule for a field that is not a gene")
 	}
 }
 
 func TestSysexPatchRejectsAnUnknownGeneName(t *testing.T) {
 	semantics := map[string]geneSemantic{"NotAField": {Policy: "exclude"}}
-	if _, err := newSysexPatch(dx7Format{}, (&dx7.SingleVoice{}), semantics); err == nil {
+	if _, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), semantics); err == nil {
 		t.Fatal("accepted semantics for a field that does not exist")
 	}
 }
@@ -421,7 +423,7 @@ func TestSysexRunWritesDecodableGenerations(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "best.syx")
 	settings := defaultEvolutionSettings()
 	settings.roundSize = 3
-	engine, err := newMutation(sysexPatchFactory{format: dx7Format{channel: seedChannel - 1}}, settings, rand.New(rand.NewSource(11)), nil, seedPath)
+	engine, err := newMutation(sysexPatchFactory{format: newDX7Format(seedChannel - 1)}, settings, rand.New(rand.NewSource(11)), nil, seedPath)
 	if err != nil {
 		t.Fatalf("newMutation: %v", err)
 	}
@@ -519,33 +521,5 @@ func TestSysexRunRejectsInvalidCombinations(t *testing.T) {
 				t.Fatal("accepted an incompatible combination")
 			}
 		})
-	}
-}
-
-func TestSysexImmutableFieldsSurviveMutation(t *testing.T) {
-	// A field the format calls metadata must come out of a long run byte for
-	// byte identical, or a changed-gene report could claim a change the
-	// instrument would never hear.
-	parent := newTestSysexPatch(t)
-	settings := defaultEvolutionSettings()
-	settings.mutatedGenes = 8
-	settings.mutationSigma = 60
-	engine := &Mutation{settings: settings, random: rand.New(rand.NewSource(31))}
-	immutable := 0
-	for generation := 0; generation < 30; generation++ {
-		child := engine.mutatePatch(parent, generation%2 == 0)
-		values := geneValues(t, child)
-		for index, gene := range values {
-			if parent.genes[index].policy == genePolicyMutable {
-				continue
-			}
-			immutable++
-			if gene.value != parent.genes[index].value {
-				t.Fatalf("immutable gene %s changed from %d to %d", gene.name, parent.genes[index].value, gene.value)
-			}
-		}
-	}
-	if immutable == 0 {
-		t.Fatal("no immutable gene was checked")
 	}
 }

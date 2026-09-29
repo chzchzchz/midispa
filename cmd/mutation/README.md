@@ -8,6 +8,7 @@ Two formats are supported:
 
 - `cc` evolves CC controller values for a model from `cc/model.go`, and reads and writes SMF files. This is the default.
 - `dx7-single` evolves one Yamaha DX7 voice, and reads and writes raw SysEx files (`.syx`).
+- `pro800` evolves one Behringer Pro 800 patch, and reads and writes raw SysEx files (`.syx`).
 
 Each format decides for itself which flags apply to it and what its output files
 are called, so the rules below follow the selected format rather than its name.
@@ -58,13 +59,16 @@ out/mutation \
 ```
 
 Gene names and value bounds are discovered by reflecting over the DX7 program
-struct and its `range`, `oneof`, and `ascii` tags, so every constrained field of
-a voice becomes a gene and nothing else does. For example, `Osc[0].EgRate[1]`,
-`Algorithm`, and `VoiceName[3]`.
+struct and its `range` and `oneof` tags, so every constrained field of a voice
+becomes a gene and nothing else does. For example, `Osc[0].EgRate[1]` and
+`Algorithm`.
 
-Three kinds of decoded field are never mutated, because they are not sound
-parameters: the channel, the voice name, and the operator-on flag, which no DX7
-wire layout carries. A fixed rule can still pin them by name.
+Fields that are not sound parameters declare that themselves with a
+`mutate:"skip"` tag and are left out of the catalog entirely, so a search can
+never touch them and a changed-gene report never has to explain them. On the
+DX7 that is the channel and the voice name. Because a skipped field is not a
+gene, a rule cannot name it either: a voice name comes from the seed you chose
+and is not editable from here.
 
 The seed must decode cleanly. A wrong length, a non-Yamaha manufacturer byte, a
 bad checksum, trailing bytes, or a second message are all rejected rather than
@@ -74,6 +78,42 @@ Each candidate is sent as one complete message, and the command waits
 `--sysex-settle` before playing the probe or the playback so the instrument has
 loaded the voice. The output file is written only after the whole message
 encodes, so a rejected value never leaves a truncated dump.
+
+## Pro 800 Patches
+
+`--format pro800` evolves one patch of the Pro 800 and needs a raw `.syx` dump
+of one patch as its seed:
+
+```sh
+out/mutation \
+  --format pro800 \
+  --port "MIDI Out" \
+  --seed patch.syx \
+  --output best.syx \
+  --midi-channel 1
+```
+
+Gene names follow the decoded record, so they are nested and carry the wrapper
+the dump puts around the patch: `Patch.OscA.Volume`, `Patch.Filter.Cutoff`,
+`Patch.Tuning[0]`, `Patch.Lfo.Shape`. The DX7's own fields are flat because
+the dump embeds the voice rather than nesting it.
+
+Each candidate is sent as a patch dump response, the same message the
+instrument sends when it is asked for a patch.
+
+**The fields are wide.** Most are 14-bit, where a controller value is 7-bit,
+so `--mutation-sigma 16` is a very fine step. The tuning table is a signed
+32-bit value per note in the instrument's own units, and the notes publish a
+table from -40 to +100 cents without giving the curve, so a drawn value is
+not a temperament. Both are evolvable, but a run at the default settings
+searches a much larger space than a DX7 run.
+
+**Some fields depend on the dump layout.** Four settings exist only in the
+newer layout and are left out of the catalog for both, so what a run can
+evolve does not depend on the layout its seed carried. The fine tuning and
+the sync switch exist only on the second oscillator. Where a mutation still
+lands somewhere the seed's layout cannot carry, the command prints `skipped:`
+and carries on with the rest of the round.
 
 ## Judging
 
@@ -110,11 +150,11 @@ The highest-ranked patch remains the champion. A later round cannot replace it u
 
 | Flag | Required | Default | Description |
 | --- | --- | --- | --- |
-| `--format` | no | `cc` | Patch format to evolve: `cc` or `dx7-single`. |
+| `--format` | no | `cc` | Patch format to evolve: `cc`, `dx7-single` or `pro800`. |
 | `--model` | for `cc` | | Model name from `cc/model.go`. |
 | `--port` | yes | | ALSA MIDI output destination. |
 | `--output` | yes | | Latest patch path and base for numbered generation files. The extension must match the format: `.mid` for `cc`, `.syx` for `dx7-single`. |
-| `--seed` | for `dx7-single` | | SMF file for `cc`, raw SysEx dump for `dx7-single`. |
+| `--seed` | for a SysEx format | | SMF file for `cc`, raw SysEx dump for `dx7-single` and `pro800`. |
 | `--playback` | no | | SMF file played after each candidate patch is applied. |
 | `--gene-semantics` | no | | JSON file containing exclusion and fixed-value rules. |
 | `--mutation-rate` | no | `1` | Probability that a candidate is mutated, from 0 to 1. |
@@ -123,7 +163,7 @@ The highest-ranked patch remains the champion. A later round cannot replace it u
 | `--crossover-rate` | no | `0.7` | Probability that a child combines genes from two selected patches. |
 | `--round-size` | no | `4` | Number of candidates in each generation and the population; must be at least 3. |
 | `--parent-decay` | no | `0.5` | Rank points by which the champion decays each generation; set 0 to disable. |
-| `--midi-channel` | no | `1` | Output channel for generated messages, probe notes, and patch files, from 1 to 16. |
+| `--midi-channel` | no | `1` | Output channel for probe notes, and for the message of a format that carries one, from 1 to 16. |
 | `--sysex-settle` | no | `100ms` | Delay after a SysEx patch message before playing a note. |
 | `--rng-seed` | no | time-based | Optional random seed for reproducible mutation runs. |
 | `-json` | for `cc` only | `false` | Write a JSON dump of the model struct alongside each SMF output. |
@@ -131,12 +171,17 @@ The highest-ranked patch remains the champion. A later round cannot replace it u
 Each flag combination is checked against the format that would carry it out, so
 the two formats each reject what does not apply to them:
 
-| Flag | `cc` | `dx7-single` |
+| Flag | `cc` | a SysEx format |
 | --- | --- | --- |
 | `--model` | required | rejected |
 | `--seed` | optional SMF | required raw SysEx dump |
 | `--output` | must end in `.mid` | must end in `.syx` |
 | `--json` | optional | rejected |
+
+A SysEx format applies `--midi-channel` to the probe notes, and to the message
+itself only if the message carries a channel byte. The DX7 edit-buffer dump
+does; the Pro 800 patch dump does not, and its channel stays the one the seed
+was captured on.
 
 Each format declares its own output extension, so the requirement follows the
 format rather than its name. Without `--playback`, the program probes the patch
@@ -160,7 +205,7 @@ For `dx7-single` the same rules address reflected field names:
 [
   {"Osc[0].EgRate[0]": {"policy": "exclude"}},
   {"Osc[0].EgRate[1]": {"policy": "fixed", "value": 42}},
-  {"VoiceName[0]": {"policy": "fixed", "value": 68}}
+  {"Osc[0].OutLevel": {"policy": "fixed", "value": 99}}
 ]
 ```
 

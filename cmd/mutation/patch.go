@@ -103,6 +103,12 @@ func (patch *Patch) applyCCMessages(messages [][]byte) int {
 	return applied
 }
 
+// encodable always succeeds: every controller value comes from a 7-bit MIDI
+// data byte, so there is no way to build a CC patch the instrument could not
+// be sent. The check exists for formats whose records are wider than their
+// message.
+func (patch *Patch) encodable() error { return nil }
+
 // encode turns the patch into the channel messages that reproduce it on the
 // instrument. The channel is zero-based here and one-based at the flag.
 func (patch *Patch) encode(channelIndex int) ([][]byte, error) {

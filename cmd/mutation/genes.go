@@ -27,18 +27,10 @@ const (
 	genePolicyMutable genePolicy = iota
 	genePolicyFixedPendingSeed
 	genePolicyFixed
-	// genePolicyImmutable is a gene the format pinned because it is not a
-	// sound parameter. It is distinct from fixed because its value came from
-	// the seed rather than from a rule, so it is not held to the domain a
-	// generator must respect: a dump may legitimately carry a voice name
-	// padded with control bytes, and rejecting that seed would blame a rule
-	// the user never wrote.
-	genePolicyImmutable
 )
 
 // Gene policy encodes the valid lifecycle states so a fixed gene cannot be
-// confused with a mutable gene before its seed value is applied, and an
-// immutable gene cannot be confused with one a rule pinned.
+// confused with a mutable gene before its seed value is applied.
 type gene struct {
 	name   string
 	value  int
@@ -328,7 +320,7 @@ func (gen *patchGenes) mutableGeneCount() int {
 // any gene, which is how the CC loader decides an empty seed is a mistake.
 func (gen *patchGenes) hasSeedConfigurableGenes() bool {
 	for index := range gen.genes {
-		if policy := gen.genes[index].policy; policy != genePolicyFixed && policy != genePolicyImmutable {
+		if gen.genes[index].policy != genePolicyFixed {
 			return true
 		}
 	}
@@ -338,9 +330,8 @@ func (gen *patchGenes) hasSeedConfigurableGenes() bool {
 // validateFixedValues rejects a fixed gene that never received a value and one
 // that received a value its own field could not hold. The gene name is quoted
 // because a rejected fixed value is otherwise invisible at the point the
-// candidate would have been auditioned. Only rule-pinned genes are held to
-// their domain; a mutable gene's value came from the wire, which the format's
-// own decoder has already validated.
+// candidate would have been auditioned. A mutable gene's value came from the
+// wire, which the format's own decoder has already validated.
 func (gen *patchGenes) validateFixedValues() error {
 	for index := range gen.genes {
 		current := &gen.genes[index]

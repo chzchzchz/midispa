@@ -32,7 +32,7 @@ type configuration struct {
 func parseConfiguration(arguments []string, output io.Writer) (configuration, error) {
 	flags := flag.NewFlagSet("mutation", flag.ContinueOnError)
 	flags.SetOutput(output)
-	patchFormat := flags.String("format", ccFormatName, "patch format to evolve (cc, dx7-single)")
+	patchFormat := flags.String("format", ccFormatName, "patch format to evolve (cc, dx7-single, pro800)")
 	modelName := flags.String("model", "", "model name from cc/model.go")
 	portName := flags.String("port", "", "MIDI output port")
 	seedPath := flags.String("seed", "", "optional SMF file containing the seed patch")

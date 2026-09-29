@@ -252,7 +252,7 @@ func TestNewMutationRejectsInvalidState(t *testing.T) {
 			t.Fatalf("accepted round size %d without room for offspring", roundSize)
 		}
 	}
-	if _, err := newMutation(sysexPatchFactory{format: dx7Format{}}, defaultEvolutionSettings(), rand.New(rand.NewSource(8)), nil, ""); err == nil {
+	if _, err := newMutation(sysexPatchFactory{format: newDX7Format(0)}, defaultEvolutionSettings(), rand.New(rand.NewSource(8)), nil, ""); err == nil {
 		t.Fatal("started a SysEx run without a seed")
 	}
 }

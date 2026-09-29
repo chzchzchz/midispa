@@ -129,6 +129,12 @@ func newMutation(factory patchFactory, settings evolutionSettings, random *rand.
 	if err := parent.validateFixedValues(); err != nil {
 		return nil, err
 	}
+	// A seed that cannot be written back is not a starting point, and
+	// finding that out here beats discarding every candidate in generation
+	// zero with no way to rank any of them.
+	if err := parent.encodable(); err != nil {
+		return nil, fmt.Errorf("seed cannot be written back: %w", err)
+	}
 	parentScore := 0
 	return &Mutation{settings: settings, random: random, parent: parent, parentScore: &parentScore}, nil
 }
