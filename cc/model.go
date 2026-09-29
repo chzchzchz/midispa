@@ -654,6 +654,11 @@ type ProVSMini struct {
 // Several parameters are asymmetric: the value the instrument transmits when
 // a knob moves is not always the value it accepts from a knob, so the two are
 // noted separately where they differ.
+//
+// This is the microKORG XL, which is a different instrument from the
+// microKORG modelled as MicroKorg below. The two share 32 of their control
+// change numbers while meaning different parameters on each, so the numbers
+// are not interchangeable between them.
 type MicrokorgXL struct {
 	// Unison stacks up to five detuned oscillators inside a single oscillator
 	// (manual p. 35).
@@ -854,6 +859,296 @@ type MicrokorgXL struct {
 	VocoderBandPan16 Control `nrpn:"4.95"`
 }
 
+// MicroKorg describes the control change surface of the Korg microKORG: the
+// patch parameters that can be reached over MIDI control changes, bound to the
+// control change numbers the instrument ships with from the factory (manual
+// p.56, "Messages transmitted and received by the microKORG").
+//
+// Three properties of the instrument explain most of the field comments below,
+// and they are the difference between a model that sounds right and one that
+// lands every edit on the wrong parameter.
+//
+// The parameter to control change binding is a setting rather than a constant.
+// SHIFT > CONTROL CHANGE rebinds any parameter here to a different number in
+// 0...95, so these numbers record a factory default instead of a guarantee.
+// GLOBAL > MIDI > "MIDI Filter" > CONTROL CHANGE additionally has to be set to
+// Enable, or the instrument ignores all of them.
+//
+// Transmitted and received values are encoded differently. Moving a knob makes
+// the microKORG send the rest position of a stepped parameter on a few sparse
+// 7-bit anchors: OSC 1 WAVE transmits 0, 18, 36, 54, 72, 90, 108 and 126. A
+// control change sent into the instrument instead spreads the steps evenly
+// across 0...127, so the same waveform arrives as 0...15, 16...31, 32...47 and
+// so on. Values captured in the transmitted scheme do not address the received
+// scheme correctly, so sequencing this instrument has to speak the received
+// scheme, which is what the field comments below record.
+//
+// Bipolar parameters are encoded centre-zero rather than signed: 0 and 1 are
+// -63, 2 is -62, rising through 63 as -1, 64 as 0 and 127 as +63. The same
+// encoding covers filter envelope intensity, keyboard tracking and the
+// modulation effect rate.
+//
+// Where a parameter means something different in a vocoder program than in a
+// synth program, both meanings are noted, because the same control change
+// reaches whichever kind of program happens to be selected.
+//
+// This is the microKORG, not the microKORG XL, which is modelled separately as
+// MicrokorgXL above. The two instruments share 32 of their control change
+// numbers while meaning different parameters on each: control change 23 is this
+// instrument's filter envelope attack and the XL's oscillator 1 level, and
+// control change 18 is this one's oscillator 2 semitone and the XL's
+// oscillator 2 waveform. Despite the similar field names, the numbers are not
+// interchangeable.
+type MicroKorg struct {
+	// PITCH
+
+	// Portamento is the glide time between notes. 0...127; the manual gives
+	// the control range without the time range it covers.
+	Portamento Control `cc:"5"`
+
+	// OSC 1
+
+	// Osc1Wave selects the oscillator 1 waveform, the patch's main source of
+	// character. Transmitted: 0 Saw, 18 Square, 36 Tri, 54 Sin, 72 Vox Wave,
+	// 90 DWGS, 108 Noise, 126 Audio In. Received: 0...15 Saw, 16...31 Square,
+	// 32...47 Tri, 48...63 Sin, 64...79 Vox Wave, 80...95 DWGS, 96...111
+	// Noise, 112...127 Audio In.
+	Osc1Wave Control `cc:"77"`
+
+	// Osc1Control1 morphs the shape selected by Osc1Wave within a single
+	// family: it sets pulse width on the square wave and progressively
+	// reshapes the other waveforms towards the next family along. 0...127,
+	// and it has no effect at all while Osc1Wave is DWGS.
+	Osc1Control1 Control `cc:"14"`
+
+	// Osc1Control2 is the modulation of Osc1Control1 by LFO 1, which is what
+	// turns a static shape into a PWM-like sweep. 0...127. While Osc1Wave is
+	// DWGS it means something else entirely: it selects DWGS waveform 1...64,
+	// two received values per waveform, so waveform n sits at 2n-2 and 2n-1
+	// and the oscillator is only 64 steps deep rather than 128.
+	Osc1Control2 Control `cc:"15"`
+
+	// OSC 2
+
+	// Osc2Wave selects the oscillator 2 waveform. Transmitted: 0 Saw, 64
+	// Squ, 127 Tri. Received: 0...42 Saw, 43...85 Squ, 86...127 Tri. The
+	// three transmitted anchors are a poor fit for three received bands,
+	// which is a good illustration of the encoding split above.
+	Osc2Wave Control `cc:"78"`
+
+	// Osc2OscMod chooses how the two oscillators interact.
+	// Transmitted: 0 OFF, 43 Ring, 85 Sync, 127 RingSync. Received:
+	// 0...31 OFF, 32...63 Ring, 64...95 Sync, 96...127 RingSync. Ring and
+	// RingSync are the only two ways to get the classic Korg metallic
+	// cross-modulated tone out of this instrument.
+	Osc2OscMod Control `cc:"82"`
+
+	// Osc2Semitone detunes oscillator 2 against oscillator 1, from -24 to
+	// +24 semitones. The received scale spends three values per semitone:
+	// 0...2 is -24, 63...65 is unison, 126 and 127 are +24. In a vocoder
+	// program the same control change drives HPF Level instead.
+	Osc2Semitone Control `cc:"18"`
+
+	// AUDIO IN 1
+
+	// AudioIn1Tune trims the input on the AUDIO IN 1 jack, which feeds the
+	// oscillator ring as a modulation source. Centre-zero over -63...+63. In
+	// a vocoder program it drives the Threshold of the envelope follower
+	// that detects the modulator signal, so it decides how loudly the
+	// vocoder responds to speech.
+	AudioIn1Tune Control `cc:"19"`
+
+	// MIXER
+
+	// Osc1Level sets the level of oscillator 1. 0...127.
+	Osc1Level Control `cc:"20"`
+
+	// Osc2Level sets the level of oscillator 2. 0...127. In a vocoder
+	// program the same control change is labelled "Inst Level", which does
+	// not match either carrier level the vocoder record names, so what it
+	// drives there is not stated by the manual.
+	Osc2Level Control `cc:"21"`
+
+	// NoiseLevel sets the level of the noise generator, which is also one of
+	// the destinations a virtual patch can modulate. 0...127.
+	NoiseLevel Control `cc:"22"`
+
+	// FILTER
+
+	// FilterType selects the filter response, which is a large part of what
+	// the patch sounds like. Synth: transmitted 0 -24LPF, 43 -12LPF, 85
+	// -12BPF, 127 -12HPF; received 0...31 -24LPF, 32...63 -12LPF, 64...95
+	// -12BPF, 96...127 -12HPF. In a vocoder program it becomes Formant
+	// Shift: received 0...25 is 0, 26...51 is +1, 52...76 is +2, 77...102 is
+	// -1 and 103...127 is -2, transposed onto the carrier bandpass filters
+	// to make the voice sound taller or shorter.
+	FilterType Control `cc:"83"`
+
+	// Cutoff is the filter cutoff frequency, the single most important
+	// parameter on a subtractive voice. Synth: 0...127. Vocoder: centre-zero
+	// over -63...+63, offsetting every synthesis bandpass filter at once.
+	Cutoff Control `cc:"74"`
+
+	// Resonance boosts the cutoff frequency itself rather than any harmonic,
+	// which is what gives a patch its acidic edge. 0...127.
+	Resonance Control `cc:"71"`
+
+	// FilterEgInt is how far the filter envelope swings the cutoff, negative
+	// values pulling it down for a percussive decay and positive values
+	// pushing it up for a swelling filter. Centre-zero over -63...+63. In a
+	// vocoder program it becomes Mod Int, the depth of the modulator
+	// envelope applied to the carrier.
+	FilterEgInt Control `cc:"79"`
+
+	// KbdTrack is keyboard tracking, the amount by which the cutoff follows
+	// the note you play, so that high notes stay bright across the range.
+	// Centre-zero over -63...+63. In a vocoder program it becomes E.F.Sense,
+	// the sensitivity of the analysis filter to the modulator, which is
+	// plain 0...127 there and whose top value freezes the detected spectrum.
+	KbdTrack Control `cc:"85"`
+
+	// F.EG, the filter envelope. The microKORG always runs it as a decaying
+	// envelope, so Sustain is the level the cutoff rests at once the decay
+	// finishes rather than a hold gate.
+
+	// FilterEgAttack is the filter envelope attack time. 0...127.
+	FilterEgAttack Control `cc:"23"`
+
+	// FilterEgDecay is the filter envelope decay time. 0...127.
+	FilterEgDecay Control `cc:"24"`
+
+	// FilterEgSustain is the level the filter envelope settles to. 0...127.
+	FilterEgSustain Control `cc:"25"`
+
+	// FilterEgRelease is the filter envelope release time. 0...127.
+	FilterEgRelease Control `cc:"26"`
+
+	// AMP, the amplifier that all of the above is summed into.
+
+	// AmpLevel is the output level of the amplifier, plain 0...127 in both
+	// program kinds: in a synth program it is the level itself, and in a
+	// vocoder program the same control change is the vocoder's own output
+	// level. The pan encoding belongs to Panpot, not to this.
+	AmpLevel Control `cc:"7"`
+
+	// Panpot is the stereo position of the output, and the patch's only pan
+	// control as well as a destination for the virtual patches. Synth:
+	// centre-zero over L63...R63, with 0 and 1 both L63 and 64 centre.
+	// Vocoder: plain 0...127, where it is the direct level of the carrier
+	// that bypasses the vocoder.
+	Panpot Control `cc:"10"`
+
+	// Distortion is the amp stage's drive. Transmitted 0 OFF and 127 ON;
+	// received 0...63 OFF and 64...127 ON, so the switch arrives on the
+	// lower half of the received range rather than at the top.
+	Distortion Control `cc:"92"`
+
+	// A.EG, the amplifier envelope.
+
+	// AmpEgAttack is the amplifier envelope attack time. 0...127.
+	AmpEgAttack Control `cc:"73"`
+
+	// AmpEgDecay is the amplifier envelope decay time. 0...127.
+	AmpEgDecay Control `cc:"75"`
+
+	// AmpEgSustain is the level the amplifier envelope settles to, which
+	// is the loudest the voice will play. 0...127.
+	AmpEgSustain Control `cc:"70"`
+
+	// AmpEgRelease is the amplifier envelope release time. 0...127.
+	AmpEgRelease Control `cc:"72"`
+
+	// LFO 1, which the manual also nominates as the modulator for the
+	// dedicated vibrato, tremolo and wah amounts.
+
+	// Lfo1Wave selects the LFO 1 waveform. Transmitted: 0 Saw, 43 Squ1,
+	// 85 Tri, 127 S/H. Received: 0...31 Saw, 32...63 Squ1, 64...95 Tri,
+	// 96...127 S/H. Sample and hold is what makes LFO 1 usable as a
+	// stepped random source rather than a smooth sweep.
+	Lfo1Wave Control `cc:"87"`
+
+	// Lfo1Frequency sets the LFO 1 rate. 0...127, or a synced note
+	// division when LFO TEMPO SYNC is on, in which case the received scale
+	// runs 0...8 as 1/1, 9...17 as 3/4, 18...25 as 2/3 and so on down to
+	// 120...127 as 1/32.
+	Lfo1Frequency Control `cc:"27"`
+
+	// LFO 2, the modulator the manual nominates for pitch vibrato.
+
+	// Lfo2Wave selects the LFO 2 waveform. Transmitted: 0 Saw, 43 Squ2,
+	// 85 Sin, 127 S/H. Received: 0...31 Saw, 32...63 Squ2, 64...95 Sin,
+	// 96...127 S/H. LFO 2 has a sine where LFO 1 has a triangle.
+	Lfo2Wave Control `cc:"88"`
+
+	// Lfo2Frequency sets the LFO 2 rate, and doubles as a virtual patch
+	// destination. 0...127, or a synced note division with the same scale as
+	// Lfo1Frequency when LFO TEMPO SYNC is on.
+	Lfo2Frequency Control `cc:"76"`
+
+	// PATCH 1 to PATCH 4, the four virtual patch routes. Each picks a
+	// modulation source and a destination, and the intensities below set
+	// how far the source drives it. The source and destination selections
+	// are not control changes at all; they are made with the front panel
+	// knobs and live outside this model, so only the depth of each route is
+	// reachable from here.
+
+	// Patch1Intensity is the depth of virtual patch 1. Centre-zero over
+	// -63...+63, and the sign is what decides whether the source lifts or
+	// drops the destination, which is how two patches are set up to fight
+	// each other.
+	Patch1Intensity Control `cc:"28"`
+
+	// Patch2Intensity is the depth of virtual patch 2. Centre-zero over
+	// -63...+63.
+	Patch2Intensity Control `cc:"29"`
+
+	// Patch3Intensity is the depth of virtual patch 3. Centre-zero over
+	// -63...+63.
+	Patch3Intensity Control `cc:"30"`
+
+	// Patch4Intensity is the depth of virtual patch 4. Centre-zero over
+	// -63...+63.
+	Patch4Intensity Control `cc:"31"`
+
+	// MOD FX, the modulation effect, which is where the chorus, flange and
+	// ensemble of the three effect types live.
+
+	// ModFxLfoSpeed is the rate of the modulation effect's internal LFO,
+	// and is the knob the manual describes as changing timbre over time
+	// rather than pitch. Centre-zero over -63...+63.
+	ModFxLfoSpeed Control `cc:"12"`
+
+	// ModFxDepth is how deep the modulation effect runs. 0...127.
+	ModFxDepth Control `cc:"93"`
+
+	// DELAY, downstream of the modulation effect.
+
+	// DelayTime is the delay time, 0...127, or a synced note division when
+	// DELAY TEMPO SYNC is on. The synced scale runs the opposite way to the
+	// LFOs: 0...8 is 1/32, 9...17 is 1/24, up to 120...127 as 1/1.
+	DelayTime Control `cc:"13"`
+
+	// DelayDepth is the delay output level against the dry signal.
+	// 0...127.
+	DelayDepth Control `cc:"94"`
+
+	// MIDI section. These are perform controls rather than patch
+	// parameters, but they are the two remaining entries in the manual's
+	// control change table and both sit on otherwise unused numbers.
+
+	// TimbreSelect switches the vocoder between its two carrier
+	// timbres, or between the two synchronised carriers together.
+	// Transmitted: 0 Timbre1, 1 Timbre1&2 (Sync), 127 Timbre2. Received:
+	// 0 Timbre1, 1 Timbre1&2 (Sync), 2...127 Timbre2, so unlike every other
+	// switch here it is a three-state control with a wide third state.
+	TimbreSelect Control `cc:"95"`
+
+	// SyncCtrl starts and stops the arpeggiator in sync with the external
+	// clock. Transmitted 0 OFF and 127 ON; received 0...63 OFF and
+	// 64...127 ON.
+	SyncCtrl Control `cc:"90"`
+}
+
 type Model struct {
 	Model               string
 	*GMController       `json:"GMController,omitempty"`
@@ -872,6 +1167,7 @@ type Model struct {
 	*UnoSynth           `json:"UnoSynth,omitempty"`
 	*WorldeEasyControl9 `json:"WorldeEasyControl9,omitempty"`
 	*ProVSMini          `json:"ProVSMini,omitempty"`
+	*MicroKorg          `json:"MicroKorg,omitempty"`
 }
 
 var modelNames = []string{
@@ -891,6 +1187,7 @@ var modelNames = []string{
 	"WorldeEasyControl9",
 	"Pro VS Mini",
 	"microKORG XL",
+	"MicroKorg",
 }
 
 // ModelNames returns the canonical model names accepted by NewModelParams.
@@ -992,6 +1289,11 @@ func (m *Model) MidiParams() any {
 			m.MicrokorgXL = &MicrokorgXL{}
 		}
 		return m.MicrokorgXL
+	case "MicroKorg":
+		if m.MicroKorg == nil {
+			m.MicroKorg = &MicroKorg{}
+		}
+		return m.MicroKorg
 	default:
 		panic("unknown model " + m.Model)
 	}
