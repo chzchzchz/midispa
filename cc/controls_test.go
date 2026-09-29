@@ -364,6 +364,215 @@ func TestPerformVEHasNoNRPNOrNoteFields(t *testing.T) {
 	}
 }
 
+// The MiniNova chart gives every parameter an address, so the anchors below
+// span the blocks it uses: the front panel control changes, the per-block NRPN
+// ranges, the three MSBs the modulation matrix wraps onto, and the global
+// mode menu.
+func TestMiniNovaAddressesMatchChart(t *testing.T) {
+	params, err := NewModelParams("MiniNova")
+	if err != nil {
+		t.Fatalf("NewModelParams: %v", err)
+	}
+	ccFields, err := ControlFields(params)
+	if err != nil {
+		t.Fatalf("ControlFields: %v", err)
+	}
+	nrpnFields, err := NRPNFields(params)
+	if err != nil {
+		t.Fatalf("NRPNFields: %v", err)
+	}
+	if len(nrpnFields) == 0 {
+		t.Fatal("model has no NRPN fields")
+	}
+	for _, field := range nrpnFields {
+		if field.Value == nil {
+			t.Fatalf("field %s has nil value", field.Name)
+		}
+		if field.MSB < 0 || field.MSB > 127 || field.LSB < 0 || field.LSB > 127 {
+			t.Fatalf("field %s is not a 7-bit parameter: %+v", field.Name, field)
+		}
+	}
+
+	wantCC := map[string]int{
+		"Modulation":       1,
+		"BreathController": 2,
+		"Filter1Frequency": 74,
+		"Env1Sustain":      70,
+		"VibratoSpeed":     76,
+		"Env1AnimTrigger":  117,
+		"SustainPedal":     64,
+	}
+	for name, controller := range wantCC {
+		field, ok := findControlField(ccFields, name)
+		if !ok {
+			t.Fatalf("no cc field named %s", name)
+		}
+		if field.Controller != controller {
+			t.Fatalf("%s is CC %d, want %d", name, field.Controller, controller)
+		}
+	}
+
+	// The General MIDI plumbing is in the chart but is not a patch parameter:
+	// three of these silence the instrument and the rest drive the NRPN
+	// select-and-set. They are deliberately absent, so a generated patch
+	// cannot mute the MiniNova or corrupt a parameter selection.
+	omitted := []string{
+		"DataEntryMSB", "DataEntryLSB",
+		"DataIncrement", "DataDecrement",
+		"NRPNMSB", "NRPNLSB",
+		"AllSoundsOff", "LocalControl", "AllNotesOff",
+	}
+	for _, name := range omitted {
+		if _, ok := findControlField(ccFields, name); ok {
+			t.Fatalf("%s is a cc field, want it omitted", name)
+		}
+	}
+	ccControls := NewMidiControlsCC(params)
+	for _, controller := range []int{6, 38, 96, 97, 98, 99, 120, 122, 123} {
+		if got := ccControls.Name(controller); got != "" {
+			t.Fatalf("CC %d resolves to %q, want no field", controller, got)
+		}
+	}
+
+	wantNRPN := map[string][2]int{
+		"PatchCategory":           {2, 64},
+		"Animate1Hold":            {0, 0},
+		"AnimateHoldButton":       {0, 16},
+		"Env2AnimTrigger":         {0, 13},
+		"Env6AnimTrigger":         {0, 69},
+		"FilterFreqLink":          {0, 122},
+		"LFO1Waveform":            {0, 70},
+		"LFO3RateSync":            {0, 95},
+		"FxRouting":               {0, 97},
+		"EqTrebleLevel":           {0, 109},
+		"Compressor2Gain":         {0, 121},
+		"Distortion2Level":        {1, 5},
+		"Chorus4Delay":            {1, 47},
+		"GatorMode":               {1, 50},
+		"VocoderGateRelease":      {1, 77},
+		"ArpMode":                 {1, 65},
+		"ArpMininova":             {127, 127},
+		"Arp8Step":                {60, 39},
+		"ChorderKey9":             {7, 25},
+		"ModMatrix1Source1":       {1, 83},
+		"ModMatrix9Destination":   {1, 127},
+		"ModMatrix10Source1":      {2, 0},
+		"ModMatrix20Destination":  {2, 54},
+		"TweakAssignment8":        {4, 7},
+		"TempoRate":               {2, 63},
+		"PatchSelect":             {63, 0},
+		"GlobalSustainPedalMode":  {64, 14},
+		"GlobalAudioInputFX":      {64, 30},
+		"VocoderSpectrumResample": {6, 32},
+	}
+	for name, address := range wantNRPN {
+		field := findNRPNField(t, nrpnFields, name)
+		if field.MSB != address[0] || field.LSB != address[1] {
+			t.Fatalf("%s addresses %d.%d, want %d.%d", name, field.MSB, field.LSB, address[0], address[1])
+		}
+	}
+
+	*findNRPNField(t, nrpnFields, "ArpMininova").Value = 1
+	if params.(*MiniNova).ArpMininova == nil || *params.(*MiniNova).ArpMininova != 1 {
+		t.Fatal("ArpMininova did not take the written value")
+	}
+}
+
+// NRPN 0.122 and 1.123 are blocks of switches the instrument separates by
+// value, not by address. The address maps can only hold one field per address,
+// so the guarantee is that the ordered field list still carries every switch
+// and that each one still transmits its own name.
+func TestMiniNovaSwitchBlockKeepsEveryField(t *testing.T) {
+	model := &MiniNova{}
+	fields, err := NRPNFields(model)
+	if err != nil {
+		t.Fatalf("NRPNFields: %v", err)
+	}
+	shared := map[string]bool{
+		"Env1Trigger": true, "Env6Trigger": true,
+		"LFO1OneShot": true, "LFO3DelayTrigger": true,
+		"FilterFreqLink": true, "FilterResLink": true,
+		"ArpOn": true, "ArpKeyLatch": true,
+		"GatorOn": true, "GatorKeyLatch": true,
+		"VocoderOn": true, "VocoderInput": true,
+	}
+	found := 0
+	for _, field := range fields {
+		if shared[field.Name] {
+			found++
+			if field.MSB != 0 || field.LSB != 122 {
+				t.Fatalf("%s addresses %d.%d, want 0.122", field.Name, field.MSB, field.LSB)
+			}
+		}
+	}
+	if found != len(shared) {
+		t.Fatalf("found %d of %d NRPN 0.122 switches", found, len(shared))
+	}
+
+	// Each switch has to keep transmitting under its own name even though the
+	// address maps can only hold one of them, so a patch that sets several
+	// sends every one rather than repeating the last.
+	*findNRPNField(t, fields, "ArpOn").Value = 47
+	*findNRPNField(t, fields, "Env1Trigger").Value = 1
+	controls := NewMidiControlsNRPN(model)
+	if controls == nil {
+		t.Fatal("NewMidiControlsNRPN returned nil")
+	}
+	want := map[string]byte{
+		"ArpOn":            47,
+		"ArpKeyLatch":      0,
+		"Env1Trigger":      1,
+		"Env6Trigger":      0,
+		"GatorOn":          0,
+		"VocoderOn":        0,
+		"LFO3DelayTrigger": 0,
+	}
+	seen := make(map[string]int, len(want))
+	for _, group := range controls.ControlCodes() {
+		expected, ok := want[group.Name]
+		if !ok {
+			continue
+		}
+		seen[group.Name]++
+		wantMessages := [][]byte{{0xb0, 99, 0}, {0xb0, 98, 122}, {0xb0, 6, expected}}
+		if !reflect.DeepEqual(group.Messages, wantMessages) {
+			t.Fatalf("%s sends %v, want %v", group.Name, group.Messages, wantMessages)
+		}
+	}
+	for name := range want {
+		if seen[name] != 1 {
+			t.Fatalf("%s produced %d groups, want exactly 1", name, seen[name])
+		}
+	}
+}
+
+// The chart gives unrelated parameters the same NRPN address in two places.
+// Unlike the 0.122 switch block they cannot be separated by value, so the
+// model keeps them as printed. This pins the overlap so a transcription slip
+// that renumbered one of them fails instead of passing unnoticed.
+func TestMiniNovaOverlappingNRPNAddresses(t *testing.T) {
+	fields, err := NRPNFields(&MiniNova{})
+	if err != nil {
+		t.Fatalf("NRPNFields: %v", err)
+	}
+	byAddress := make(map[[2]int][]string)
+	for _, field := range fields {
+		address := [2]int{field.MSB, field.LSB}
+		byAddress[address] = append(byAddress[address], field.Name)
+	}
+	want := map[[2]int][]string{
+		{0, 0}:   {"Animate1Hold", "Env2Velocity"},
+		{0, 7}:   {"Animate8Hold", "Env2ADRepeats"},
+		{0, 16}:  {"AnimateHoldButton", "Env3Decay"},
+		{1, 123}: {"LFO1FadeMode", "LFO2FadeMode", "LFO3FadeMode", "VocalTuneMode", "VocalTuneInsert", "ModMatrix9Source1"},
+	}
+	for address, names := range want {
+		if !reflect.DeepEqual(byAddress[address], names) {
+			t.Fatalf("NRPN %d.%d holds %v, want %v", address[0], address[1], byAddress[address], names)
+		}
+	}
+}
+
 func findNRPNField(t *testing.T, fields []NRPNField, name string) NRPNField {
 	t.Helper()
 	for _, field := range fields {

@@ -1397,6 +1397,754 @@ type PerformVE struct {
 	SustainPedal Control `cc:"64"` // 0-63 OFF, 64-127 ON
 }
 
+// MiniNova is the Novation MiniNova, a 16-voice analogue polysynth. The
+// parameter map below is transcribed from Novation's "MiniNova Extended CC &
+// NRPN Map" (version 0002).
+//
+// The instrument exposes almost everything over non-registered parameters and
+// reserves direct control changes for the handful of parameters the front
+// panel can reach, so this struct mixes both tags.
+//
+// cc:   a direct control change; one message reaches the parameter. These are
+// the Global-mode front panel assignments. They are fixed in firmware and
+// cannot be remapped.
+//
+// The chart also lists the General MIDI plumbing under controller numbers of
+// its own, and none of it is a patch parameter: data entry MSB and LSB
+// (CC#6 and CC#38), data increment and decrement (CC#96 and CC#97), NRPN MSB
+// and LSB (CC#98 and CC#99), and the channel mode messages all sounds off,
+// local control and all notes off (CC#120, CC#122, CC#123). Three of those
+// silence the instrument outright and the rest drive the select-and-set an
+// NRPN is written with rather than the sound, so a generated patch that
+// randomized them would either mute the MiniNova or corrupt the parameter
+// selection it was midway through. They are left out for that reason. The
+// NRPN path does not depend on the omitted fields: it writes CC#99, CC#98 and
+// CC#6 from its own controller constants, so every nrpn field below still
+// transmits.
+//
+// nrpn: a non-registered parameter, addressed as "<msb>.<lsb>" in decimal.
+// Reaching one takes three messages: CC#99 with the MSB, CC#98 with the LSB,
+// then CC#6 data entry MSB with the value. The chart's header note states
+// that the instrument is driven with data entry MSB, so every NRPN value is
+// 0...127 and the mapped range of a field can exceed that: TempoRate lists
+// 40-240 BPM but no single data byte reaches past 127.
+//
+// Two chart conventions are worth calling out because they look like typos
+// and are not:
+//
+//   - Category, Genre, the patch and bank commands and every Global-mode
+//     parameter print a number in the CC column that is identical to their
+//     NRPN MSB. That number is the MSB restated, not a data channel: taking
+//     it literally would address CC#64 (sustain pedal) for all thirteen
+//     Global parameters and CC#63 (filter 1 drive) for the patch commands.
+//     They are tagged nrpn here for that reason.
+//
+// The chart also gives several unrelated parameters the same NRPN address.
+// The hardware cannot separate those by value the way it separates the switch
+// block below, so on a unit with all of them live a write to one address
+// changes more than the field it names. They are kept as printed rather than
+// renumbered, because the addresses are what the instrument listens on:
+//
+//   - NRPN 0.0 to 0.7 is both the eight AnimateNHold fields and the first
+//     eight Envelope2 parameters, and NRPN 0.16 is both AnimateHoldButton and
+//     Env3Decay.
+//   - NRPN 1.123 is the three LFO fade modes, the two vocal tune fields and
+//     ModMatrix9Source1.
+//
+// One address is a deliberate block rather than a collision: NRPN 0.122
+// carries thirty switches, told apart only by the value written to it, and
+// the ranges are on the individual fields. NRPN 1.123 mixes that scheme with
+// the collisions above.
+//
+// The address maps behind MidiControls hold one field per address, so a
+// lookup by address returns only one of any group. The ordered field and
+// message sequences still cover every field, which is what a patch needs.
+type MiniNova struct {
+	Modulation           Control `cc:"1"`
+	BreathController     Control `cc:"2"` // Received only; routed to the expression pedal
+	PolyphonyMode        Control `cc:"3"` // 0 MONO, 1 MONO AG, 2 POLY 1, 3 POLY 2, 4 MONO 2
+	PortamentoRate       Control `cc:"5"`
+	WetLevel             Control `cc:"8"`
+	PreGlide             Control `cc:"9"`  // 52 = -12 semitones, 64 = none, 76 = +12 semitones
+	PanPosition          Control `cc:"10"` // 0 far left, 64 centre, 127 far right
+	ExpressionController Control `cc:"11"`
+	PortamentoMode       Control `cc:"12"` // 0 exponential, 1 linear
+	KeyboardOctave       Control `cc:"13"` // 0 = 0 octaves, 1-4 = +1..+4, 124-127 = -4..-1
+	Unison               Control `cc:"14"` // 0 off, then the number of stacked voices
+	UnisonDetune         Control `cc:"15"`
+	Drift                Control `cc:"16"`
+	Phase                Control `cc:"17"` // 0-119 in 3 degree steps up to 357 degrees, 120 free
+	FixedTranspose       Control `cc:"18"`
+	SustainPedal         Control `cc:"64"` // 0-63 off, 64-127 on
+
+	// Osc1Wave and Osc2Wave/Osc3Wave index the chart's 72-entry waveform
+	// table, whose first entries are sine, triangle, sawtooth and a family of
+	// pulse-width saws. The table also holds the two audio-input waveforms at
+	// 70 and 71.
+	Osc1Wave             Control `cc:"19"` // 0-71, waveform table index
+	Osc1WaveInterpolate  Control `cc:"20"`
+	Osc1PulseWidthIndex  Control `cc:"21"`
+	Osc1VirtualSyncDepth Control `cc:"22"`
+	Osc1Hardness         Control `cc:"23"`
+	Osc1Density          Control `cc:"24"`
+	Osc1DensityDetune    Control `cc:"25"`
+	Osc1Semitones        Control `cc:"26"` // 64 = 0 semitones, mapped onto -64..+63
+	Osc1Cents            Control `cc:"27"` // 64 = 0 cents, mapped onto -64..+63
+	Osc1PitchBend        Control `cc:"28"` // 52 = -12 semitones, 76 = +12 semitones
+
+	Osc2Wave             Control `cc:"29"` // 0-71, waveform table index
+	Osc2WaveInterpolate  Control `cc:"30"`
+	Osc2PulseWidthIndex  Control `cc:"31"`
+	BankLSB              Control `cc:"32"` // Only banks 1-3 exist: 1 A, 2 B, 3 C
+	Osc2VirtualSyncDepth Control `cc:"33"`
+	Osc2Hardness         Control `cc:"34"`
+	Osc2Density          Control `cc:"35"`
+	Osc2DensityDetune    Control `cc:"36"`
+	Osc2Semitones        Control `cc:"37"` // 64 = 0 semitones, mapped onto -64..+63
+	Osc2Cents            Control `cc:"39"` // 64 = 0 cents, mapped onto -64..+63
+	Osc2PitchBend        Control `cc:"40"` // 52 = -12 semitones, 76 = +12 semitones
+
+	Osc3Wave             Control `cc:"41"` // 0-71, waveform table index
+	Osc3WaveInterpolate  Control `cc:"42"`
+	Osc3PulseWidthIndex  Control `cc:"43"`
+	Osc3VirtualSyncDepth Control `cc:"44"`
+	Osc3Hardness         Control `cc:"45"`
+	Osc3Density          Control `cc:"46"`
+	Osc3DensityDetune    Control `cc:"47"`
+	Osc3Semitones        Control `cc:"48"` // 64 = 0 semitones, mapped onto -64..+63
+	Osc3Cents            Control `cc:"49"` // 64 = 0 cents, mapped onto -64..+63
+	Osc3PitchBend        Control `cc:"50"` // 52 = -12 semitones, 76 = +12 semitones
+
+	Osc1Level      Control `cc:"51"`
+	Osc2Level      Control `cc:"52"`
+	Osc3Level      Control `cc:"53"`
+	RingModLevel13 Control `cc:"54"` // Oscillator 1 ring-modulated by oscillator 3
+	RingModLevel23 Control `cc:"55"` // Oscillator 2 ring-modulated by oscillator 3
+	NoiseLevel     Control `cc:"56"`
+	NoiseColour    Control `cc:"57"` // 0 white, 1 high, 2 band, 3 high band
+	PreFXLevel     Control `cc:"58"` // 52 = -12 dB, 82 = +18 dB
+	PostFXLevel    Control `cc:"59"` // 52 = -12 dB, 82 = +18 dB
+
+	FilterRouting     Control `cc:"60"` // 0 bypass, 1 single, 2 series, 3 parallel, 4 parallel 2, 5 drum
+	FilterBalance     Control `cc:"61"` // 64 = 0, mapped onto -64..+63
+	Filter1Drive      Control `cc:"63"`
+	Filter1DriveType  Control `cc:"65"` // 0 diode, 1 valve, 2 clipper, 3 crossover, 4 rectify, 5 bits down, 6 rate down
+	Filter1Type       Control `cc:"68"` // 0-13, from 6 dB/octave low pass to 24 dB/octave high pass
+	Filter1Track      Control `cc:"69"`
+	Filter1Resonance  Control `cc:"71"`
+	Filter1Frequency  Control `cc:"74"`
+	Filter1QNormalise Control `cc:"78"`
+	Filter1Env2ToFreq Control `cc:"79"` // 64 = 0, mapped onto -64..+63
+
+	Filter2Drive      Control `cc:"80"`
+	Filter2DriveType  Control `cc:"81"` // See Filter1DriveType
+	Filter2Type       Control `cc:"82"` // See Filter1Type
+	Filter2Frequency  Control `cc:"83"`
+	Filter2Track      Control `cc:"84"`
+	Filter2Resonance  Control `cc:"85"`
+	Filter2QNormalise Control `cc:"86"`
+	Filter2Env2ToFreq Control `cc:"87"` // 64 = 0, mapped onto -64..+63
+
+	VibratoSpeed Control `cc:"76"`
+	VibratoDepth Control `cc:"77"`
+	PanRate      Control `cc:"88"`
+	PanSync      Control `cc:"89"` // 0-35, sync division table
+	PanModDepth  Control `cc:"90"`
+
+	// The five effect returns. What a level does depends on the effect
+	// selected in Fx1Select and friends.
+	Fx1Level Control `cc:"91"`
+	Fx2Level Control `cc:"92"`
+	Fx3Level Control `cc:"93"`
+	Fx4Level Control `cc:"94"`
+	Fx5Level Control `cc:"95"`
+
+	// Envelope 1 is the amplifier envelope and envelope 2 the filter
+	// envelope. EnvelopeTrackCentre applies to all six.
+	EnvelopeTrackCentre Control `cc:"106"`
+	Env1Sustain         Control `cc:"70"`
+	Env1Release         Control `cc:"72"`
+	Env1Attack          Control `cc:"73"`
+	Env1Decay           Control `cc:"75"`
+	Env1Velocity        Control `cc:"108"` // 64 = 0, mapped onto -64..+63
+	Env1SustainRate     Control `cc:"109"` // 64 = 0, mapped onto -64..+63
+	Env1SustainTime     Control `cc:"110"`
+	Env1ADRepeats       Control `cc:"111"`
+	Env1AttackTrack     Control `cc:"112"` // 64 = 0, mapped onto -64..+63
+	Env1DecayTrack      Control `cc:"113"` // 64 = 0, mapped onto -64..+63
+	Env1LevelTrack      Control `cc:"114"` // 64 = 0, mapped onto -64..+63
+	Env1AttackSlope     Control `cc:"115"`
+	Env1DecaySlope      Control `cc:"116"`
+	Env1AnimTrigger     Control `cc:"117"` // 0-8, retrigger and enable an animate source
+
+	// The two fields the save menu offers. Both are listed with a CC that
+	// repeats their NRPN MSB; CC#2 is the breath controller elsewhere in the
+	// same chart, so only the NRPN address is usable.
+	PatchCategory Control `nrpn:"2.64"` // 0 none, 1 arp, 2 bass, 3 bell, 4 classic, 5 drum, 6 keyboard,
+	PatchGenre    Control `nrpn:"2.65"` // 0 none, 1 classic, 2 D&B/breaks, 3 house, 4 industrial, 5 jazz,
+	// 7 lead, 8 movement, 9 pad, 10 poly, 11 SFX, 12 string, 13 ext input, 14 vocoder/tune
+	// 6 R&B/hip hop, 7 rock/pop, 8 techno, 9 dubstep
+
+	// The eight animate sources hold the envelope loops that the animate
+	// parameters elsewhere trigger. Only the extremes are used. The chart
+	// prints CC 60 in the CC column for all of them, but CC 60 is filter
+	// routing in the same chart, so only the NRPN address is usable. These
+	// also collide with the first eight envelope 2 parameters below, and
+	// AnimateHoldButton with Env3Decay.
+	Animate1Hold      Control `nrpn:"0.0"` // 0 no hold, 127 hold
+	Animate2Hold      Control `nrpn:"0.1"`
+	Animate3Hold      Control `nrpn:"0.2"`
+	Animate4Hold      Control `nrpn:"0.3"`
+	Animate5Hold      Control `nrpn:"0.4"`
+	Animate6Hold      Control `nrpn:"0.5"`
+	Animate7Hold      Control `nrpn:"0.6"`
+	Animate8Hold      Control `nrpn:"0.7"`
+	AnimateHoldButton Control `nrpn:"0.16"` // 0 animate hold off, 1 animate hold on
+
+	// The trigger mode of each envelope. All six share NRPN 0.122 and are
+	// separated only by the value written to it: 0 single shot, 1 multi.
+	Env1Trigger Control `nrpn:"0.122"` // 0 single, 1 multi
+	Env2Trigger Control `nrpn:"0.122"` // 2 single, 3 multi
+	Env3Trigger Control `nrpn:"0.122"` // 4 single, 5 multi
+	Env4Trigger Control `nrpn:"0.122"` // 6 single, 7 multi
+	Env5Trigger Control `nrpn:"0.122"` // 8 single, 9 multi
+	Env6Trigger Control `nrpn:"0.122"` // 10 single, 11 multi
+
+	// Envelopes 2 to 6 have no control change of their own; envelope 2 is
+	// the filter envelope and 3 to 6 are modulation envelopes, each with a
+	// delay the amplifier envelope lacks. The fourteen parameters repeat at
+	// fourteen consecutive LSBs per envelope, starting at 0.0 for envelope 2.
+	// The chart overlaps that run with the AnimateNHold addresses above.
+	Env2Velocity    Control `nrpn:"0.0"` // 64 = 0, mapped onto -64..+63
+	Env2Attack      Control `nrpn:"0.1"`
+	Env2Decay       Control `nrpn:"0.2"`
+	Env2Sustain     Control `nrpn:"0.3"`
+	Env2Release     Control `nrpn:"0.4"`
+	Env2SustainRate Control `nrpn:"0.5"` // 64 = 0, mapped onto -64..+63
+	Env2SustainTime Control `nrpn:"0.6"`
+	Env2ADRepeats   Control `nrpn:"0.7"`
+	Env2AttackTrack Control `nrpn:"0.8"`  // 64 = 0, mapped onto -64..+63
+	Env2DecayTrack  Control `nrpn:"0.9"`  // 64 = 0, mapped onto -64..+63
+	Env2LevelTrack  Control `nrpn:"0.10"` // 64 = 0, mapped onto -64..+63
+	Env2AttackSlope Control `nrpn:"0.11"`
+	Env2DecaySlope  Control `nrpn:"0.12"`
+	Env2AnimTrigger Control `nrpn:"0.13"` // 0-24, see Env6AnimTrigger for the code list
+
+	Env3Delay       Control `nrpn:"0.14"`
+	Env3Attack      Control `nrpn:"0.15"`
+	Env3Decay       Control `nrpn:"0.16"`
+	Env3Sustain     Control `nrpn:"0.17"`
+	Env3Release     Control `nrpn:"0.18"`
+	Env3SustainRate Control `nrpn:"0.19"` // 64 = 0, mapped onto -64..+63
+	Env3SustainTime Control `nrpn:"0.20"`
+	Env3ADRepeats   Control `nrpn:"0.21"`
+	Env3AttackTrack Control `nrpn:"0.22"` // 64 = 0, mapped onto -64..+63
+	Env3DecayTrack  Control `nrpn:"0.23"` // 64 = 0, mapped onto -64..+63
+	Env3LevelTrack  Control `nrpn:"0.24"` // 64 = 0, mapped onto -64..+63
+	Env3AttackSlope Control `nrpn:"0.25"`
+	Env3DecaySlope  Control `nrpn:"0.26"`
+	Env3AnimTrigger Control `nrpn:"0.27"` // 0-24, see Env6AnimTrigger for the code list
+
+	Env4Delay       Control `nrpn:"0.28"`
+	Env4Attack      Control `nrpn:"0.29"`
+	Env4Decay       Control `nrpn:"0.30"`
+	Env4Sustain     Control `nrpn:"0.31"`
+	Env4Release     Control `nrpn:"0.32"`
+	Env4SustainRate Control `nrpn:"0.33"` // 64 = 0, mapped onto -64..+63
+	Env4SustainTime Control `nrpn:"0.34"`
+	Env4ADRepeats   Control `nrpn:"0.35"`
+	Env4AttackTrack Control `nrpn:"0.36"` // 64 = 0, mapped onto -64..+63
+	Env4DecayTrack  Control `nrpn:"0.37"` // 64 = 0, mapped onto -64..+63
+	Env4LevelTrack  Control `nrpn:"0.38"` // 64 = 0, mapped onto -64..+63
+	Env4AttackSlope Control `nrpn:"0.39"`
+	Env4DecaySlope  Control `nrpn:"0.40"`
+	Env4AnimTrigger Control `nrpn:"0.41"` // 0-24, see Env6AnimTrigger for the code list
+
+	Env5Delay       Control `nrpn:"0.42"`
+	Env5Attack      Control `nrpn:"0.43"`
+	Env5Decay       Control `nrpn:"0.44"`
+	Env5Sustain     Control `nrpn:"0.45"`
+	Env5Release     Control `nrpn:"0.46"`
+	Env5SustainRate Control `nrpn:"0.47"` // 64 = 0, mapped onto -64..+63
+	Env5SustainTime Control `nrpn:"0.48"`
+	Env5ADRepeats   Control `nrpn:"0.49"`
+	Env5AttackTrack Control `nrpn:"0.50"` // 64 = 0, mapped onto -64..+63
+	Env5DecayTrack  Control `nrpn:"0.51"` // 64 = 0, mapped onto -64..+63
+	Env5LevelTrack  Control `nrpn:"0.52"` // 64 = 0, mapped onto -64..+63
+	Env5AttackSlope Control `nrpn:"0.53"`
+	Env5DecaySlope  Control `nrpn:"0.54"`
+	Env5AnimTrigger Control `nrpn:"0.55"` // 0-24, see Env6AnimTrigger for the code list
+
+	Env6Delay       Control `nrpn:"0.56"`
+	Env6Attack      Control `nrpn:"0.57"`
+	Env6Decay       Control `nrpn:"0.58"`
+	Env6Sustain     Control `nrpn:"0.59"`
+	Env6Release     Control `nrpn:"0.60"`
+	Env6SustainRate Control `nrpn:"0.61"` // 64 = 0, mapped onto -64..+63
+	Env6SustainTime Control `nrpn:"0.62"`
+	Env6ADRepeats   Control `nrpn:"0.63"`
+	Env6AttackTrack Control `nrpn:"0.64"` // 64 = 0, mapped onto -64..+63
+	Env6DecayTrack  Control `nrpn:"0.65"` // 64 = 0, mapped onto -64..+63
+	Env6LevelTrack  Control `nrpn:"0.66"` // 64 = 0, mapped onto -64..+63
+	Env6AttackSlope Control `nrpn:"0.67"`
+	Env6DecaySlope  Control `nrpn:"0.68"`
+	Env6AnimTrigger Control `nrpn:"0.69"` // 0 off, 1-8 retrigger animate 1-8, 9-16 trigger them,
+	// 17-24 enable them
+
+	// The two filter links decide whether filter 2 follows filter 1's
+	// frequency and resonance. Like the envelope triggers they share one
+	// address and differ only in value.
+	FilterFreqLink Control `nrpn:"0.122"` // 42 off, 43 on
+	FilterResLink  Control `nrpn:"0.122"` // 44 off, 45 on
+
+	// The three LFOs. Animate and the modulation matrix are separate sources
+	// even though they share the LFO numbers on the panel.
+	//
+	// All three Waveform fields share one 0-37 scale. The chart only names
+	// the entries once, on the LFO2 row: 0 sine, 1 triangle, 2 sawtooth,
+	// 3 square, 4 random sample and hold, 5 time sample and hold, 6 piano
+	// envelope, 7-13 the seven sequence tables, 14-21 the eight alternators,
+	// 22 chromatic, 23 chromatic over 16, 24-37 a set of scale and interval
+	// tables the chart names by number only (1625 major, 1625 minor, 2511
+	// and so on). The chart does not say what those last names denote.
+	//
+	// The LFO1..LFO3 switches below all live on NRPN 0.122. LFO1FadeMode,
+	// LFO2FadeMode and LFO3FadeMode share NRPN 1.123 with the two vocal tune
+	// fields and ModMatrix9Source1; the chart prints the LFO3 range as 4-7, a
+	// repeat of LFO2's, where the 0-3/4-7/8-11 progression of the first two
+	// makes 8-11 the consistent reading.
+	LFO1Waveform     Control `nrpn:"0.70"` // 0-37, see the waveform list above
+	LFO1PhaseOffset  Control `nrpn:"0.71"` // 0-119 in 3 degree steps up to 357 degrees
+	LFO1SlewRate     Control `nrpn:"0.72"`
+	LFO1Delay        Control `nrpn:"0.74"`
+	LFO1DelaySync    Control `nrpn:"0.75"` // 0-35, sync division table
+	LFO1Rate         Control `nrpn:"0.76"`
+	LFO1RateSync     Control `nrpn:"0.77"`  // 0-35, sync division table
+	LFO1OneShot      Control `nrpn:"0.122"` // 12 normal, 13 one shot
+	LFO1KeySync      Control `nrpn:"0.122"` // 14 free running, 15 restarted by each key
+	LFO1CommonSync   Control `nrpn:"0.122"` // 16 normal, 17 locked to the other LFOs
+	LFO1DelayTrigger Control `nrpn:"0.122"` // 18 single, 19 multi
+	LFO1FadeMode     Control `nrpn:"1.123"` // 0 fade in, 1 fade out, 2 gate in, 3 gate out
+
+	LFO2Waveform     Control `nrpn:"0.79"`
+	LFO2PhaseOffset  Control `nrpn:"0.80"`
+	LFO2SlewRate     Control `nrpn:"0.81"`
+	LFO2Delay        Control `nrpn:"0.83"`
+	LFO2DelaySync    Control `nrpn:"0.84"`
+	LFO2Rate         Control `nrpn:"0.85"`
+	LFO2RateSync     Control `nrpn:"0.86"`
+	LFO2OneShot      Control `nrpn:"0.122"` // 22 normal, 23 one shot
+	LFO2KeySync      Control `nrpn:"0.122"` // 24 free running, 25 restarted by each key
+	LFO2CommonSync   Control `nrpn:"0.122"` // 26 normal, 27 locked to the other LFOs
+	LFO2DelayTrigger Control `nrpn:"0.122"` // 28 single, 29 multi
+	LFO2FadeMode     Control `nrpn:"1.123"` // 4 fade in, 5 fade out, 6 gate in, 7 gate out
+
+	LFO3Waveform     Control `nrpn:"0.88"`
+	LFO3PhaseOffset  Control `nrpn:"0.89"`
+	LFO3SlewRate     Control `nrpn:"0.90"`
+	LFO3Delay        Control `nrpn:"0.92"`
+	LFO3DelaySync    Control `nrpn:"0.93"`
+	LFO3Rate         Control `nrpn:"0.94"`
+	LFO3RateSync     Control `nrpn:"0.95"`
+	LFO3OneShot      Control `nrpn:"0.122"` // 32 normal, 33 one shot
+	LFO3KeySync      Control `nrpn:"0.122"` // 34 free running, 35 restarted by each key
+	LFO3CommonSync   Control `nrpn:"0.122"` // 36 normal, 37 locked to the other LFOs
+	LFO3DelayTrigger Control `nrpn:"0.122"` // 38 single, 39 multi
+	LFO3FadeMode     Control `nrpn:"1.123"` // 8 fade in, 9 fade out, 10 gate in, 11 gate out
+
+	// The effects chain. Select names the effect in a slot; the fields below
+	// are only live once the corresponding slot selects the effect they
+	// belong to, so a patch leaves most of them inert.
+	FxRouting  Control `nrpn:"0.97"` // 0-7, effect routing order
+	FxFeedback Control `nrpn:"0.98"`
+	Fx1Select  Control `nrpn:"0.99"` // 0 bypass, 1 EQ, 2-3 compressor, 4-5 distortion,
+	Fx2Select  Control `nrpn:"0.100"`
+	Fx3Select  Control `nrpn:"0.101"`
+	Fx4Select  Control `nrpn:"0.102"`
+	Fx5Select  Control `nrpn:"0.103"`
+	// 6-7 delay, 8-9 reverb, 10-13 chorus, 14 gator
+
+	EqBassFrequency   Control `nrpn:"0.104"`
+	EqBassLevel       Control `nrpn:"0.105"` // 64 = 0 dB, mapped onto -64..+63
+	EqMidFrequency    Control `nrpn:"0.106"`
+	EqMidLevel        Control `nrpn:"0.107"` // 64 = 0 dB, mapped onto -64..+63
+	EqTrebleFrequency Control `nrpn:"0.108"`
+	EqTrebleLevel     Control `nrpn:"0.109"` // 64 = 0 dB, mapped onto -64..+63
+
+	Compressor1Ratio     Control `nrpn:"0.110"`
+	Compressor1Threshold Control `nrpn:"0.111"` // 0 = -60 dB, 60 = 0 dB
+	Compressor1Attack    Control `nrpn:"0.112"`
+	Compressor1Release   Control `nrpn:"0.113"`
+	Compressor1Hold      Control `nrpn:"0.114"`
+	Compressor1Gain      Control `nrpn:"0.115"`
+	Compressor2Ratio     Control `nrpn:"0.116"`
+	Compressor2Threshold Control `nrpn:"0.117"` // 0 = -60 dB, 60 = 0 dB
+	Compressor2Attack    Control `nrpn:"0.118"`
+	Compressor2Release   Control `nrpn:"0.119"`
+	Compressor2Hold      Control `nrpn:"0.120"`
+	Compressor2Gain      Control `nrpn:"0.121"`
+
+	Distortion1Type         Control `nrpn:"1.0"` // See Filter1DriveType for the distortion shapes
+	Distortion1Compensation Control `nrpn:"1.1"`
+	Distortion1Level        Control `nrpn:"1.2"` // 52 = -12 dB, 82 = +18 dB
+	Distortion2Type         Control `nrpn:"1.3"`
+	Distortion2Compensation Control `nrpn:"1.4"`
+	Distortion2Level        Control `nrpn:"1.5"` // 52 = -12 dB, 82 = +18 dB
+
+	Delay1Time     Control `nrpn:"1.6"`
+	Delay1TimeSync Control `nrpn:"1.7"` // 0-35, sync division table
+	Delay1Feedback Control `nrpn:"1.8"`
+	Delay1Width    Control `nrpn:"1.9"`
+	Delay1LRRatio  Control `nrpn:"1.10"` // 0-12, left/right time ratio
+	Delay1SlewRate Control `nrpn:"1.11"`
+	Delay2Time     Control `nrpn:"1.12"`
+	Delay2TimeSync Control `nrpn:"1.13"`
+	Delay2Feedback Control `nrpn:"1.14"`
+	Delay2Width    Control `nrpn:"1.15"`
+	Delay2LRRatio  Control `nrpn:"1.16"`
+	Delay2SlewRate Control `nrpn:"1.17"`
+
+	Reverb1Type    Control `nrpn:"1.18"` // 0 chamber, 1 small room, 2 large room, 3 small hall, 4 large hall, 5 great hall
+	Reverb1Decay   Control `nrpn:"1.19"`
+	Reverb1Damping Control `nrpn:"1.20"`
+	Reverb2Type    Control `nrpn:"1.21"`
+	Reverb2Decay   Control `nrpn:"1.22"`
+	Reverb2Damping Control `nrpn:"1.23"`
+
+	// Chorus1Type is 0 phaser or 1 chorus, so a chorus slot in phaser mode
+	// ignores the depth and delay fields below.
+	Chorus1Type     Control `nrpn:"1.24"` // 0 phaser, 1 chorus
+	Chorus1Rate     Control `nrpn:"1.25"`
+	Chorus1RateSync Control `nrpn:"1.26"` // 0-35, sync division table
+	Chorus1Feedback Control `nrpn:"1.27"` // 64 = 0, mapped onto -64..+63
+	Chorus1ModDepth Control `nrpn:"1.28"`
+	Chorus1Delay    Control `nrpn:"1.29"`
+	Chorus2Type     Control `nrpn:"1.30"`
+	Chorus2Rate     Control `nrpn:"1.31"`
+	Chorus2RateSync Control `nrpn:"1.32"`
+	Chorus2Feedback Control `nrpn:"1.33"`
+	Chorus2ModDepth Control `nrpn:"1.34"`
+	Chorus2Delay    Control `nrpn:"1.35"`
+	Chorus3Type     Control `nrpn:"1.36"`
+	Chorus3Rate     Control `nrpn:"1.37"`
+	Chorus3RateSync Control `nrpn:"1.38"`
+	Chorus3Feedback Control `nrpn:"1.39"`
+	Chorus3ModDepth Control `nrpn:"1.40"`
+	Chorus3Delay    Control `nrpn:"1.41"`
+	Chorus4Type     Control `nrpn:"1.42"`
+	Chorus4Rate     Control `nrpn:"1.43"`
+	Chorus4RateSync Control `nrpn:"1.44"`
+	Chorus4Feedback Control `nrpn:"1.45"`
+	Chorus4ModDepth Control `nrpn:"1.46"`
+	Chorus4Delay    Control `nrpn:"1.47"`
+
+	// The gator is a step arpeggiator. Its three switches share NRPN 0.122
+	// with the envelope and LFO switches; 0.122 LSB 51 is the one gap in
+	// that block.
+	GatorOn       Control `nrpn:"0.122"` // 52 off, 53 on
+	GatorKeySync  Control `nrpn:"0.122"` // 54 free running, 55 restarted by each key
+	GatorKeyLatch Control `nrpn:"0.122"` // 56 latch off, 57 latch on
+	GatorRateSync Control `nrpn:"1.49"`  // 0-35, sync division table
+	GatorMode     Control `nrpn:"1.50"`  // 0-5, mono or stereo crossed with 16 note or two alternates
+	GatorEdgeSlew Control `nrpn:"1.52"`
+	GatorHold     Control `nrpn:"1.53"`
+	GatorLRDelay  Control `nrpn:"1.54"` // 64 = 0, mapped onto -64..+63
+
+	// The thirty two gator step levels, 0-7 each.
+	GatorLevel1  Control `nrpn:"5.0"`
+	GatorLevel2  Control `nrpn:"5.1"`
+	GatorLevel3  Control `nrpn:"5.2"`
+	GatorLevel4  Control `nrpn:"5.3"`
+	GatorLevel5  Control `nrpn:"5.4"`
+	GatorLevel6  Control `nrpn:"5.5"`
+	GatorLevel7  Control `nrpn:"5.6"`
+	GatorLevel8  Control `nrpn:"5.7"`
+	GatorLevel9  Control `nrpn:"5.8"`
+	GatorLevel10 Control `nrpn:"5.9"`
+	GatorLevel11 Control `nrpn:"5.10"`
+	GatorLevel12 Control `nrpn:"5.11"`
+	GatorLevel13 Control `nrpn:"5.12"`
+	GatorLevel14 Control `nrpn:"5.13"`
+	GatorLevel15 Control `nrpn:"5.14"`
+	GatorLevel16 Control `nrpn:"5.15"`
+	GatorLevel17 Control `nrpn:"5.16"`
+	GatorLevel18 Control `nrpn:"5.17"`
+	GatorLevel19 Control `nrpn:"5.18"`
+	GatorLevel20 Control `nrpn:"5.19"`
+	GatorLevel21 Control `nrpn:"5.20"`
+	GatorLevel22 Control `nrpn:"5.21"`
+	GatorLevel23 Control `nrpn:"5.22"`
+	GatorLevel24 Control `nrpn:"5.23"`
+	GatorLevel25 Control `nrpn:"5.24"`
+	GatorLevel26 Control `nrpn:"5.25"`
+	GatorLevel27 Control `nrpn:"5.26"`
+	GatorLevel28 Control `nrpn:"5.27"`
+	GatorLevel29 Control `nrpn:"5.28"`
+	GatorLevel30 Control `nrpn:"5.29"`
+	GatorLevel31 Control `nrpn:"5.30"`
+	GatorLevel32 Control `nrpn:"5.31"`
+
+	// The vocoder. Its five switches share NRPN 0.122 with the envelope, LFO,
+	// gator and arpeggiator switches; the range starts where the gator's
+	// ends.
+	VocoderOn             Control `nrpn:"0.122"` // 58 off, 59 on
+	VocoderSibilanceType  Control `nrpn:"0.122"` // 60 high pass, 61 noise
+	VocoderFreeze         Control `nrpn:"0.122"` // 62 running, 63 frozen
+	VocoderAllMax         Control `nrpn:"0.122"` // 64 off, 65 on
+	VocoderInput          Control `nrpn:"0.122"` // 66 audio in, 67 vocoder output
+	VocoderWidth          Control `nrpn:"1.57"`
+	VocoderSibilance      Control `nrpn:"1.58"`
+	VocoderSpecShift      Control `nrpn:"1.59"` // 64 = 0, mapped onto -64..+63
+	VocoderSpecSpread     Control `nrpn:"1.60"` // 64 = 0, mapped onto -64..+63
+	VocoderLevel          Control `nrpn:"1.71"`
+	VocoderCarrierLevel   Control `nrpn:"1.72"`
+	VocoderModulatorLevel Control `nrpn:"1.73"`
+	VocoderResonance      Control `nrpn:"1.74"`
+	VocoderDecay          Control `nrpn:"1.75"`
+	VocoderGateThreshold  Control `nrpn:"1.76"` // 0 = -96 dB, 96 = 0 dB
+	VocoderGateRelease    Control `nrpn:"1.77"`
+
+	// The thirty two vocal tune spectrum band levels, which the resample
+	// command below fills from the audio input.
+	VocoderSpectrumLevel1  Control `nrpn:"6.0"`
+	VocoderSpectrumLevel2  Control `nrpn:"6.1"`
+	VocoderSpectrumLevel3  Control `nrpn:"6.2"`
+	VocoderSpectrumLevel4  Control `nrpn:"6.3"`
+	VocoderSpectrumLevel5  Control `nrpn:"6.4"`
+	VocoderSpectrumLevel6  Control `nrpn:"6.5"`
+	VocoderSpectrumLevel7  Control `nrpn:"6.6"`
+	VocoderSpectrumLevel8  Control `nrpn:"6.7"`
+	VocoderSpectrumLevel9  Control `nrpn:"6.8"`
+	VocoderSpectrumLevel10 Control `nrpn:"6.9"`
+	VocoderSpectrumLevel11 Control `nrpn:"6.10"`
+	VocoderSpectrumLevel12 Control `nrpn:"6.11"`
+	VocoderSpectrumLevel13 Control `nrpn:"6.12"`
+	VocoderSpectrumLevel14 Control `nrpn:"6.13"`
+	VocoderSpectrumLevel15 Control `nrpn:"6.14"`
+	VocoderSpectrumLevel16 Control `nrpn:"6.15"`
+	VocoderSpectrumLevel17 Control `nrpn:"6.16"`
+	VocoderSpectrumLevel18 Control `nrpn:"6.17"`
+	VocoderSpectrumLevel19 Control `nrpn:"6.18"`
+	VocoderSpectrumLevel20 Control `nrpn:"6.19"`
+	VocoderSpectrumLevel21 Control `nrpn:"6.20"`
+	VocoderSpectrumLevel22 Control `nrpn:"6.21"`
+	VocoderSpectrumLevel23 Control `nrpn:"6.22"`
+	VocoderSpectrumLevel24 Control `nrpn:"6.23"`
+	VocoderSpectrumLevel25 Control `nrpn:"6.24"`
+	VocoderSpectrumLevel26 Control `nrpn:"6.25"`
+	VocoderSpectrumLevel27 Control `nrpn:"6.26"`
+	VocoderSpectrumLevel28 Control `nrpn:"6.27"`
+	VocoderSpectrumLevel29 Control `nrpn:"6.28"`
+	VocoderSpectrumLevel30 Control `nrpn:"6.29"`
+	VocoderSpectrumLevel31 Control `nrpn:"6.30"`
+	VocoderSpectrumLevel32 Control `nrpn:"6.31"`
+	// This one is a command rather than a stored value: the chart gives it a
+	// single legal value, 1.
+	VocoderSpectrumResample Control `nrpn:"6.32"`
+
+	// The arpeggiator. Only patterns 0-18 are implemented, so the chart's
+	// 0-32 range overstates it.
+	ArpOn       Control `nrpn:"0.122"` // 46 off, 47 on
+	ArpKeyLatch Control `nrpn:"0.122"` // 50 latch off, 51 latch on
+	ArpOctaves  Control `nrpn:"1.62"`  // 0-3, mapped onto 1-4 octaves
+	ArpRateSync Control `nrpn:"1.63"`  // 0-18, a subset of the sync table
+	ArpGate     Control `nrpn:"1.64"`  // 1-127
+	ArpMode     Control `nrpn:"1.65"`  // 0 up, 1 down, 2 up/down, 3 up/down 2, 4 played, 5 random, 6 chord
+	ArpPattern  Control `nrpn:"1.66"`  // 0-18, the implemented subset of the chart's 0-32
+	ArpSwing    Control `nrpn:"1.68"`  // 1-99
+	// A compatibility flag the UltraNova shares, not a MiniNova sound
+	// parameter.
+	ArpMininova Control `nrpn:"127.127"` // 0-1
+
+	// The eight arpeggiator step gates, plus the step count that decides how
+	// many of them are read.
+	ArpLength Control `nrpn:"60.40"` // 2-8
+	Arp1Step  Control `nrpn:"60.32"` // 0 step 1 off, 1 step 1 on
+	Arp2Step  Control `nrpn:"60.33"`
+	Arp3Step  Control `nrpn:"60.34"`
+	Arp4Step  Control `nrpn:"60.35"`
+	Arp5Step  Control `nrpn:"60.36"`
+	Arp6Step  Control `nrpn:"60.37"`
+	Arp7Step  Control `nrpn:"60.38"`
+	Arp8Step  Control `nrpn:"60.39"`
+
+	// The chorder plays a chord of fixed intervals. ChorderKey1 is the root
+	// and is implicit; the nine fields below are keys 2 to 10, each a number
+	// of semitones from the root.
+	ChorderTranspose Control `nrpn:"1.78"` // 53 = -11 semitones, 75 = +11 semitones
+	ChorderOn        Control `nrpn:"1.79"` // 0 off, 1 on
+	ChorderCount     Control `nrpn:"7.16"` // 0-10
+	ChorderKey1      Control `nrpn:"7.17"`
+	ChorderKey2      Control `nrpn:"7.18"`
+	ChorderKey3      Control `nrpn:"7.19"`
+	ChorderKey4      Control `nrpn:"7.20"`
+	ChorderKey5      Control `nrpn:"7.21"`
+	ChorderKey6      Control `nrpn:"7.22"`
+	ChorderKey7      Control `nrpn:"7.23"`
+	ChorderKey8      Control `nrpn:"7.24"`
+	ChorderKey9      Control `nrpn:"7.25"`
+
+	// Vocal tune. Its mode and insert point share NRPN 1.123 with the three
+	// LFO fade modes and ModMatrix9Source1, and the chart prints the insert
+	// range as 25-27 while mapping it onto 20-22; the two are kept as printed
+	// because the receive range is what a sender has to produce.
+	VocalTuneShift           Control `nrpn:"1.80"`  // 40 = -24 semitones, 88 = +24 semitones
+	VocalTuneBend            Control `nrpn:"1.81"`  // 40 = -24 semitones, 88 = +24 semitones
+	VocalTuneMode            Control `nrpn:"1.123"` // 16 off, 17 scale correction, 18 keyboard control, 19 pitch
+	VocalTuneInsert          Control `nrpn:"1.123"` // 20-22 as received, mapped onto 20 pre filter, 21 post filter, 22 pre effects
+	VocalTuneScaleType       Control `nrpn:"2.56"`  // 0 played, 1 chromatic, 2 major, 3 natural minor, 4 harmonic minor, 5 melodic minor
+	VocalTuneScaleKey        Control `nrpn:"2.57"`  // 0 C ... 11 B
+	VocalTuneCorrectionTime  Control `nrpn:"2.58"`
+	VocalTuneLevel           Control `nrpn:"2.59"`
+	VocalTuneVibrato         Control `nrpn:"2.60"`
+	VocalTuneVibratoModWheel Control `nrpn:"2.61"`
+	VocalTuneVibratoRate     Control `nrpn:"2.62"`
+
+	// The twenty slot modulation matrix. Slot 1 starts at NRPN 1.83 and
+	// slots 2 to 9 continue to 1.127; slot 10 wraps to MSB 2 and slots 10 to
+	// 20 run from 2.0 to 2.54. Each slot is a source, a second source, an
+	// animate trigger, a bipolar depth and a destination. The chart puts
+	// slot 9's first source on 1.123, where the LFO fade modes already sit.
+	ModMatrix1Source1      Control `nrpn:"1.83"` // 0-18, see ModMatrix20Destination for the shared codes
+	ModMatrix1Source2      Control `nrpn:"1.84"`
+	ModMatrix1AnimTrigger  Control `nrpn:"1.85"` // 0-8, retrigger or enable an animate source
+	ModMatrix1Depth        Control `nrpn:"1.86"` // 64 = 0, mapped onto -64..+63
+	ModMatrix1Destination  Control `nrpn:"1.87"` // 0-69, destination table
+	ModMatrix2Source1      Control `nrpn:"1.88"`
+	ModMatrix2Source2      Control `nrpn:"1.89"`
+	ModMatrix2AnimTrigger  Control `nrpn:"1.90"`
+	ModMatrix2Depth        Control `nrpn:"1.91"`
+	ModMatrix2Destination  Control `nrpn:"1.92"`
+	ModMatrix3Source1      Control `nrpn:"1.93"`
+	ModMatrix3Source2      Control `nrpn:"1.94"`
+	ModMatrix3AnimTrigger  Control `nrpn:"1.95"`
+	ModMatrix3Depth        Control `nrpn:"1.96"`
+	ModMatrix3Destination  Control `nrpn:"1.97"`
+	ModMatrix4Source1      Control `nrpn:"1.98"`
+	ModMatrix4Source2      Control `nrpn:"1.99"`
+	ModMatrix4AnimTrigger  Control `nrpn:"1.100"` // 0-8, retrigger or enable an animate source
+	ModMatrix4Depth        Control `nrpn:"1.101"` // 64 = 0, mapped onto -64..+63
+	ModMatrix4Destination  Control `nrpn:"1.102"` // 0-69, destination table
+	ModMatrix5Source1      Control `nrpn:"1.103"`
+	ModMatrix5Source2      Control `nrpn:"1.104"`
+	ModMatrix5AnimTrigger  Control `nrpn:"1.105"`
+	ModMatrix5Depth        Control `nrpn:"1.106"`
+	ModMatrix5Destination  Control `nrpn:"1.107"`
+	ModMatrix6Source1      Control `nrpn:"1.108"`
+	ModMatrix6Source2      Control `nrpn:"1.109"`
+	ModMatrix6AnimTrigger  Control `nrpn:"1.110"`
+	ModMatrix6Depth        Control `nrpn:"1.111"`
+	ModMatrix6Destination  Control `nrpn:"1.112"`
+	ModMatrix7Source1      Control `nrpn:"1.113"`
+	ModMatrix7Source2      Control `nrpn:"1.114"`
+	ModMatrix7AnimTrigger  Control `nrpn:"1.115"`
+	ModMatrix7Depth        Control `nrpn:"1.116"`
+	ModMatrix7Destination  Control `nrpn:"1.117"`
+	ModMatrix8Source1      Control `nrpn:"1.118"`
+	ModMatrix8Source2      Control `nrpn:"1.119"`
+	ModMatrix8AnimTrigger  Control `nrpn:"1.120"`
+	ModMatrix8Depth        Control `nrpn:"1.121"`
+	ModMatrix8Destination  Control `nrpn:"1.122"`
+	ModMatrix9Source1      Control `nrpn:"1.123"`
+	ModMatrix9Source2      Control `nrpn:"1.124"`
+	ModMatrix9AnimTrigger  Control `nrpn:"1.125"`
+	ModMatrix9Depth        Control `nrpn:"1.126"`
+	ModMatrix9Destination  Control `nrpn:"1.127"`
+	ModMatrix10Source1     Control `nrpn:"2.0"`
+	ModMatrix10Source2     Control `nrpn:"2.1"`
+	ModMatrix10AnimTrigger Control `nrpn:"2.2"`
+	ModMatrix10Depth       Control `nrpn:"2.3"`
+	ModMatrix10Destination Control `nrpn:"2.4"`
+	ModMatrix11Source1     Control `nrpn:"2.5"`
+	ModMatrix11Source2     Control `nrpn:"2.6"`
+	ModMatrix11AnimTrigger Control `nrpn:"2.7"`
+	ModMatrix11Depth       Control `nrpn:"2.8"`
+	ModMatrix11Destination Control `nrpn:"2.9"`
+	ModMatrix12Source1     Control `nrpn:"2.10"`
+	ModMatrix12Source2     Control `nrpn:"2.11"`
+	ModMatrix12AnimTrigger Control `nrpn:"2.12"`
+	ModMatrix12Depth       Control `nrpn:"2.13"`
+	ModMatrix12Destination Control `nrpn:"2.14"`
+	ModMatrix13Source1     Control `nrpn:"2.15"`
+	ModMatrix13Source2     Control `nrpn:"2.16"`
+	ModMatrix13AnimTrigger Control `nrpn:"2.17"`
+	ModMatrix13Depth       Control `nrpn:"2.18"`
+	ModMatrix13Destination Control `nrpn:"2.19"`
+	ModMatrix14Source1     Control `nrpn:"2.20"`
+	ModMatrix14Source2     Control `nrpn:"2.21"`
+	ModMatrix14AnimTrigger Control `nrpn:"2.22"`
+	ModMatrix14Depth       Control `nrpn:"2.23"`
+	ModMatrix14Destination Control `nrpn:"2.24"`
+	ModMatrix15Source1     Control `nrpn:"2.25"`
+	ModMatrix15Source2     Control `nrpn:"2.26"`
+	ModMatrix15AnimTrigger Control `nrpn:"2.27"`
+	ModMatrix15Depth       Control `nrpn:"2.28"`
+	ModMatrix15Destination Control `nrpn:"2.29"`
+	ModMatrix16Source1     Control `nrpn:"2.30"`
+	ModMatrix16Source2     Control `nrpn:"2.31"`
+	ModMatrix16AnimTrigger Control `nrpn:"2.32"`
+	ModMatrix16Depth       Control `nrpn:"2.33"`
+	ModMatrix16Destination Control `nrpn:"2.34"`
+	ModMatrix17Source1     Control `nrpn:"2.35"`
+	ModMatrix17Source2     Control `nrpn:"2.36"`
+	ModMatrix17AnimTrigger Control `nrpn:"2.37"`
+	ModMatrix17Depth       Control `nrpn:"2.38"`
+	ModMatrix17Destination Control `nrpn:"2.39"`
+	ModMatrix18Source1     Control `nrpn:"2.40"`
+	ModMatrix18Source2     Control `nrpn:"2.41"`
+	ModMatrix18AnimTrigger Control `nrpn:"2.42"`
+	ModMatrix18Depth       Control `nrpn:"2.43"`
+	ModMatrix18Destination Control `nrpn:"2.44"`
+	ModMatrix19Source1     Control `nrpn:"2.45"`
+	ModMatrix19Source2     Control `nrpn:"2.46"`
+	ModMatrix19AnimTrigger Control `nrpn:"2.47"`
+	ModMatrix19Depth       Control `nrpn:"2.48"`
+	ModMatrix19Destination Control `nrpn:"2.49"`
+	ModMatrix20Source1     Control `nrpn:"2.50"`
+	ModMatrix20Source2     Control `nrpn:"2.51"`
+	ModMatrix20AnimTrigger Control `nrpn:"2.52"`
+	ModMatrix20Depth       Control `nrpn:"2.53"`
+	ModMatrix20Destination Control `nrpn:"2.54"`
+
+	// The eight tweak slots, each naming one patch parameter that the front
+	// panel knobs then control. The chart's tweak table numbers them 0-125.
+	TweakAssignment1 Control `nrpn:"4.0"`
+	TweakAssignment2 Control `nrpn:"4.1"`
+	TweakAssignment3 Control `nrpn:"4.2"`
+	TweakAssignment4 Control `nrpn:"4.3"`
+	TweakAssignment5 Control `nrpn:"4.4"`
+	TweakAssignment6 Control `nrpn:"4.5"`
+	TweakAssignment7 Control `nrpn:"4.6"`
+	TweakAssignment8 Control `nrpn:"4.7"`
+
+	// The chart lists 40-240 BPM here, past what one 7-bit data entry can
+	// carry, so only the bottom of the range is reachable this way.
+	TempoRate Control `nrpn:"2.63"`
+
+	// Both of these act on the instrument when they arrive rather than
+	// storing a value: 1 asks for the current patch as a program change and
+	// 2 steps to the next patch.
+	PatchSelect Control `nrpn:"63.0"` // 0 decrement patch, 1 get program change, 2 increment patch
+	BankSelect  Control `nrpn:"63.1"` // 1 bank A, 2 bank B, 3 bank C
+
+	// Global mode. These take effect only while the instrument is in its
+	// global menu, which is where the chart's header note about editing
+	// with data entry MSB applies.
+	GlobalProtect          Control `nrpn:"64.0"`  // 0 protect off, 1 protect on
+	GlobalMIDIChannel      Control `nrpn:"64.4"`  // 0-15
+	GlobalTuningCents      Control `nrpn:"64.6"`  // 15 = -50 cents, 114 = +50 cents
+	GlobalTranspose        Control `nrpn:"64.7"`  // 40 = -24 semitones, 88 = +24 semitones
+	GlobalVelocityCurve    Control `nrpn:"64.9"`  // 0 low, 1 medium, 2 high, 3 switch, 4-127 fixed velocity
+	GlobalClockSource      Control `nrpn:"64.11"` // 0 internal, 1 USB, 2 DIN, 3 auto
+	GlobalSustainPedalMode Control `nrpn:"64.14"` // 0 auto, 1 normally open, 2 normally closed
+	GlobalWheelLights      Control `nrpn:"64.20"` // 0 off, 1 on
+	GlobalPotPickup        Control `nrpn:"64.21"` // 0 off, 1 on
+	GlobalStandbyMode      Control `nrpn:"64.22"` // 0 off, 1 on, 2 after ten minutes
+	GlobalArpMIDI          Control `nrpn:"64.23"` // 0 MIDI into arpeggiator, 1 arpeggiator out to MIDI
+	GlobalAudioInputGain   Control `nrpn:"64.28"` // 21 off, 22-97 as -10 dB to +65 dB in 1 dB steps
+	GlobalAudioInputFX     Control `nrpn:"64.30"`
+}
+
 type Model struct {
 	Model               string
 	*GMController       `json:"GMController,omitempty"`
@@ -1405,6 +2153,7 @@ type Model struct {
 	*MeeblipTriode      `json:"MeeblipTriode,omitempty"`
 	*MidiMix            `json:"MidiMix,omitempty"`
 	*MicrokorgXL        `json:"MicrokorgXL,omitempty"`
+	*MiniNova           `json:"MiniNova,omitempty"`
 	*PerformVE          `json:"PerformVE,omitempty"`
 	*Skulpt             `json:"Skulpt,omitempty"`
 	*SoundController    `json:"SoundController,omitempty"`
@@ -1438,6 +2187,7 @@ var modelNames = []string{
 	"microKORG XL",
 	"MicroKorg",
 	"Perform-VE",
+	"MiniNova",
 }
 
 // ModelNames returns the canonical model names accepted by NewModelParams.
@@ -1549,6 +2299,11 @@ func (m *Model) MidiParams() any {
 			m.PerformVE = &PerformVE{}
 		}
 		return m.PerformVE
+	case "MiniNova":
+		if m.MiniNova == nil {
+			m.MiniNova = &MiniNova{}
+		}
+		return m.MiniNova
 	default:
 		panic("unknown model " + m.Model)
 	}

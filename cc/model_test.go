@@ -25,6 +25,7 @@ func TestModelNames(t *testing.T) {
 		"microKORG XL",
 		"MicroKorg",
 		"Perform-VE",
+		"MiniNova",
 	}
 	got := ModelNames()
 	if !reflect.DeepEqual(got, want) {
