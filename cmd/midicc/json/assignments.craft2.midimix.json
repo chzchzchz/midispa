@@ -14,7 +14,7 @@
 	["Knob1x1", "FegAttack"],
 	["Knob1x2", "FegDecay"],
 	["Knob1x3", "FegSustain"],
-	["Knob1x4", "FegRelease"]
+	["Knob1x4", "FegRelease"],
 	["Knob1x5", "FegAmount"],
 
 	["Knob2x1", "AegAttack"],
@@ -64,4 +64,5 @@
 	["Knob2x3", "DelayMidiSync"],
 	["Knob2x4", "Lfo1MidiSync"],
 	["Knob2x5", "Lfo2MidiSync"]
+  ]
 }

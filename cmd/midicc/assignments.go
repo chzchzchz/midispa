@@ -30,6 +30,10 @@ func (a *Assignments) feedback(write func(alsa.SeqEvent) error, data []byte) err
 	return write(alsa.SeqEvent{SeqAddr: a.saIn, Data: data})
 }
 
+// armPrefix marks a target that arms other inputs instead of driving a
+// control, as in "Arm:Knob1,Knob2" or "Arm:*" for every direct mapping.
+const armPrefix = "Arm:"
+
 type Mapping struct {
 	OutControl string
 	Channel    int
@@ -39,20 +43,24 @@ type Mapping struct {
 	arms []string
 }
 
-func (a *Assignments) setupMap() {
+// setupMap builds the in2out and out2in lookups. A target is one of
+// "control", "control/channel" or "Arm:a,b", where the last arms other inputs
+// when this one is pressed.
+func (a *Assignments) setupMap() error {
 	mayArm, mayArmAll := make(map[string]struct{}), false
 	a.in2out = make(map[string]*Mapping)
 	a.out2in = make(map[string]string)
 	for _, v := range a.Maps {
-		slash := strings.Split(v[1], "/")
+		control, channel, hasChannel := strings.Cut(v[1], "/")
 		m := &Mapping{OutControl: v[1], Armed: true}
-		if len(slash) > 1 {
-			m.OutControl = slash[0]
-			if _, err := fmt.Sscanf(slash[1], "%d", &m.Channel); err != nil {
-				panic(err)
+		if hasChannel {
+			m.OutControl = control
+			if _, err := fmt.Sscanf(channel, "%d", &m.Channel); err != nil {
+				return fmt.Errorf("map %q: target %q has no channel number: %w", v[0], v[1], err)
 			}
-		} else if strings.HasPrefix(v[1], "Arm:") {
-			arg := strings.Split(v[1], ":")[0]
+		} else if arg, ok := strings.CutPrefix(v[1], armPrefix); ok {
+			// The armed inputs are what follows "Arm:", not what precedes the
+			// colon, which is just the prefix itself.
 			m.OutControl = ""
 			m.arms = strings.Split(arg, ",")
 			if arg == "*" {
@@ -75,6 +83,7 @@ func (a *Assignments) setupMap() {
 			m.MayArm = true
 		}
 	}
+	return nil
 }
 
 func (a *Assignments) Enable() {
@@ -119,7 +128,9 @@ func (a *Assignments) InToOut(in string) (string, int) {
 func mustLoadAssignments(path string) (m []Assignments) {
 	m = util.MustLoadJSONFile[Assignments](path)
 	for i := range m {
-		m[i].setupMap()
+		if err := m[i].setupMap(); err != nil {
+			panic(fmt.Sprintf("%s: assignment %d (%q): %v", path, i, m[i].Title, err))
+		}
 	}
 	return m
 }
