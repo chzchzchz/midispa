@@ -29,14 +29,10 @@ func isPadRelease(status byte, velocity int) bool {
 
 // SelectedVoice returns the voice controlled by the selected mute row.
 func (p *PatternBank) SelectedVoice() *Voice {
-	if p == nil || p.selTrackRow < 1 || p.selTrackRow > len(p.trackVoices) || p.vb == nil {
+	if p == nil {
 		return nil
 	}
-	index := p.trackVoices[p.selTrackRow-1]
-	if index < 0 || index >= len(p.vb.voices) {
-		return nil
-	}
-	return p.vb.voices[index]
+	return p.trackVoice(p.selTrackRow)
 }
 
 func (p *PatternBank) StepCursor() int {
@@ -99,7 +95,7 @@ func (p *PatternBank) syncChromaticVelocity() {
 
 // redrawPatternRows keeps all step rows synchronized after a cursor or note edit.
 func (p *PatternBank) redrawPatternRows() error {
-	for row := 1; row <= 4; row++ {
+	for row := 1; row <= padRows; row++ {
 		if err := p.redrawTrackPads(row); err != nil {
 			return err
 		}
@@ -154,7 +150,7 @@ func (p *PatternBank) clearPadState() {
 		return
 	}
 	p.pressedPads = 0
-	p.rowPadMasks = [4]uint16{}
+	p.rowPadMasks = [padRows]uint16{}
 }
 
 func (p *PatternBank) pressPad(row, col int) bool {
@@ -234,19 +230,13 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 	if !newPad {
 		return true, nil
 	}
-	if row < 0 || row >= len(p.trackVoices) {
+	pressedVoice := p.trackVoice(row + 1)
+	if pressedVoice == nil {
+		// The pad row holds no track, so there is nothing to edit or tie there.
 		return true, nil
 	}
 	if row != p.selTrackRow-1 {
-		if p.vb == nil {
-			return true, nil
-		}
-		voiceIndex := p.trackVoices[row]
-		if voiceIndex < 0 || voiceIndex >= len(p.vb.voices) {
-			return true, nil
-		}
-		pressedVoice := p.vb.voices[voiceIndex]
-		if pressedVoice != nil && pressedVoice.IsChromatic() {
+		if pressedVoice.IsChromatic() {
 			return true, nil
 		}
 		return false, nil

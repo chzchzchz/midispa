@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"sync/atomic"
 
 	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/sysex/akai"
@@ -68,10 +69,49 @@ var (
 
 type Fire struct {
 	write writeFunc
+	// dark drops display output while a blackout is in effect. The playback worker
+	// draws from its own goroutine, so this is read across goroutines.
+	dark atomic.Bool
+	// blanking is set only while a blackout blanks the display, so that the clear is
+	// not suppressed by the flag the blackout has just set.
+	blanking atomic.Bool
 }
 
 func NewFire(w writeFunc) *Fire {
-	return &Fire{w}
+	return &Fire{write: w}
+}
+
+// Blackout turns the display off and keeps it off. It goes dark before clearing, so a
+// playhead draw landing mid-clear cannot light a pad that then stays lit for the rest
+// of the blackout. A blackout suppresses all display output; the blanking clear is the
+// one exception.
+func (f *Fire) Blackout() error {
+	if f == nil {
+		return nil
+	}
+	f.dark.Store(true)
+	f.blanking.Store(true)
+	defer f.blanking.Store(false)
+	return f.Off()
+}
+
+// out reports whether display output should be written.
+func (f *Fire) out() bool {
+	return !f.dark.Load() || f.blanking.Load()
+}
+
+// Wake reports whether the display was dark, so the caller can redraw what the blackout
+// cleared and restore the button lights.
+func (f *Fire) Wake() bool {
+	if f == nil {
+		return false
+	}
+	return f.dark.Swap(false)
+}
+
+// IsDark reports whether a blackout is in effect, which is the state a wake reacts to.
+func (f *Fire) IsDark() bool {
+	return f != nil && f.dark.Load()
 }
 
 func Note2Grid(n int) (int, int, bool) {
@@ -114,6 +154,9 @@ func (f *Fire) PadsOff() error {
 }
 
 func (f *Fire) SetLed(n, v int) error {
+	if !f.out() {
+		return nil
+	}
 	return f.write([]byte{midi.MakeCC(0), byte(n), byte(v)})
 }
 
@@ -136,6 +179,10 @@ func (f *Fire) PrintInvert(x, y int, s string) error {
 func (f *Fire) printFont(x, y int, s string, font func(byte) []byte) error {
 	if len(s)+x >= 128/6 || x < 0 || y < 0 || y >= 8 {
 		return errOutOfRange
+	}
+	// Validation stays ahead of the blackout check so a coordinate bug still shows up.
+	if !f.out() {
+		return nil
 	}
 	var bmp []byte
 	for _, v := range s {
@@ -170,6 +217,10 @@ func (f *Fire) ClearOLEDRows(y, n int) error {
 	// Validate the range before sizing the bitmap so malformed UI coordinates return an error instead of panicking.
 	if n <= 0 || y < 0 || y >= 8 || n > 8-y {
 		return errOutOfRange
+	}
+	// Validation stays ahead of the blackout check so a coordinate bug still shows up.
+	if !f.out() {
+		return nil
 	}
 	su := akai.ScreenUpdate{
 		BandStart:   y,
@@ -220,6 +271,9 @@ func (f *Fire) LightPadColumn(col int, vals [4][3]int) error {
 }
 
 func (f *Fire) LightPadSlice(pads []akai.Pad) error {
+	if !f.out() {
+		return nil
+	}
 	lp := akai.LightPads{Pads: pads}
 	v, err := lp.MarshalBinary()
 	if err != nil {

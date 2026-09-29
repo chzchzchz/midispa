@@ -96,11 +96,9 @@ func TestSetPatternCopiesEvents(t *testing.T) {
 		Channel: 1,
 		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
 	}})
-	pb := &PatternBank{
-		Patterns:  map[int]*Pattern{1: {}},
-		selPatIdx: 1,
-		f:         NewFire(func([]byte) error { return nil }),
-		vb:        vb,
+	pb := NewPatternBank(NewFire(func([]byte) error { return nil }), vb)
+	if err := pb.Jump(1); err != nil {
+		t.Fatal(err)
 	}
 	source := &Pattern{Events: []Event{{Beat: 1}}}
 	source.SetLengthSteps(8)

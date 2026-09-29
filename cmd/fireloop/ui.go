@@ -80,6 +80,83 @@ func exitPatternEditModes() error {
 	return nil
 }
 
+// releaseModifiers drops the engaged modifier buttons together with their lights, so a
+// mode switch cannot carry Alt or Shift into the mode that follows. An entry still on
+// the display is dropped as well, since it only means something while Shift is held.
+func releaseModifiers() error {
+	altOn = false
+	shiftOn = false
+	pendingNumber = 0
+	if patbank == nil || patbank.f == nil {
+		return nil
+	}
+	if err := patbank.f.SetLed(NoteAlt, LEDOff); err != nil {
+		return err
+	}
+	return patbank.f.SetLed(NoteShift, LEDOff)
+}
+
+// restoreIndicators re-applies the button lights, which a blackout turned off, so each
+// light again reports the state behind it.
+func restoreIndicators() error {
+	if patbank == nil || patbank.f == nil {
+		return nil
+	}
+	lights := map[int]int{
+		NoteAlt:      LEDOff,
+		NoteShift:    LEDOff,
+		NoteRecord:   LEDOff,
+		NoteMode:     LEDOff,
+		NoteOverview: LEDOff,
+		CCMuteLED1:   LEDOff,
+		CCMuteLED2:   LEDOff,
+		CCMuteLED3:   LEDOff,
+		CCMuteLED4:   LEDOff,
+	}
+	if altOn {
+		lights[NoteAlt] = LEDYellow
+	}
+	if shiftOn {
+		lights[NoteShift] = LEDRed
+	}
+	if patternClipboard != nil {
+		lights[NoteRecord] = LEDGreen
+	}
+	if patbank.editingNote {
+		lights[NoteMode] = LEDGreen
+	}
+	if patbank.editingLength {
+		lights[NoteOverview] = LEDRed
+	}
+	if patbank.selTrackRow >= 1 && patbank.selTrackRow <= padRows {
+		lights[CCMuteLED1+patbank.selTrackRow-1] = LEDGreen
+	}
+	for control, value := range lights {
+		if err := patbank.f.SetLed(control, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// wakeBlackout restores what the blackout cleared. A blackout is a display state: the
+// controls kept their state, so the lights and the view come back to match them. Only
+// the pattern view can be blacked out, so only that one is redrawn. The redraw is used
+// rather than Jump because the playback worker reads the selected pattern index, and a
+// blackout can happen while a pattern is playing.
+func wakeBlackout() error {
+	if patbank == nil || patbank.f == nil {
+		return nil
+	}
+	if !patbank.f.Wake() {
+		return nil
+	}
+	if err := restoreIndicators(); err != nil {
+		return err
+	}
+	return patbank.redraw()
+}
+
 func tapTempo() error {
 	// TODO: have this use the pads instead
 	if len(tapTempoTimes) > 0 {
@@ -127,6 +204,9 @@ func toggleAlt() error {
 func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
+	}
+	if err := wakeBlackout(); err != nil {
+		return err
 	}
 	status := ev.Data[0]
 	velocity := int(ev.Data[2])
@@ -184,13 +264,14 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		if err := exitPatternEditModes(); err != nil {
 			return err
 		}
+		if err := releaseModifiers(); err != nil {
+			return err
+		}
 		processEvent = processPatternEvent
 		if err := patbank.f.SetLed(NotePatternSong, LEDOff); err != nil {
 			return err
 		}
 		return patbank.Jump(0)
-	case NoteAlt:
-		return toggleAlt()
 	}
 	return nil
 }
@@ -200,13 +281,8 @@ func handlePatternMute(n int) error {
 		return err
 	}
 	if altOn {
-		if err := patbank.ClearTrackRow(n); err != nil {
-			return err
-		}
-		if err := toggleAlt(); err != nil {
-			return err
-		}
-		return patbank.Jump(0)
+		// Alt stays engaged, so a run of rows can be cleared without pressing it again.
+		return patbank.ClearTrackRow(n)
 	}
 	return patbank.SelectTrackRow(n)
 }
@@ -252,6 +328,9 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
+	if err := wakeBlackout(); err != nil {
+		return err
+	}
 	status := ev.Data[0]
 	velocity := int(ev.Data[2])
 	if x, y, ok := Note2Grid(int(ev.Data[1])); ok {
@@ -295,19 +374,28 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	case NoteGridRight:
 		return patbank.MoveStepCursor(1)
 	case NotePatternUp:
+		// Alt reuses the pattern buttons for the track window, which is why Alt
+		// stays lit until it is pressed again.
+		if altOn {
+			return patbank.ScrollTracks(1)
+		}
 		if err := stopPlayback(); err != nil {
 			return err
 		}
 		return patbank.Jump(1)
 	case NotePatternDown:
+		if altOn {
+			return patbank.ScrollTracks(-1)
+		}
 		if err := stopPlayback(); err != nil {
 			return err
 		}
 		return patbank.Jump(-1)
 	case NoteAlt:
-		if !altOn && shiftOn {
-			// Turn off lights but don't activate alt.
-			return patbank.f.Off()
+		if shiftOn {
+			// Blackout. The controls keep their state, so the next press brings the
+			// lights and screen back to it, the Alt light included.
+			return patbank.f.Blackout()
 		}
 		return toggleAlt()
 	case NoteMute1:
@@ -346,14 +434,11 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		}
 	case NoteStop:
 		if altOn {
-			// Clear pattern.
+			// Clear pattern. Alt stays engaged, so the track buttons keep scrolling.
 			if err := stopPlayback(); err != nil {
 				return err
 			}
-			if err := patbank.SetPattern(&Pattern{}); err != nil {
-				return err
-			}
-			return toggleAlt()
+			return patbank.SetPattern(&Pattern{})
 		}
 		return stopPlayback()
 	case NoteTap:
@@ -370,6 +455,9 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 			return err
 		}
 		if err := exitPatternEditModes(); err != nil {
+			return err
+		}
+		if err := releaseModifiers(); err != nil {
 			return err
 		}
 		processEvent = processSongEvent

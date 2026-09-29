@@ -2,22 +2,30 @@ package main
 
 import (
 	"fmt"
+	"sync"
 )
+
+// padRows is the number of hardware pad rows. The track window shows one track per row.
+const padRows = 4
 
 type PatternBank struct {
 	Patterns          map[int]*Pattern
 	selPatIdx         int
-	selTrackRow       int // valid rows [1,4]
+	selTrackRow       int // pad row [1,padRows], or 0 when no row is selected
+	trackOffset       int // zero-based track shown on the first pad row
 	editingLength     bool
 	editingNote       bool
 	stepCursor        int
 	chromaticVelocity int
 	pressedPads       uint64
-	rowPadMasks       [4]uint16
-	trackVoices       [4]int
+	rowPadMasks       [padRows]uint16
+	trackVoices       []int
 	f                 *Fire
 	vb                *VoiceBank
 	playback          *Playback
+	// trackMu guards the track window. The playback worker draws the visible tracks
+	// from its own goroutine, so scrolling must not race with it.
+	trackMu sync.RWMutex
 }
 
 func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
@@ -30,10 +38,148 @@ func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 		f:                 f,
 		vb:                vb,
 	}
-	for i := 0; i < 4; i++ {
+	ret.trackVoices = make([]int, padRows)
+	for i := range ret.trackVoices {
 		ret.trackVoices[i] = i % len(vb.voices)
 	}
 	return ret
+}
+
+// TrackCount is the number of tracks available in the current pattern.
+func (p *PatternBank) TrackCount() int {
+	if p == nil {
+		return 0
+	}
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	return len(p.trackVoices)
+}
+
+// TrackOffset is the zero-based track shown on the first pad row.
+func (p *PatternBank) TrackOffset() int {
+	if p == nil {
+		return 0
+	}
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	return p.trackOffset
+}
+
+// trackForPadRow maps a one-based pad row to its one-based track, or zero when the row holds none.
+func (p *PatternBank) trackForPadRow(row int) int {
+	if p == nil {
+		return 0
+	}
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	return p.trackForPadRowLocked(row)
+}
+
+func (p *PatternBank) trackForPadRowLocked(row int) int {
+	if row < 1 || row > padRows {
+		return 0
+	}
+	track := p.trackOffset + row - 1
+	if track < 0 || track >= len(p.trackVoices) {
+		return 0
+	}
+	return track + 1
+}
+
+// trackVoice resolves the voice assigned to the track behind a pad row.
+func (p *PatternBank) trackVoice(row int) *Voice {
+	if p == nil {
+		return nil
+	}
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	return p.trackVoiceLocked(row)
+}
+
+func (p *PatternBank) trackVoiceLocked(row int) *Voice {
+	track := p.trackForPadRowLocked(row)
+	if track == 0 {
+		return nil
+	}
+	return p.vb.voices[p.trackVoices[track-1]]
+}
+
+// visibleTrackVoices returns the voice on each pad row in row order, taking the window
+// lock once. A row with no track comes back nil, and one voice can sit on several rows.
+func (p *PatternBank) visibleTrackVoices() [padRows]*Voice {
+	var voices [padRows]*Voice
+	if p == nil {
+		return voices
+	}
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	for row := 1; row <= padRows; row++ {
+		voices[row-1] = p.trackVoiceLocked(row)
+	}
+	return voices
+}
+
+// maxTrackCount caps the window at one track per kit voice, so every track can be
+// given a real voice. A kit smaller than the pad grid keeps all four rows filled.
+func maxTrackCount(voices int) int {
+	if voices < padRows {
+		return padRows
+	}
+	return voices
+}
+
+// growTracksToLocked appends empty tracks so the window can reach them. Tracks past the
+// end of the kit wrap its voices, the same way a small kit fills every row.
+func (p *PatternBank) growTracksToLocked(count int) {
+	if limit := maxTrackCount(len(p.vb.voices)); count > limit {
+		count = limit
+	}
+	for len(p.trackVoices) < count {
+		p.trackVoices = append(p.trackVoices, len(p.trackVoices)%len(p.vb.voices))
+	}
+}
+
+// maxTrackOffsetLocked stops the window with the last track on the bottom row, so
+// scrolling never parks the pads on rows that have no track behind them.
+func (p *PatternBank) maxTrackOffsetLocked() int {
+	if len(p.trackVoices) <= padRows {
+		return 0
+	}
+	return len(p.trackVoices) - padRows
+}
+
+// ScrollTracks moves the visible track window. Scrolling past the last track adds
+// tracks instead of stopping, so a pattern only takes on the tracks the user reaches
+// and a large kit does not open on a track list too long to work with. Navigation
+// changes no notes, so playback keeps running.
+func (p *PatternBank) ScrollTracks(delta int) error {
+	if p == nil {
+		return nil
+	}
+	p.trackMu.Lock()
+	offset := p.trackOffset + delta
+	if offset > p.maxTrackOffsetLocked() {
+		p.growTracksToLocked(offset + padRows)
+		offset = p.maxTrackOffsetLocked()
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset == p.trackOffset {
+		p.trackMu.Unlock()
+		return nil
+	}
+	p.trackOffset = offset
+	// Released before the redraw, which reads the window again through trackVoice.
+	p.trackMu.Unlock()
+	p.editingNote = false
+	p.clearPadState()
+	if p.f != nil {
+		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+			return err
+		}
+	}
+	return p.redraw()
 }
 
 func (p *PatternBank) CurrentPattern() *Pattern {
@@ -110,20 +256,29 @@ func (p *PatternBank) Jump(n int) error {
 		}
 	}
 	p.clampStepCursor()
+	return p.redraw()
+}
+
+// headerText carries the track window so a scrolled pattern stays readable on the display.
+func (p *PatternBank) headerText() string {
+	return fmt.Sprintf("Pattern %03d %2d/%d", p.selPatIdx, p.TrackOffset()+1, p.TrackCount())
+}
+
+func (p *PatternBank) redraw() error {
 	if p.f == nil {
 		return nil
 	}
-	if err := p.f.Print(0, 0, fmt.Sprintf("Pattern %03d", p.selPatIdx)); err != nil {
+	if err := p.f.Print(0, 0, p.headerText()); err != nil {
 		return err
 	}
 	if err := p.f.Print(0, 1, "-----------"); err != nil {
 		return err
 	}
-	for i := 0; i < 4; i++ {
-		if err := p.redrawTrackPads(i + 1); err != nil {
+	for row := 1; row <= padRows; row++ {
+		if err := p.redrawTrackPads(row); err != nil {
 			return err
 		}
-		if err := p.printTrackRow(i+1, i+1 == p.selTrackRow); err != nil {
+		if err := p.printTrackRow(row, row == p.selTrackRow); err != nil {
 			return err
 		}
 	}
@@ -138,19 +293,19 @@ func (p *PatternBank) Jump(n int) error {
 	return p.printChromaticStatus()
 }
 
-func (p *PatternBank) ClearTrackRow(n int) error {
-	if n < 1 || n > 4 {
+func (p *PatternBank) ClearTrackRow(row int) error {
+	if p.trackForPadRow(row) == 0 {
 		return nil
 	}
 	if err := stopPlayback(); err != nil {
 		return err
 	}
-	v := p.vb.voices[p.trackVoices[n-1]]
+	voice := p.trackVoice(row)
 	pattern := p.CurrentPattern()
 	if pattern == nil {
 		return nil
 	}
-	pattern.ClearVoice(v)
+	pattern.ClearVoice(voice)
 	p.editingNote = false
 	p.clearPadState()
 	if p.f != nil {
@@ -158,19 +313,19 @@ func (p *PatternBank) ClearTrackRow(n int) error {
 			return err
 		}
 	}
-	for i := 0; i < 4; i++ {
-		if p.trackVoices[n-1] != p.trackVoices[i] {
+	for row, rowVoice := range p.visibleTrackVoices() {
+		if rowVoice != voice {
 			continue
 		}
-		if err := p.redrawTrackPads(i + 1); err != nil {
+		if err := p.redrawTrackPads(row + 1); err != nil {
 			return err
 		}
 	}
 	return p.printChromaticStatus()
 }
 
-func (p *PatternBank) SelectTrackRow(n int) error {
-	if n < 0 || n > 4 {
+func (p *PatternBank) SelectTrackRow(row int) error {
+	if p.trackForPadRow(row) == 0 {
 		return nil
 	}
 	if err := stopPlayback(); err != nil {
@@ -194,43 +349,47 @@ func (p *PatternBank) SelectTrackRow(n int) error {
 			return err
 		}
 	}
-	if p.selTrackRow == n {
+	if p.selTrackRow == row {
 		p.selTrackRow = 0
 		return p.printChromaticStatus()
 	}
 	// Select new row.
-	p.selTrackRow = n
-	if err := p.printTrackRow(n, true); err != nil {
+	p.selTrackRow = row
+	if err := p.printTrackRow(row, true); err != nil {
 		return err
 	}
 	if p.f != nil {
-		if err := p.f.SetLed(CCMuteLED1+(n-1), LEDGreen); err != nil {
+		if err := p.f.SetLed(CCMuteLED1+(row-1), LEDGreen); err != nil {
 			return err
 		}
 	}
-	if err := p.redrawTrackPads(n); err != nil {
+	if err := p.redrawTrackPads(row); err != nil {
 		return err
 	}
 	return p.printChromaticStatus()
 }
 
-func (p *PatternBank) printTrackRow(n int, inv bool) error {
+// printTrackRow names the track on a pad row; the header shows which track the row starts at.
+func (p *PatternBank) printTrackRow(row int, inv bool) error {
 	if p.f == nil {
 		return nil
 	}
-	if err := p.f.ClearOLEDRows(n+1, 1); err != nil {
+	if err := p.f.ClearOLEDRows(row+1, 1); err != nil {
 		return err
 	}
-	v := p.vb.voices[p.trackVoices[n-1]]
-	name := voiceDisplayName(v)
+	name := voiceDisplayName(p.trackVoice(row))
 	if inv {
-		return p.f.PrintInvert(0, n+1, name)
+		return p.f.PrintInvert(0, row+1, name)
 	}
-	return p.f.Print(0, n+1, name)
+	return p.f.Print(0, row+1, name)
 }
 
 func (p *PatternBank) JogSelect(n int) error {
 	if p.selTrackRow == 0 || len(p.vb.voices) == 0 {
+		return nil
+	}
+	track := p.trackForPadRow(p.selTrackRow)
+	if track == 0 {
 		return nil
 	}
 	if err := stopPlayback(); err != nil {
@@ -243,13 +402,16 @@ func (p *PatternBank) JogSelect(n int) error {
 			return err
 		}
 	}
-	tv := &p.trackVoices[p.selTrackRow-1]
-	*tv = *tv + n
-	if *tv >= len(p.vb.voices) {
-		*tv = 0
-	} else if *tv < 0 {
-		*tv = len(p.vb.voices) - 1
+	p.trackMu.Lock()
+	voice := p.trackVoices[track-1] + n
+	if voice >= len(p.vb.voices) {
+		voice = 0
+	} else if voice < 0 {
+		voice = len(p.vb.voices) - 1
 	}
+	p.trackVoices[track-1] = voice
+	// Released before the redraw, which reads the window again through trackVoice.
+	p.trackMu.Unlock()
 	if err := p.printTrackRow(p.selTrackRow, true); err != nil {
 		return err
 	}
@@ -259,15 +421,15 @@ func (p *PatternBank) JogSelect(n int) error {
 	return p.printChromaticStatus()
 }
 
-func (p *PatternBank) redrawTrackPads(track int) error {
-	if p == nil || p.f == nil || track < 1 || track > 4 {
+func (p *PatternBank) redrawTrackPads(row int) error {
+	if p == nil || p.f == nil || p.trackForPadRow(row) == 0 {
 		return nil
 	}
 	pat := p.CurrentPattern()
 	if pat == nil {
 		return nil
 	}
-	tv := p.vb.voices[p.trackVoices[track-1]]
+	tv := p.trackVoice(row)
 	evs := pat.FindBeat(0)
 	var rgb [16][3]int
 	for _, ev := range evs {
@@ -288,7 +450,7 @@ func (p *PatternBank) redrawTrackPads(track int) error {
 			rgb[p.stepCursor] = markCursorColor(rgb[p.stepCursor])
 		}
 	}
-	return p.f.LightPadRow(track-1, rgb)
+	return p.f.LightPadRow(row-1, rgb)
 }
 
 func (p *PatternBank) drawPadColumn(col int) error {
@@ -324,8 +486,8 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 	if pattern == nil {
 		return nil
 	}
-	var rgb [4][3]int
-	for row := 0; row < 4; row++ {
+	var rgb [padRows][3]int
+	for row := 0; row < padRows; row++ {
 		rgb[row] = f(nil)
 	}
 	evs := pattern.FindBeat(stepBeat(col))
@@ -337,8 +499,8 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 		if idx >= col+1 {
 			break
 		}
-		for row, v := range p.trackVoices {
-			if ev.Voice == p.vb.voices[v] {
+		for row, rowVoice := range p.visibleTrackVoices() {
+			if ev.Voice == rowVoice {
 				rgb[row] = f(&ev)
 				if ev.Tie {
 					rgb[row] = markTieColor(rgb[row])
@@ -349,15 +511,16 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 	return p.f.LightPadColumn(col, rgb)
 }
 
+// ToggleEvent edits the track shown on a zero-based pad row.
 func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
-	if p == nil || p.vb == nil || row < 0 || row >= len(p.trackVoices) {
+	voice := p.trackVoice(row + 1)
+	if voice == nil {
 		return Event{}, nil
 	}
 	pattern := p.CurrentPattern()
 	if pattern == nil || col < 0 || col >= pattern.LengthSteps() {
 		return Event{}, nil
 	}
-	voice := p.vb.voices[p.trackVoices[row]]
 	if voice.IsChromatic() {
 		if event, ok := pattern.EventAtStep(col, voice); ok {
 			pattern.RemoveEventAtStep(col, voice)
@@ -386,9 +549,9 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 		if !added {
 			g = 0
 		}
-		for i := 0; i < 4; i++ {
-			if p.trackVoices[i] == p.trackVoices[row] {
-				if err := p.f.LightPad(col, i, 0, g, 0); err != nil {
+		for row, rowVoice := range p.visibleTrackVoices() {
+			if rowVoice == voice {
+				if err := p.f.LightPad(col, row, 0, g, 0); err != nil {
 					return ev, err
 				}
 			}

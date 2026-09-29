@@ -51,22 +51,59 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 
 - Pad grid: toggle steps for a percussive voice. Empty chromatic steps are ignored here.
 - In pattern/step mode, a pad on the selected chromatic track moves the editing step cursor. Two held pads still create a tie.
-- Mute 1 through 4: select a track row and its voice.
+- Pattern up/down: change the selected pattern from 1 to 999 and stop playback.
+- Mute 1 through 4: select a track row and its voice. The selected row lights green, and pressing it again deselects.
+- `Alt`, then pattern up/down: scroll the track window. `Alt` lights up while it is engaged and stays engaged until it is pressed again, so press it once more before using a mute button or stop.
+- `Shift` plus `Alt`: blackout. See [Blackout](#blackout).
+- The header shows the window as `<FIRST>/<TOTAL>`, for example `Pattern 001  3/8` means the pad rows show tracks 3, 4, 5, and 6 of 8.
 - Encoder: change the voice assigned to the selected row.
 - Grid left/right: move the current step cursor.
 - Overview: enter or leave length-edit mode.
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
 - Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid then selects pitches starting at MIDI 21 (A0), with four rows of sixteen semitones. Toggling Mode does not stop playback.
 - Volume knob with a selected chromatic voice: each detent increments or decrements the current step's velocity by one, clamped to 0..127. The status line shows `S<STEP> <NOTE>@<VELOCITY>`.
-- Pad in note-edit mode: assign and audition the selected pitch. `Alt` plus a pad clears the event at the current step.
+- Pad in note-edit mode: assign and audition the selected pitch. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. Cross-row and three-or-more-pad gestures are ignored.
-- `Shift` plus a pad, then release `Shift`: enter a tempo.
-- `Alt` plus a mute button: clear that track row.
-- `Alt` plus stop: clear the current pattern.
-- Record: copy the current pattern, including pitches and ties.
+- `Shift` plus a pad, then release `Shift`: enter a tempo. Entering one clears the whole display until the next redraw, and a value from 21 to 299 is applied on release; anything else is discarded.
+- Tap: tap out a tempo. It takes at least two taps, ignores taps more than three seconds apart, averages the last five, and prints `Tempo: NNN` over the second track's name.
+- `Alt` plus a mute button: clear that track row. `Alt` stays engaged, so several rows can be cleared in a row.
+- `Alt` plus stop: clear the current pattern. `Alt` stays engaged.
+- Record: copy the current pattern, including pitches and ties. Record lights green while a copy is armed, and pressing Record again discards it. There is one copy slot; a new copy replaces the old one.
 - Play while copied: paste the pattern.
 - Stop: stop playback and release active chromatic notes.
-- Pattern/song: switch modes.
+- Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
+
+#### Choosing voices
+
+A track is a voice from the kit, and any voice can go on any track.
+
+1. The kit is the list of voices loaded from `-kit`, in file order. Percussive voices have a `Note`; chromatic voices omit it.
+2. Press Mute 1 through 4 to select a track row. Its name appears on the display as `NAME [DRM]` or `NAME [CHR]`, inverted while selected, so the two kinds are easy to tell apart at a glance.
+3. Turn the Encoder to move that track through the kit's voices. It wraps around at either end, so every voice is reachable from every row.
+4. Nothing stops two rows from holding the same voice. Clearing one of them clears the notes on both, and editing one edits the other, because the notes belong to the voice rather than the row.
+5. The track window decides which tracks you can reach this way. Scroll it with `Alt` plus pattern up/down when you want one voice per track rather than reaching voices a few at a time with the Encoder.
+
+#### Display
+
+- Row 0: `Pattern 003  2/6`, the pattern number and the track window.
+- Row 1: a separator.
+- Rows 2 to 5: the voice on each visible track row, inverted for the selected row.
+- Row 6: `Length NN steps` in length mode, otherwise `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, otherwise blank.
+
+The pad grid shows the notes of the four visible tracks, the editing step is lit slightly brighter, and during playback the playing column is inverted while the others are redrawn dimmer.
+
+#### Track window
+
+A pattern starts with four tracks, one per pad row, and the four pad rows show four of them at a time.
+
+1. The header reads `1/4` with the first track on the top pad row.
+2. Press `Alt`; the button lights up and pattern up/down move the window instead of changing pattern. The header follows, so `3/6` shows tracks 3 through 6 on the pads.
+3. Scrolling down past the last track adds another track, so a kit of any size only takes on the tracks you scroll to. The count never drops back for the rest of the session, and a kit of 100 voices still opens on four tracks.
+4. Growth stops at one track per kit voice, and the window stops when the last track reaches the bottom row, so the pads never end on rows without a track behind them.
+5. Everything that follows the visible tracks: pad presses, Mute 1 through 4, the Encoder, and `Alt` plus a mute button. The selected mute row keeps its selection and now points at a different track.
+6. Scrolling leaves note-edit mode and releases held pads, so a gesture started in the previous window cannot carry over.
+7. A kit with fewer than four voices keeps all four rows usable by wrapping its voices.
+8. Tracks belong to the pattern bank, not to a single pattern, so the track count and the track-to-voice mapping are shared by every pattern. Changing a track's voice with the Encoder changes it everywhere.
 
 #### Chromatic editing flow
 
@@ -75,20 +112,81 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 3. Move the cursor with Grid left/right or by pressing another step pad. Steps beyond the current pattern length are ignored.
 4. Press Mode to enter note-edit mode. The pad grid becomes the pitch palette; press a palette pad to create or update the note at the cursor and audition it.
 5. Use the Volume encoder to change that step's velocity by one detent at a time. The status line shows `S<STEP> <NOTE>@<VELOCITY>`; an empty step shows `--`.
-6. Press Mode again to return to step mode. In note-edit mode, Alt plus a palette pad clears the current step.
+6. Press Mode again to return to step mode. In note-edit mode, Alt plus a palette pad clears the current step, and Alt stays engaged.
+
+#### Blackout
+
+`Shift` plus `Alt` turns every light and the screen off, which is useful on a dark stage. It is a display state rather than a control state: nothing is cancelled or forgotten.
+
+- Nothing is lit while the display is dark, and display output is suppressed entirely, so a running playhead cannot light the pads behind the blackout.
+- `Alt` is not released by the blackout. Its light goes dark with everything else and comes back to the state it was left in.
+- The next press wakes the display and then does what it says, so the screen comes back showing the result of that press.
+- While `Shift` is held, `Alt` is always the blackout, so release `Shift` before using `Alt` to release it.
 
 ### Song mode
 
-- Left 48 pads: toggle measures in the visible measure window.
-- Rightmost 16 pads: select a pattern from the visible pattern window.
+Song mode arranges the patterns you have written into a song: each measure holds one pattern, and the song plays those patterns back to back using their own lengths.
+
+#### Entering song mode
+
+- Press the Pattern/Song button. Its LED turns green in song mode and dark in pattern mode, so the current mode is always visible.
+- The button works both ways: press it in song mode to go back to pattern editing.
+- Switching modes stops playback and leaves any pattern edit mode, so step, note, and length editing do not follow you across.
+- The display switches from the pattern track window to the arrangement view described below.
+
+#### Arrangement view
+
+| Pads | Contents |
+| --- | --- |
+| Left 48 pads, three 4x4 banks | 48 measures of the song, filled left to right and top to bottom inside each bank |
+| Rightmost 16 pads, one 4x4 bank | 16 pattern slots from the visible pattern window, filled down each column |
+
+Each pattern number has a colour from the display's colour table. The selected pattern is lit at full brightness, other patterns are dimmed, and empty measures are dark. A measure that is playing is lit brighter while the song runs.
+
+#### Scrolling a long song
+
+A song holds up to 1000 measures, so the 48 measure pads only ever show part of it.
+
+- Grid left/right: move the window by a full 4x4 bank, 16 measures at a time.
+- `Shift` plus grid left/right: move by four measures, one row of pads.
+- Row 3 always reports the measures in view, for example `M 001-048` at the start of the song and `M 953-1000` at the end, so it is clear which measures the pads hold.
+- Scrolling only moves the window. It never places or clears a measure, so browsing a long arrangement cannot change it.
+- The window stops at the end of the song, which keeps the final measures fully reachable instead of cutting them off.
+- Pattern slots are paged the same way, 16 at a time out of 999.
+
+#### Display
+
+- Row 0: the song slot, for example `Song 001`.
+- Row 1: the selected pattern and its length in steps, for example `Pattern 003 L16`.
+- Row 2: the current tempo.
+- Row 3: the visible windows, for example `P 001-016 M 001-048`.
+- Rows 4 and 5: during playback the playing measure and its pattern, for example `Measure 005` and `Pat-bar 003`.
+
+#### Controls
+
+- Measure pad: place the selected pattern in that measure. A measure that already holds that pattern is cleared instead, so empty a measure by selecting its pattern first and pressing the pad again. A measure holding any other pattern is replaced.
+- Pattern pad: select the pattern in that slot. The selection is shared with pattern mode, so the pattern you select here is the one you edit there.
 - Pattern up/down: scroll the pattern window by 16 slots.
 - `Shift` plus pattern up/down: move the selected pattern by one slot.
 - Grid left/right: scroll measures by 16, one 4x4 bank.
 - `Shift` plus grid left/right: scroll measures by 4.
-- `Shift` plus a measure pad: jump playback to that measure.
-- OLED row 3 shows the visible pattern and measure ranges.
+- `Shift` plus a measure pad: jump playback to that measure. The jump only applies while the song is playing, takes effect at the next pattern boundary, and the display reports the move.
+- Play: play the song from the top and loop it. The playing measure lights up and rows 4 and 5 follow it.
+- Stop: stop playback and release active chromatic notes.
+- `Alt` is a pattern-mode modifier and does nothing here, so there is no blackout in song mode.
 
-Patterns and songs are held in memory for the lifetime of the process. Each song slot uses its pattern's 1–16 step duration, and percussive and chromatic patterns can be mixed in one song. Ties never cross a pattern or song-slot boundary.
+Only song slot 1 is reachable from the controls today; the display names the slot and there is no button bound to changing it.
+
+#### Arranging workflow
+
+1. Write and check your patterns in pattern mode. The Play button loops the selected pattern on its own.
+2. Press Pattern/Song to enter song mode. The pattern window opens on the pattern that was selected, and its pattern pad is already lit.
+3. Choose the pattern for a measure with the pattern pads, then place it with measure pads. To repeat a pattern, leave the selection alone and fill the following measures.
+4. Use `Shift` plus grid left/right to move in steps of four measures when filling in a dense arrangement.
+5. Press Play to hear the arrangement, and `Shift` plus a measure pad to move around while it runs.
+6. Press Pattern/Song to go back and edit any pattern in the song; every measure holding that pattern changes with it, including its length.
+
+Measures reference the pattern itself rather than a copy, so edits are shared. Percussive and chromatic patterns can be mixed freely in one song. Patterns and songs are held in memory for the lifetime of the process, so nothing is written to disk.
 
 ## Development
 
