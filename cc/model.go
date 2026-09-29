@@ -2145,6 +2145,230 @@ type MiniNova struct {
 	GlobalAudioInputFX     Control `nrpn:"64.30"`
 }
 
+// Pro800 is the Behringer Pro 800, the analogue polysynth whose control change
+// surface this struct records. The bindings are transcribed from the
+// instrument's control change implementation notes, which list every number it
+// answers to and what that number means.
+//
+// Those notes are a reconstruction from probing the instrument rather than a
+// manufacturer specification, and they contradict each other in a few places.
+// Each contradiction is recorded next to the field it affects rather than
+// resolved by quietly picking a side.
+//
+// Five properties of the instrument shape the struct.
+//
+// Almost every continuous parameter is a pair of control changes rather than
+// one 7-bit value: a coarse half in 8...42 and a fine half in 80...117, each
+// of which is itself 0...127 while the panel shows the parameter as 0...999.
+// The notes do not say how the two halves combine, so they are carried as
+// separate fields and a caller that needs the panel's number has to work the
+// mapping out. The two parameters with no fine half say so.
+//
+// The switches are not General MIDI switches. An on or off parameter is 0x00
+// or 0x40, not 0...63 and 64...127, and a stepped parameter has values of its
+// own again: the LFO's shape sits at 0x00, 0x16, 0x2c, 0x42, 0x58 and 0x6e.
+// Every stepped field below says which values it takes.
+//
+// One number does two jobs. The instrument transmits its sync subdivision on
+// control change 80 while it receives oscillator A's fine frequency on the
+// same number, so moving the subdivision from outside also moves oscillator
+// A. The notes record that as a firmware bug rather than as an ambiguity in
+// the table, and it is why the subdivision has no field here.
+//
+// The instrument also implements the General MIDI plumbing, and the notes list
+// it: data entry MSB and LSB, the non-registered parameter selectors, and the
+// two channel voice messages. None of them sets a parameter, so they are left
+// unclaimed, and the test checks that they stay free.
+//
+// Five further numbers are left unclaimed because the notes record no
+// parameter on them: 4, 5, 43 to 47 and 119. That is the notes' silence
+// rather than a measured silence from the instrument, so it says nothing
+// about whether a given firmware answers them, and it is not a reason to
+// treat them as free.
+//
+// The panel calls the two signal stages VCF and VCA; the fields spell those
+// out as Filter and Amp and keep the panel's own labels everywhere else.
+type Pro800 struct {
+	// Performance controllers. BankSelect names the four banks of a hundred
+	// patches that the panel shows as A to D.
+	BankSelect   Control `cc:"0"`
+	ModWheel     Control `cc:"1"`
+	Breath       Control `cc:"2"`
+	MasterTune   Control `cc:"3"` // Coarse only; the notes give it no fine half
+	MainVolume   Control `cc:"7"` // Coarse only
+	SustainPedal Control `cc:"64"`
+
+	// Oscillator A. The three waveform switches are separate controls, so
+	// an oscillator mixes its shapes rather than choosing one.
+	OscAFrequencyMSB  Control `cc:"8"`
+	OscAFrequencyLSB  Control `cc:"80"`
+	OscAVolumeMSB     Control `cc:"9"`
+	OscAVolumeLSB     Control `cc:"81"`
+	OscAPulseWidthMSB Control `cc:"10"`
+	OscAPulseWidthLSB Control `cc:"82"`
+	OscASaw           Control `cc:"48"`
+	OscATriangle      Control `cc:"49"`
+	OscASquare        Control `cc:"50"`
+
+	// Oscillator B. Fine detunes it against oscillator A, and Sync drives
+	// it from oscillator A's frequency.
+	OscBFrequencyMSB  Control `cc:"11"`
+	OscBFrequencyLSB  Control `cc:"83"`
+	OscBVolumeMSB     Control `cc:"12"`
+	OscBVolumeLSB     Control `cc:"84"`
+	OscBPulseWidthMSB Control `cc:"13"`
+	OscBPulseWidthLSB Control `cc:"85"`
+	OscBFineMSB       Control `cc:"14"`
+	OscBFineLSB       Control `cc:"86"`
+	OscBSaw           Control `cc:"51"`
+	OscBTriangle      Control `cc:"52"`
+	OscBSquare        Control `cc:"53"`
+	OscBSync          Control `cc:"54"`
+
+	// Filter. The envelope amount is what decides whether the envelope
+	// sweeps the cutoff up or pulls it down, so it is the parameter that
+	// turns the envelope from a percussive decay into a swelling tone.
+	FilterCutoffMSB        Control `cc:"15"`
+	FilterCutoffLSB        Control `cc:"87"`
+	FilterResonanceMSB     Control `cc:"16"`
+	FilterResonanceLSB     Control `cc:"88"`
+	FilterEnvAmountMSB     Control `cc:"17"`
+	FilterEnvAmountLSB     Control `cc:"89"`
+	FilterEnvReleaseMSB    Control `cc:"18"`
+	FilterEnvReleaseLSB    Control `cc:"90"`
+	FilterEnvSustainMSB    Control `cc:"19"`
+	FilterEnvSustainLSB    Control `cc:"91"`
+	FilterEnvDecayMSB      Control `cc:"20"`
+	FilterEnvDecayLSB      Control `cc:"92"`
+	FilterEnvAttackMSB     Control `cc:"21"`
+	FilterEnvAttackLSB     Control `cc:"93"`
+	FilterEnvCurve         Control `cc:"61"`
+	FilterEnvSpeed         Control `cc:"62"`
+	FilterKeyboardTracking Control `cc:"60"` // 0x00 off, 0x2b half, 0x56 full
+	FilterVelocityMSB      Control `cc:"32"`
+	FilterVelocityLSB      Control `cc:"108"`
+	FilterAftertouchMSB    Control `cc:"40"`
+	FilterAftertouchLSB    Control `cc:"115"`
+
+	// Amp.
+	AmpEnvReleaseMSB Control `cc:"22"`
+	AmpEnvReleaseLSB Control `cc:"94"`
+	AmpEnvSustainMSB Control `cc:"23"`
+	AmpEnvSustainLSB Control `cc:"95"`
+	AmpEnvDecayMSB   Control `cc:"24"`
+	AmpEnvDecayLSB   Control `cc:"100"`
+	AmpEnvAttackMSB  Control `cc:"25"`
+	AmpEnvAttackLSB  Control `cc:"101"`
+	AmpEnvCurve      Control `cc:"63"`
+	AmpEnvSpeed      Control `cc:"72"`
+	AmpVelocityMSB   Control `cc:"31"`
+	AmpVelocityLSB   Control `cc:"107"`
+	AmpAftertouchMSB Control `cc:"39"`
+	AmpAftertouchLSB Control `cc:"114"`
+
+	// Poly Mod turns one oscillator into a modulator, which is how this
+	// instrument gets the cross-modulated and filter-sweeping tones that
+	// two plain oscillators cannot make on their own.
+	PolyModFilterEnvMSB  Control `cc:"26"`
+	PolyModFilterEnvLSB  Control `cc:"102"`
+	PolyModOscBAmountMSB Control `cc:"27"`
+	PolyModOscBAmountLSB Control `cc:"103"`
+	PolyModFreqA         Control `cc:"55"`
+	PolyModFilter        Control `cc:"56"`
+
+	// LFO. The panel also calls this LFO 2, because the vibrato is the third
+	// thing the mod wheel can be routed to and shares this section's
+	// modulation delay.
+	LfoFrequencyMSB  Control `cc:"28"`
+	LfoFrequencyLSB  Control `cc:"104"`
+	LfoAmountMSB     Control `cc:"29"`
+	LfoAmountLSB     Control `cc:"105"`
+	LfoShape         Control `cc:"57"` // 0x00 pulse, 0x16 triangle, 0x2c random, 0x42 sine, 0x58 noise, 0x6e saw
+	LfoSpeed         Control `cc:"58"`
+	LfoModDelayMSB   Control `cc:"33"`
+	LfoModDelayLSB   Control `cc:"109"`
+	LfoAftertouchMSB Control `cc:"41"`
+	LfoAftertouchLSB Control `cc:"116"`
+
+	// The LFO's routing is described twice and the two descriptions do not
+	// obviously agree. The patch record stores it as six independent bits,
+	// one per destination, while this switch is documented as four
+	// positions at 0x00, 0x21, 0x42 and 0x63, which is a two bit selector
+	// with the rest of the value scaled to match: both oscillators, one,
+	// the other, or the amplifier. The three switches after it are the
+	// panel's own routing knobs, and the notes mark those same three
+	// destinations as the hardware-controlled ones.
+	LfoTargets       Control `cc:"59"`
+	LfoDestFrequency Control `cc:"74"`
+	LfoDestFilter    Control `cc:"75"`
+	LfoDestPWM       Control `cc:"76"`
+
+	// Vibrato, the modulation the instrument applies when the mod wheel is
+	// aimed at it. It has a rate and a depth of its own rather than
+	// borrowing the LFO's, so LfoFrequencyMSB is not the vibrato rate.
+	VibratoFrequencyMSB Control `cc:"34"`
+	VibratoFrequencyLSB Control `cc:"110"`
+	VibratoAmountMSB    Control `cc:"35"`
+	VibratoAmountLSB    Control `cc:"111"`
+	// ModWheelTarget and VibratoTarget are the two switches that aim the mod
+	// wheel, and what the wheel modulates is therefore a choice between
+	// them rather than a pair of independent amounts.
+	//
+	// They do not rest on the same evidence. The notes that list the
+	// instrument's control changes mark control change 71 as having no
+	// parameter on it at all, while a separate chart of the same instrument
+	// names this one the vibrato target; the patch record holds only the mod
+	// wheel target, so this switch has no stored counterpart. How the two
+	// combine is not stated by any of the three.
+	ModWheelTarget Control `cc:"70"` // 0x00 LFO, 0x40 vibrato
+	VibratoTarget  Control `cc:"71"`
+	ModWheelRange  Control `cc:"67"` // 0x00 minimum, 0x20 low, 0x40 high, 0x60 full
+
+	// Glide and the unison stack. UnisonDetune spreads the stack around the
+	// detune, so the two only mean anything to each other.
+	GlideMSB        Control `cc:"30"`
+	GlideLSB        Control `cc:"106"`
+	Unison          Control `cc:"65"`
+	UnisonDetuneMSB Control `cc:"36"`
+	UnisonDetuneLSB Control `cc:"112"`
+	VoiceSpread     Control `cc:"77"`
+
+	NoiseLevelMSB Control `cc:"37"`
+	NoiseLevelLSB Control `cc:"113"`
+
+	// PitchBendTarget chooses what the bend wheel acts on, so a bend can be
+	// turned into a filter sweep or a level change rather than a note
+	// change. The amount and range are a coarse and fine pair like every
+	// other continuous parameter.
+	PitchBendTarget    Control `cc:"66"` // 0x00 off, 0x20 oscillators, 0x40 filter, 0x60 level
+	PitchBendAmountMSB Control `cc:"42"`
+	PitchBendAmountLSB Control `cc:"117"`
+
+	// OscAPitchMode and OscBPitchMode are how far the bend wheel moves each
+	// oscillator: free running, in semitones, in octaves, or not at all.
+	OscAPitchMode Control `cc:"68"` // 0x00 free, 0x20 semitones, 0x40 octaves, 0x60 fixed
+	OscBPitchMode Control `cc:"69"`
+
+	// The bend is measured from a reference key, and glide is either a
+	// fixed time or a fixed rate, neither of which is the same on both.
+	TrackingReference Control `cc:"78"` // 0x00 C1, 0x20 C2, 0x40 C3, 0x60 C4
+	GlideMode         Control `cc:"79"` // 0x00 time, 0x40 speed
+
+	// ArpMode is the arpeggiator's pattern. The instrument's table gives
+	// the last two positions as assigned order then random, while its patch
+	// record gives them as random then assigned order; the patch record is
+	// followed here, and the two cannot both be right. Nothing in either
+	// starts the arpeggiator, so that is left to the panel.
+	ArpMode Control `cc:"73"` // 0x00 off, 0x13 up, 0x25 down, 0x37 up then down, 0x4a up and down together, 0x5c random, 0x6e assigned order
+
+	// AbandonedParameter is the one number the notes mark as a possible bug
+	// rather than naming: the instrument accepts it and shows it on the
+	// display like any other parameter, but nothing it does changes the
+	// sound, which the notes take to mean it is left over from an earlier
+	// firmware or was a test function.
+	AbandonedParameter Control `cc:"118"` // 0x00 to 0x1f
+}
+
 type Model struct {
 	Model               string
 	*GMController       `json:"GMController,omitempty"`
@@ -2166,6 +2390,7 @@ type Model struct {
 	*WorldeEasyControl9 `json:"WorldeEasyControl9,omitempty"`
 	*ProVSMini          `json:"ProVSMini,omitempty"`
 	*MicroKorg          `json:"MicroKorg,omitempty"`
+	*Pro800             `json:"Pro800,omitempty"`
 }
 
 var modelNames = []string{
@@ -2188,6 +2413,7 @@ var modelNames = []string{
 	"MicroKorg",
 	"Perform-VE",
 	"MiniNova",
+	"Pro 800",
 }
 
 // ModelNames returns the canonical model names accepted by NewModelParams.
@@ -2304,6 +2530,11 @@ func (m *Model) MidiParams() any {
 			m.MiniNova = &MiniNova{}
 		}
 		return m.MiniNova
+	case "Pro 800":
+		if m.Pro800 == nil {
+			m.Pro800 = &Pro800{}
+		}
+		return m.Pro800
 	default:
 		panic("unknown model " + m.Model)
 	}
