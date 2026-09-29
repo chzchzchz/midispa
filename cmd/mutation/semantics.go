@@ -46,9 +46,8 @@ func loadGeneSemantics(path string) (map[string]geneSemantic, error) {
 					return nil, fmt.Errorf("gene %q cannot be excluded with a value", name)
 				}
 			case "fixed":
-				if rule.Value != nil && (*rule.Value < 0 || *rule.Value > maxMIDIValue) {
-					return nil, fmt.Errorf("gene %q fixed value is outside 0-127", name)
-				}
+				// The numeric bound is checked against the gene's own domain when
+				// the patch is built, because a SysEx field is not a 0-127 CC.
 			default:
 				return nil, fmt.Errorf("gene %q has unsupported policy %q", name, rule.Policy)
 			}

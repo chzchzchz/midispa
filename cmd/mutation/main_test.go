@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func newTestMutation(parent *Patch, settings evolutionSettings, randomSeed int64) *Mutation {
+func newTestMutation(parent patch, settings evolutionSettings, randomSeed int64) *Mutation {
 	parentScore := 0
 	return &Mutation{
 		settings:    settings,
@@ -19,6 +19,20 @@ func newTestMutation(parent *Patch, settings evolutionSettings, randomSeed int64
 		parent:      parent,
 		parentScore: &parentScore,
 	}
+}
+
+// geneValues reads a candidate's gene storage through the format-agnostic
+// patch interface, which is what the engine produces after breeding.
+func geneValues(t *testing.T, candidate patch) []gene {
+	t.Helper()
+	if candidate == nil {
+		t.Fatal("candidate is nil")
+	}
+	return candidate.geneStore().genes
+}
+
+func newTestCCFactory(modelName string) patchFactory {
+	return ccPatchFactory{modelName: modelName, midiChannel: defaultMIDIChannelNumber}
 }
 
 func runTestMutation(ctx context.Context, mutation *Mutation, player *midiPlayer, outputPath string, input io.Reader, output io.Writer) error {
@@ -68,9 +82,10 @@ func TestMutationSelectsHighestRankAndWritesGenerationZero(t *testing.T) {
 	if err := loadSeedPatch(outputPath, written); err != nil {
 		t.Fatalf("load selected patch: %v", err)
 	}
-	for index := range expectedPatches[0].patch.genes {
+	expectedGenes := geneValues(t, expectedPatches[0].patch)
+	for index := range expectedGenes {
 		got := written.genes[index].value
-		want := expectedPatches[0].patch.genes[index].value
+		want := expectedGenes[index].value
 		if got != want {
 			t.Fatalf("selected gene %d is %d, want %d", index, got, want)
 		}
@@ -165,6 +180,7 @@ func TestParseConfigurationRejectsPositionalArguments(t *testing.T) {
 
 func TestValidateConfiguration(t *testing.T) {
 	valid := configuration{
+		format:      ccFormatName,
 		modelName:   "Volca Bass",
 		portName:    "MIDI Out",
 		output:      "best.mid",
@@ -174,15 +190,27 @@ func TestValidateConfiguration(t *testing.T) {
 	if err := validateConfiguration(valid); err != nil {
 		t.Fatalf("valid configuration: %v", err)
 	}
+	sysex := configuration{
+		format:      dx7SingleFormatName,
+		portName:    "MIDI Out",
+		output:      "best.syx",
+		seedPath:    "voice.syx",
+		midiChannel: defaultMIDIChannelNumber,
+		settings:    defaultEvolutionSettings(),
+	}
+	if err := validateConfiguration(sysex); err != nil {
+		t.Fatalf("valid SysEx configuration: %v", err)
+	}
 
 	tests := []struct {
 		name   string
 		config configuration
 	}{
-		{name: "model", config: configuration{portName: "MIDI Out", output: "best.mid"}},
-		{name: "port", config: configuration{modelName: "Volca Bass", output: "best.mid"}},
-		{name: "output", config: configuration{modelName: "Volca Bass", portName: "MIDI Out"}},
-		{name: "midi channel", config: configuration{modelName: "Volca Bass", portName: "MIDI Out", output: "best.mid", midiChannel: 17}},
+		{name: "port", config: configuration{format: ccFormatName, modelName: "Volca Bass", output: "best.mid"}},
+		{name: "output", config: configuration{format: ccFormatName, modelName: "Volca Bass", portName: "MIDI Out"}},
+		{name: "midi channel", config: configuration{format: ccFormatName, modelName: "Volca Bass", portName: "MIDI Out", output: "best.mid", midiChannel: 17}},
+		{name: "negative settle", config: configuration{format: ccFormatName, modelName: "Volca Bass", portName: "MIDI Out", output: "best.mid", sysexSettle: -1}},
+		{name: "model with sysex", config: configuration{format: dx7SingleFormatName, modelName: "Volca Bass", portName: "MIDI Out", output: "best.syx"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

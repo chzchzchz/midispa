@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
 
 	"github.com/chzchzchz/midispa/cc"
 	"github.com/chzchzchz/midispa/midi"
@@ -10,28 +9,15 @@ import (
 
 const maxMIDIValue = 127
 
-type genePolicy uint8
-
-const (
-	genePolicyMutable genePolicy = iota
-	genePolicyFixedPendingSeed
-	genePolicyFixed
-)
-
-// Gene policy encodes the valid lifecycle states so a fixed gene cannot be
-// confused with a mutable gene before its seed value is applied.
-type patchGene struct {
-	name       string
-	controller int
-	value      int
-	policy     genePolicy
-}
-
-// Patch is one MIDI patch. Its model storage is independently allocated so a
-// parent and the patches mutated from it cannot alias one another.
+// Patch is one CC patch for a selected model. Its gene store is
+// independently allocated so a parent and the patches mutated from it cannot
+// alias one another. The controller table is read-only after construction and
+// is shared by every clone, so a gene stays a name, a value, a policy, and a
+// domain.
 type Patch struct {
-	model string
-	genes []patchGene
+	model       string
+	controllers map[string]int
+	patchGenes
 }
 
 func newPatchWithSemantics(modelName string, semantics map[string]geneSemantic) (*Patch, error) {
@@ -46,10 +32,12 @@ func newPatchWithSemantics(modelName string, semantics map[string]geneSemantic) 
 	if len(fields) == 0 {
 		return nil, fmt.Errorf("model %q has no cc fields", modelName)
 	}
-	genes := make([]patchGene, 0, len(fields))
+	genes := make([]gene, 0, len(fields))
+	controllers := make(map[string]int, len(fields))
 	knownNames := make(map[string]bool, len(fields))
 	for _, field := range fields {
 		knownNames[field.Name] = true
+		controllers[field.Name] = field.Controller
 		rule, hasRule := semantics[field.Name]
 		if hasRule && rule.Policy == "exclude" {
 			continue
@@ -61,63 +49,33 @@ func newPatchWithSemantics(modelName string, semantics map[string]geneSemantic) 
 				policy = genePolicyFixedPendingSeed
 			}
 		}
-		gene := patchGene{
-			name:       field.Name,
-			controller: field.Controller,
-			value:      *field.Value,
-			policy:     policy,
+		// A controller value is a MIDI data byte, so its bound comes from the
+		// data model rather than from a struct tag.
+		current := gene{
+			name:   field.Name,
+			value:  *field.Value,
+			policy: policy,
+			domain: midiValueDomain(),
 		}
 		if hasRule && rule.Value != nil {
-			gene.value = *rule.Value
+			current.value = *rule.Value
 		}
-		genes = append(genes, gene)
+		genes = append(genes, current)
 	}
 	for name := range semantics {
 		if !knownNames[name] {
 			return nil, fmt.Errorf("gene %q is not present in model %q", name, modelName)
 		}
 	}
-	return &Patch{model: modelName, genes: genes}, nil
-}
-
-type geneChange struct {
-	name   string
-	before int
-	after  int
-	delta  int
-}
-
-func (patch *Patch) changesFrom(parent *Patch) []geneChange {
-	changes := make([]geneChange, 0)
-	for index := range patch.genes {
-		before := parent.genes[index].value
-		after := patch.genes[index].value
-		if before == after {
-			continue
-		}
-		changes = append(changes, geneChange{
-			name:   patch.genes[index].name,
-			before: before,
-			after:  after,
-			delta:  after - before,
-		})
-	}
-	return changes
-}
-
-func (patch *Patch) randomize(random *rand.Rand) {
-	for index := range patch.genes {
-		if patch.genes[index].policy == genePolicyMutable {
-			patch.genes[index].value = random.Intn(maxMIDIValue + 1)
-		}
-	}
-}
-
-func (patch *Patch) clone() *Patch {
 	return &Patch{
-		model: patch.model,
-		genes: append([]patchGene(nil), patch.genes...),
-	}
+		model:       modelName,
+		controllers: controllers,
+		patchGenes:  patchGenes{format: ccFormatID, genes: genes},
+	}, nil
+}
+
+func (patch *Patch) clone() patch {
+	return &Patch{model: patch.model, controllers: patch.controllers, patchGenes: *patch.cloneGenes()}
 }
 
 // Messages are applied in recording order, so the last occurrence of a
@@ -129,7 +87,7 @@ func (patch *Patch) applyCCMessages(messages [][]byte) int {
 			continue
 		}
 		for index := range patch.genes {
-			if patch.genes[index].controller != int(message[1]) {
+			if patch.controllers[patch.genes[index].name] != int(message[1]) {
 				continue
 			}
 			if patch.genes[index].policy == genePolicyFixed {
@@ -145,46 +103,20 @@ func (patch *Patch) applyCCMessages(messages [][]byte) int {
 	return applied
 }
 
-func (patch *Patch) mutableGeneCount() int {
-	count := 0
-	for _, gene := range patch.genes {
-		if gene.policy == genePolicyMutable {
-			count++
-		}
-	}
-	return count
-}
-
-func (patch *Patch) hasSeedConfigurableGenes() bool {
-	for _, gene := range patch.genes {
-		if gene.policy != genePolicyFixed {
-			return true
-		}
-	}
-	return false
-}
-
-func (patch *Patch) validateFixedValues() error {
-	for _, gene := range patch.genes {
-		if gene.policy == genePolicyFixedPendingSeed {
-			return fmt.Errorf("fixed gene %q requires an explicit value or a seed value", gene.name)
-		}
-	}
-	return nil
-}
-
-func (patch *Patch) controlChanges(channel int) ([][]byte, error) {
-	if channel < 0 || channel > 15 {
-		return nil, fmt.Errorf("MIDI channel %d is outside 1-16", channel+1)
+// encode turns the patch into the channel messages that reproduce it on the
+// instrument. The channel is zero-based here and one-based at the flag.
+func (patch *Patch) encode(channelIndex int) ([][]byte, error) {
+	if channelIndex < 0 || channelIndex > 15 {
+		return nil, fmt.Errorf("MIDI channel %d is outside 1-16", channelIndex+1)
 	}
 	messages := make([][]byte, 0, len(patch.genes))
-	status := midi.MakeCC(channel)
+	status := midi.MakeCC(channelIndex)
 	for index := range patch.genes {
 		value := patch.genes[index].value
 		if value < 0 || value > maxMIDIValue {
-			return nil, fmt.Errorf("CC %d value %d is outside 0-127", patch.genes[index].controller, value)
+			return nil, fmt.Errorf("CC %d value %d is outside 0-127", patch.controllers[patch.genes[index].name], value)
 		}
-		messages = append(messages, []byte{status, byte(patch.genes[index].controller), byte(value)})
+		messages = append(messages, []byte{status, byte(patch.controllers[patch.genes[index].name]), byte(value)})
 	}
 	return messages, nil
 }

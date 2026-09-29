@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	alsaClientName    = "mutation"
-	sustainController = 64
+	alsaClientName     = "mutation"
+	sustainController  = 64
+	defaultSysexSettle = 100 * time.Millisecond
 )
 
 func openMIDIOutput(portName string) (io.Writer, io.Closer, error) {
@@ -39,18 +40,20 @@ func openMIDIOutput(portName string) (io.Writer, io.Closer, error) {
 }
 
 type midiPlayer struct {
-	output  io.Writer
-	channel int
-	now     func() time.Time
-	waitFor func(context.Context, time.Duration) error
+	output      io.Writer
+	channel     int
+	sysexSettle time.Duration
+	now         func() time.Time
+	waitFor     func(context.Context, time.Duration) error
 }
 
 func newMIDIPlayerForChannel(output io.Writer, channelNumber int) *midiPlayer {
 	return &midiPlayer{
-		output:  output,
-		channel: channelNumber - 1,
-		now:     time.Now,
-		waitFor: waitForMIDI,
+		output:      output,
+		channel:     channelNumber - 1,
+		sysexSettle: defaultSysexSettle,
+		now:         time.Now,
+		waitFor:     waitForMIDI,
 	}
 }
 
@@ -91,7 +94,7 @@ func (player *midiPlayer) resetChannels(channels []int) error {
 // Reapply the whole patch before every audition so hardware state from the
 // previous candidate cannot bias the next comparison. Resetting before and
 // after playback also releases sustain and recovers from interrupted notes.
-func (player *midiPlayer) audition(ctx context.Context, patch *Patch, playback *track.Pattern) (err error) {
+func (player *midiPlayer) audition(ctx context.Context, candidate patch, playback *track.Pattern) (err error) {
 	channels := player.auditionChannels(playback)
 	defer func() {
 		err = errors.Join(err, player.resetChannels(channels))
@@ -102,16 +105,25 @@ func (player *midiPlayer) audition(ctx context.Context, patch *Patch, playback *
 	if err = player.resetChannels(channels); err != nil {
 		return err
 	}
-	messages, err := patch.controlChanges(player.channel)
+	messages, err := candidate.encode(player.channel)
 	if err != nil {
 		return err
 	}
+	sentSysEx := false
 	for _, message := range messages {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
 		if err := player.send(message); err != nil {
-			return fmt.Errorf("send patch CC: %w", err)
+			return fmt.Errorf("send patch: %w", err)
+		}
+		sentSysEx = sentSysEx || len(message) > 0 && message[0] == midi.SysEx
+	}
+	// A vendor dump is not a channel message, so the instrument needs a moment
+	// to load it before a note can sound the new patch.
+	if sentSysEx {
+		if err := player.waitFor(ctx, player.sysexSettle); err != nil {
+			return err
 		}
 	}
 	if playback == nil {

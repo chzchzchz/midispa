@@ -15,6 +15,7 @@ const (
 	patchBPM              = 120
 	patchTicksPerQuarter  = 96
 	generationDigitsWidth = 4
+	smfOutputExtension    = ".mid"
 )
 
 // smfPatchStore preserves numbered generation history and refreshes the latest
@@ -29,21 +30,34 @@ func (store smfPatchStore) path() string {
 	return store.outputPath
 }
 
-func (store smfPatchStore) save(patch *Patch, generation int) error {
-	if store.outputPath == "" {
-		return fmt.Errorf("output path is empty")
+func (store smfPatchStore) save(target patch, generation int) error {
+	ccPatch, err := asCCPatch(target)
+	if err != nil {
+		return err
 	}
-	if generation < 0 {
-		return fmt.Errorf("generation %d is negative", generation)
+	generationPath, latestPath, err := generationPaths(store.outputPath, generation)
+	if err != nil {
+		return err
 	}
-	generationPath := fmt.Sprintf("%s.%0*d", store.outputPath, generationDigitsWidth, generation)
-	if err := store.write(generationPath, patch); err != nil {
+	if err := store.write(generationPath, ccPatch); err != nil {
 		return fmt.Errorf("write generation: %w", err)
 	}
-	if err := store.write(store.outputPath, patch); err != nil {
+	if err := store.write(latestPath, ccPatch); err != nil {
 		return fmt.Errorf("write latest output: %w", err)
 	}
 	return nil
+}
+
+// generationPaths returns the numbered history path and the latest path, so
+// both stores name generations the same way.
+func generationPaths(outputPath string, generation int) (string, string, error) {
+	if outputPath == "" {
+		return "", "", fmt.Errorf("output path is empty")
+	}
+	if generation < 0 {
+		return "", "", fmt.Errorf("generation %d is negative", generation)
+	}
+	return fmt.Sprintf("%s.%0*d", outputPath, generationDigitsWidth, generation), outputPath, nil
 }
 
 func (store smfPatchStore) write(path string, patch *Patch) error {
@@ -104,7 +118,7 @@ func writePatchSMFForChannel(path string, patch *Patch, channelNumber int) error
 		return fmt.Errorf("MIDI channel %d is outside 1-16", channelNumber)
 	}
 	channelIndex := channelNumber - 1
-	messages, messageErr := patch.controlChanges(channelIndex)
+	messages, messageErr := patch.encode(channelIndex)
 	if messageErr != nil {
 		return messageErr
 	}

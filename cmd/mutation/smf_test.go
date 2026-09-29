@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/chzchzchz/midispa/midi"
+	"gitlab.com/gomidi/midi/midimessage/channel"
+	"gitlab.com/gomidi/midi/smf"
+	"gitlab.com/gomidi/midi/smf/smfwriter"
 )
 
 func TestPatchSMFRoundTrip(t *testing.T) {
@@ -101,5 +105,28 @@ func TestPatchStoreRejectsInvalidArguments(t *testing.T) {
 	}
 	if err := (smfPatchStore{outputPath: "best.mid"}).save(patch, -1); err == nil {
 		t.Fatal("accepted a negative generation")
+	}
+}
+
+// writePartialSeedSMF writes a seed carrying only the given controller values.
+// A recording made on a device that does not expose every controller produces
+// exactly this kind of file.
+func writePartialSeedSMF(t *testing.T, path string, messages [][]byte) {
+	t.Helper()
+	var writeErr error
+	err := smfwriter.WriteFile(path, func(midiWriter smf.Writer) {
+		midiWriter.SetDelta(0)
+		for _, message := range messages {
+			control := channel.Channel(0).ControlChange(message[1], message[2])
+			if writeErr = midiWriter.Write(control); writeErr != nil {
+				return
+			}
+		}
+	}, smfwriter.NumTracks(1), smfwriter.TimeFormat(smf.MetricTicks(patchTicksPerQuarter)))
+	if writeErr != nil {
+		t.Fatalf("write partial seed: %v", writeErr)
+	}
+	if err != nil && !errors.Is(err, smf.ErrFinished) {
+		t.Fatalf("write partial seed: %v", err)
 	}
 }

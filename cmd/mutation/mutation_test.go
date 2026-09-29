@@ -9,7 +9,7 @@ import (
 func TestNewMutationInitializesParentAndRound(t *testing.T) {
 	settings := defaultEvolutionSettings()
 	settings.roundSize = 3
-	mutation, err := newMutationWithSemantics("Volca Bass", settings, rand.New(rand.NewSource(5)), nil, "")
+	mutation, err := newMutation(newTestCCFactory("Volca Bass"), settings, rand.New(rand.NewSource(5)), nil, "")
 	if err != nil {
 		t.Fatalf("newMutation: %v", err)
 	}
@@ -46,18 +46,22 @@ func TestMutationBreedsPopulationFromMultipleParents(t *testing.T) {
 		parent:      parent,
 		parentScore: &parentScore,
 	}
-	population := mutation.breedPopulation([]scoredPatch{
+	population, err := mutation.breedPopulation([]scoredPatch{
 		{patch: other, score: 8},
 		{patch: parent, score: 7},
 	})
+	if err != nil {
+		t.Fatalf("breedPopulation: %v", err)
+	}
 	if len(population) != settings.roundSize {
 		t.Fatalf("population has %d patches, want %d", len(population), settings.roundSize)
 	}
-	if population[0].patch.genes[0].value != 10 || population[1].patch.genes[0].value != 100 {
-		t.Fatalf("elites were not preserved: %d, %d", population[0].patch.genes[0].value, population[1].patch.genes[0].value)
+	elites := geneValues(t, population[0].patch)
+	if elites[0].value != 10 || geneValues(t, population[1].patch)[0].value != 100 {
+		t.Fatalf("elites were not preserved: %d, %d", elites[0].value, geneValues(t, population[1].patch)[0].value)
 	}
 	for index := 2; index < len(population); index++ {
-		for geneIndex, gene := range population[index].patch.genes {
+		for geneIndex, gene := range geneValues(t, population[index].patch) {
 			if gene.value != 10 && gene.value != 100 {
 				t.Fatalf("population candidate %d gene %d came from neither parent: %d", index, geneIndex, gene.value)
 			}
@@ -123,11 +127,23 @@ func TestMutationCrossoverMixesGenes(t *testing.T) {
 		parentA.genes[index].value = 10
 		parentB.genes[index].value = 100
 	}
-	child := mutation.crossover(parentA, parentB, true)
-	for index, gene := range child.genes {
+	child, err := mutation.crossover(parentA, parentB, true)
+	if err != nil {
+		t.Fatalf("crossover: %v", err)
+	}
+	for index, gene := range geneValues(t, child) {
 		if gene.value != 10 && gene.value != 100 {
 			t.Fatalf("gene %d came from neither parent: %d", index, gene.value)
 		}
+	}
+}
+
+func TestCrossoverRejectsAnotherFormat(t *testing.T) {
+	mutation := &Mutation{settings: defaultEvolutionSettings(), random: rand.New(rand.NewSource(10))}
+	ccPatch := newTestPatch(t, "Sound Controller")
+	sysexPatch := newTestSysexPatch(t)
+	if _, err := mutation.crossover(ccPatch, sysexPatch, true); err == nil {
+		t.Fatal("combined genes from two formats")
 	}
 }
 
@@ -142,7 +158,7 @@ func TestGaussianMutationStaysInMIDIRange(t *testing.T) {
 	mutation := &Mutation{settings: settings, random: rand.New(rand.NewSource(11))}
 	child := mutation.mutatePatch(parent, true)
 	changed := 0
-	for index, gene := range child.genes {
+	for index, gene := range geneValues(t, child) {
 		if gene.value < 0 || gene.value > maxMIDIValue {
 			t.Fatalf("gene %d is outside MIDI range: %d", index, gene.value)
 		}
@@ -157,7 +173,7 @@ func TestGaussianMutationStaysInMIDIRange(t *testing.T) {
 
 func TestMutationWriteChanges(t *testing.T) {
 	parent := newTestPatch(t, "Sound Controller")
-	candidate := parent.clone()
+	candidate := parent.clone().(*Patch)
 	candidate.genes[0].value = parent.genes[0].value + 20
 	var output strings.Builder
 	runner := mutationRunner{engine: &Mutation{parent: parent}, output: &output}
@@ -184,7 +200,7 @@ func TestMutationAdvancePreventsRegression(t *testing.T) {
 	equal := newTestPatch(t, "Sound Controller")
 	parentScore := 7
 	mutation := &Mutation{parent: parent, parentScore: &parentScore}
-	advance := func(candidate *Patch, score int) (*Patch, int, bool, error) {
+	advance := func(candidate patch, score int) (patch, int, bool, error) {
 		ranked, err := rankPatches([]scoredPatch{{patch: candidate, score: score}})
 		if err != nil {
 			return nil, 0, false, err
@@ -219,21 +235,24 @@ func TestMutationAdvancePreventsRegression(t *testing.T) {
 }
 
 func TestNewMutationRejectsInvalidState(t *testing.T) {
-	if _, err := newMutationWithSemantics("Volca Bass", defaultEvolutionSettings(), nil, nil, ""); err == nil {
+	if _, err := newMutation(newTestCCFactory("Volca Bass"), defaultEvolutionSettings(), nil, nil, ""); err == nil {
 		t.Fatal("accepted a nil random source")
 	}
 
 	settings := defaultEvolutionSettings()
 	model := newTestPatch(t, "Sound Controller")
 	settings.mutatedGenes = len(model.genes) + 1
-	if _, err := newMutationWithSemantics(model.model, settings, rand.New(rand.NewSource(6)), nil, ""); err == nil {
+	if _, err := newMutation(newTestCCFactory(model.model), settings, rand.New(rand.NewSource(6)), nil, ""); err == nil {
 		t.Fatal("accepted more mutated genes than the model has")
 	}
 	for _, roundSize := range []int{1, 2} {
 		settings := defaultEvolutionSettings()
 		settings.roundSize = roundSize
-		if _, err := newMutationWithSemantics(model.model, settings, rand.New(rand.NewSource(7)), nil, ""); err == nil {
+		if _, err := newMutation(newTestCCFactory(model.model), settings, rand.New(rand.NewSource(7)), nil, ""); err == nil {
 			t.Fatalf("accepted round size %d without room for offspring", roundSize)
 		}
+	}
+	if _, err := newMutation(sysexPatchFactory{format: dx7Format{}}, defaultEvolutionSettings(), rand.New(rand.NewSource(8)), nil, ""); err == nil {
+		t.Fatal("started a SysEx run without a seed")
 	}
 }

@@ -28,6 +28,7 @@ func TestRunMutationWithFactoryUsesInjectedOutput(t *testing.T) {
 		return writer, testWriteCloser{}, nil
 	}
 	config := configuration{
+		format:      ccFormatName,
 		modelName:   "Sound Controller",
 		portName:    "test",
 		output:      filepath.Join(t.TempDir(), "best.mid"),
@@ -47,16 +48,16 @@ func TestRunMutationWithFactoryUsesInjectedOutput(t *testing.T) {
 }
 
 type recordingAuditioner struct {
-	patches []*Patch
+	patches []patch
 }
 
-func (auditioner *recordingAuditioner) audition(_ context.Context, patch *Patch) error {
-	auditioner.patches = append(auditioner.patches, patch)
+func (auditioner *recordingAuditioner) audition(_ context.Context, candidate patch) error {
+	auditioner.patches = append(auditioner.patches, candidate)
 	return nil
 }
 
 type recordingPatchStore struct {
-	patches     []*Patch
+	patches     []patch
 	generations []int
 }
 
@@ -64,8 +65,8 @@ func (store *recordingPatchStore) path() string {
 	return "best.mid"
 }
 
-func (store *recordingPatchStore) save(patch *Patch, generation int) error {
-	store.patches = append(store.patches, patch)
+func (store *recordingPatchStore) save(candidate patch, generation int) error {
+	store.patches = append(store.patches, candidate)
 	store.generations = append(store.generations, generation)
 	return nil
 }

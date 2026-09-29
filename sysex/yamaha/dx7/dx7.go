@@ -162,8 +162,10 @@ type Voice struct {
 	LfoWaveform      int    `range:"0..5"`
 	PitchModSens     int    `range:"0..7"`
 	Transpose        int    `range:"0..48"`
-	VoiceName        [10]byte `range:"0..127"`
-	OperatorOn       int    `range:"0..63"`
+	// A name is text a generator must produce readably, while the range tag
+	// keeps the permissive wire domain that a real dump may contain.
+	VoiceName  [10]byte `range:"0..127" ascii:"32..126"`
+	OperatorOn int      `range:"0..63"`
 }
 
 func (v *Voice) check() error {

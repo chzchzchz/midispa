@@ -73,16 +73,23 @@ func (runner *mutationRunner) run(ctx context.Context) error {
 		if _, err := fmt.Fprintf(runner.output, "%s with rank %d, wrote %s.%0*d and %s\n", selection, score, runner.store.path(), generationDigitsWidth, runner.engine.generation, runner.store.path()); err != nil {
 			return err
 		}
-		runner.engine.population = runner.engine.breedPopulation(ranked)
+		nextPopulation, err := runner.engine.breedPopulation(ranked)
+		if err != nil {
+			return err
+		}
+		runner.engine.population = nextPopulation
 		runner.engine.generation++
 	}
 }
 
-func (runner *mutationRunner) writeChanges(patch, reference *Patch) error {
+func (runner *mutationRunner) writeChanges(candidate, reference patch) error {
 	if reference == nil {
 		reference = runner.engine.parent
 	}
-	changes := patch.changesFrom(reference)
+	changes, err := geneChanges(candidate, reference)
+	if err != nil {
+		return err
+	}
 	if len(changes) == 0 {
 		_, err := fmt.Fprintln(runner.output, "  changed genes: none (unchanged parent)")
 		return err
@@ -117,7 +124,11 @@ func runMutationWithFactory(ctx context.Context, config configuration, input io.
 	if err != nil {
 		return err
 	}
-	engine, err := newMutationWithSemantics(config.modelName, config.settings, random, semantics, config.seedPath)
+	format, err := newPatchFactory(config)
+	if err != nil {
+		return err
+	}
+	engine, err := newMutation(format, config.settings, random, semantics, config.seedPath)
 	if err != nil {
 		return err
 	}
@@ -136,10 +147,11 @@ func runMutationWithFactory(ctx context.Context, config configuration, input io.
 	}
 	defer midiCloser.Close()
 	player := newMIDIPlayerForChannel(midiWriter, config.midiChannel)
+	player.sysexSettle = config.sysexSettle
 	runner := mutationRunner{
 		engine:     engine,
 		auditioner: midiAuditioner{player: player, playback: playback},
-		store:      smfPatchStore{outputPath: config.output, midiChannel: config.midiChannel, jsonOutput: config.jsonOutput},
+		store:      format.store(config.output),
 		input:      input,
 		output:     output,
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"math/rand"
+	"path/filepath"
 	"testing"
 
 	"github.com/chzchzchz/midispa/cc"
@@ -24,9 +25,9 @@ func TestPatchUsesCCModelMetadata(t *testing.T) {
 			if len(patch.genes) == 0 {
 				t.Fatal("patch has no genes")
 			}
-			messages, err := patch.controlChanges(0)
+			messages, err := patch.encode(0)
 			if err != nil {
-				t.Fatalf("controlChanges: %v", err)
+				t.Fatalf("encode: %v", err)
 			}
 			if len(messages) != len(patch.genes) {
 				t.Fatalf("got %d messages for %d genes", len(messages), len(patch.genes))
@@ -64,7 +65,7 @@ func TestPatchAppliesDuplicateModelCCs(t *testing.T) {
 		t.Fatalf("applied %d values for duplicate CC, want 2", applied)
 	}
 	for _, gene := range patch.genes {
-		if gene.controller == 9 && gene.value != 55 {
+		if patch.controllers[gene.name] == 9 && gene.value != 55 {
 			t.Fatalf("duplicate CC 9 is %d, want 55", gene.value)
 		}
 	}
@@ -82,7 +83,7 @@ func TestMutationChangesOnlyCopiedGenes(t *testing.T) {
 		if parent.genes[index].value != 0 {
 			t.Fatalf("parent gene %d changed", index)
 		}
-		value := mutation.genes[index].value
+		value := geneValues(t, mutation)[index].value
 		if value < 0 || value > maxMIDIValue {
 			t.Fatalf("gene %d is outside MIDI range: %d", index, value)
 		}
@@ -104,8 +105,9 @@ func TestMutationRateCanKeepCandidateUnchanged(t *testing.T) {
 	settings.mutationRate = 0
 	mutationEngine := newTestMutation(parent, settings, 3)
 	mutation := mutationEngine.mutatePatch(parent, false)
+	values := geneValues(t, mutation)
 	for index := range parent.genes {
-		if got, want := mutation.genes[index].value, parent.genes[index].value; got != want {
+		if got, want := values[index].value, parent.genes[index].value; got != want {
 			t.Fatalf("unchanged gene %d is %d, want %d", index, got, want)
 		}
 	}
@@ -120,9 +122,10 @@ func TestMutatedGenesControlsExactCount(t *testing.T) {
 	settings.mutatedGenes = 2
 	mutationEngine := newTestMutation(parent, settings, 4)
 	mutation := mutationEngine.mutatePatch(parent, false)
+	values := geneValues(t, mutation)
 	changed := 0
 	for index := range parent.genes {
-		if mutation.genes[index].value != parent.genes[index].value {
+		if values[index].value != parent.genes[index].value {
 			changed++
 		}
 	}
@@ -172,10 +175,13 @@ func TestPatchChangesFromParent(t *testing.T) {
 	for index := range parent.genes {
 		parent.genes[index].value = 10
 	}
-	mutation := parent.clone()
+	mutation := parent.clone().(*Patch)
 	mutation.genes[0].value = 17
 	mutation.genes[1].value = 6
-	changes := mutation.changesFrom(parent)
+	changes, err := geneChanges(mutation, parent)
+	if err != nil {
+		t.Fatalf("geneChanges: %v", err)
+	}
 	if len(changes) != 2 {
 		t.Fatalf("got %d changes, want 2", len(changes))
 	}
@@ -223,5 +229,34 @@ func TestMutationSelectionRejectsInvalidScores(t *testing.T) {
 	}
 	if _, err := rankPatches(nil); err == nil {
 		t.Fatal("accepted an empty population")
+	}
+}
+
+func TestPartialSeedKeepsARandomBaseline(t *testing.T) {
+	// A seed overlays a randomized parent, so controllers the file does not
+	// carry keep exploring instead of sitting at a model default.
+	const model = "Sound Controller"
+	seeded := newTestPatch(t, model)
+	controller := seeded.controllers[seeded.genes[0].name]
+	seedPath := filepath.Join(t.TempDir(), "seed.mid")
+	writePartialSeedSMF(t, seedPath, [][]byte{{0xb0, byte(controller), 42}})
+
+	engine, err := newMutation(newTestCCFactory(model), defaultEvolutionSettings(), rand.New(rand.NewSource(21)), nil, seedPath)
+	if err != nil {
+		t.Fatalf("newMutation: %v", err)
+	}
+	genes := geneValues(t, engine.parent)
+	if genes[0].value != 42 {
+		t.Fatalf("seeded gene is %d, want 42", genes[0].value)
+	}
+	defaults := newTestPatch(t, model)
+	exploring := 0
+	for index, gene := range genes {
+		if index > 0 && gene.value != defaults.genes[index].value {
+			exploring++
+		}
+	}
+	if exploring == 0 {
+		t.Fatal("a partial seed left every other gene at its model default")
 	}
 }

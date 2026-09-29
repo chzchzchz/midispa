@@ -3,6 +3,7 @@ package sysex
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -121,18 +122,58 @@ func valueInRange(value reflect.Value, lo, hi int) bool {
 }
 
 func valueInSet(value reflect.Value, tag string) bool {
-	var current int64
+	allowed, err := parseOneofTag(tag)
+	if err != nil {
+		return false
+	}
+	return valueInAllowed(value, allowed)
+}
+
+// valueInAllowed applies the elementwise rule valueInRange already uses: a
+// oneof tag on an array or a slice constrains each element, not the collection
+// as a whole.
+func valueInAllowed(value reflect.Value, allowed []int) bool {
 	switch value.Kind() {
+	case reflect.Array, reflect.Slice:
+		for i := 0; i < value.Len(); i++ {
+			if !valueInAllowed(value.Index(i), allowed) {
+				return false
+			}
+		}
+		return true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		current = value.Int()
+		current := value.Int()
+		for _, candidate := range allowed {
+			if current == int64(candidate) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
-	for _, part := range strings.Split(tag, ",") {
-		candidate, err := strconv.Atoi(part)
-		if err == nil && current == int64(candidate) {
-			return true
+}
+
+// parseOneofTag returns the permitted values in ascending order so a caller can
+// treat the set as a domain and report it deterministically.
+func parseOneofTag(tag string) ([]int, error) {
+	parts := strings.Split(tag, ",")
+	allowed := make([]int, 0, len(parts))
+	seen := make(map[int]bool, len(parts))
+	for _, part := range parts {
+		candidate, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil {
+			return nil, ErrBadRange
 		}
+		if seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		allowed = append(allowed, candidate)
 	}
-	return false
+	if len(allowed) == 0 {
+		return nil, ErrBadRange
+	}
+	sort.Ints(allowed)
+	return allowed, nil
 }

@@ -14,7 +14,7 @@ const (
 	defaultCrossoverRate    = 0.7
 	mutationExplorationRate = 0.1
 	defaultRoundSize        = 4
-	defaultParentDecay     = 0.5
+	defaultParentDecay      = 0.5
 	maxMutatedGenes         = 3
 	geneticEliteCount       = 2
 	minimumRoundSize        = geneticEliteCount + 1
@@ -77,44 +77,54 @@ func (settings evolutionSettings) validateForModel(geneCount int) error {
 }
 
 type populationCandidate struct {
-	patch     *Patch
-	reference *Patch
+	patch     patch
+	reference patch
 }
 
 type scoredPatch struct {
-	patch *Patch
+	patch patch
 	score int
 }
 
-// Mutation owns the genetic population while Patch remains one MIDI patch.
-// The parent is the highest-ranked patch seen so far and remains an elite so
-// later generations cannot regress below the current champion.
+// Mutation owns the genetic population while a patch stays one candidate in
+// whatever format the run selected. The parent is the highest-ranked patch
+// seen so far and remains an elite so later generations cannot regress below
+// the current champion.
 type Mutation struct {
 	settings    evolutionSettings
 	random      *rand.Rand
-	parent      *Patch
+	parent      patch
 	parentScore *int
 	parentAge   int
 	population  []populationCandidate
 	generation  int
 }
 
-func newMutationWithSemantics(modelName string, settings evolutionSettings, random *rand.Rand, semantics map[string]geneSemantic, seedPath string) (*Mutation, error) {
+func newMutation(factory patchFactory, settings evolutionSettings, random *rand.Rand, semantics map[string]geneSemantic, seedPath string) (*Mutation, error) {
 	if random == nil {
 		return nil, fmt.Errorf("random source is nil")
 	}
-	parent, err := newPatchWithSemantics(modelName, semantics)
+	if factory == nil {
+		return nil, fmt.Errorf("patch factory is nil")
+	}
+	parent, err := factory.newPatch(semantics)
 	if err != nil {
 		return nil, err
 	}
 	if err := settings.validateForModel(parent.mutableGeneCount()); err != nil {
 		return nil, err
 	}
+	// The parent is randomized first and the seed laid over it, so a seed
+	// that carries only some values still leaves the rest exploring instead of
+	// pinned to a model default. A SysEx seed replaces every value, so the
+	// draws it discards cost nothing.
 	parent.randomize(random)
-	if seedPath != "" {
-		if err := loadSeedPatch(seedPath, parent); err != nil {
-			return nil, err
+	if seedPath == "" {
+		if factory.requiresSeed() {
+			return nil, fmt.Errorf("format %q requires --seed", parent.formatID())
 		}
+	} else if err := factory.loadSeed(seedPath, parent); err != nil {
+		return nil, err
 	}
 	if err := parent.validateFixedValues(); err != nil {
 		return nil, err
@@ -125,59 +135,10 @@ func newMutationWithSemantics(modelName string, settings evolutionSettings, rand
 
 // Small mutations make neighboring candidates easier to compare by ear than
 // fully random patches would be.
-func (mutation *Mutation) mutatePatch(parent *Patch, gaussian bool) *Patch {
-	patch := parent.clone()
-	if mutation.random.Float64() >= mutation.settings.mutationRate {
-		return patch
-	}
-
-	mutableGenes := make([]int, 0, len(patch.genes))
-	for index, gene := range patch.genes {
-		if gene.policy == genePolicyMutable {
-			mutableGenes = append(mutableGenes, index)
-		}
-	}
-	if len(mutableGenes) == 0 {
-		return patch
-	}
-	mutationCount := mutation.settings.mutatedGenes
-	if mutationCount == 0 {
-		maximum := maxMutatedGenes
-		if len(mutableGenes) < maximum {
-			maximum = len(mutableGenes)
-		}
-		mutationCount = 1 + mutation.random.Intn(maximum)
-	}
-	if mutationCount > len(mutableGenes) {
-		mutationCount = len(mutableGenes)
-	}
-	for _, selected := range mutation.random.Perm(len(mutableGenes))[:mutationCount] {
-		gene := &patch.genes[mutableGenes[selected]]
-		var value int
-		if gaussian && mutation.random.Float64() >= mutationExplorationRate {
-			value = gene.value + int(math.Round(mutation.random.NormFloat64()*mutation.settings.mutationSigma))
-			if value < 0 {
-				value = 0
-			}
-			if value > maxMIDIValue {
-				value = maxMIDIValue
-			}
-			if value == gene.value {
-				if value > 0 {
-					value--
-				} else {
-					value++
-				}
-			}
-		} else {
-			value = mutation.random.Intn(maxMIDIValue + 1)
-			for gene.value == value {
-				value = mutation.random.Intn(maxMIDIValue + 1)
-			}
-		}
-		gene.value = value
-	}
-	return patch
+func (mutation *Mutation) mutatePatch(parent patch, gaussian bool) patch {
+	child := parent.clone()
+	child.mutate(mutation.random, mutation.settings, gaussian)
+	return child
 }
 
 // Initial candidates explore broadly from the seed or random baseline; later
@@ -201,17 +162,15 @@ func (mutation *Mutation) nextRound() []populationCandidate {
 	return mutation.population
 }
 
-func (mutation *Mutation) crossover(parentA, parentB *Patch, enabled bool) *Patch {
+func (mutation *Mutation) crossover(parentA, parentB patch, enabled bool) (patch, error) {
 	child := parentA.clone()
 	if !enabled {
-		return child
+		return child, nil
 	}
-	for index := range child.genes {
-		if child.genes[index].policy == genePolicyMutable && mutation.random.Intn(2) == 0 {
-			child.genes[index].value = parentB.genes[index].value
-		}
+	if err := crossoverGenes(child, parentB, mutation.random); err != nil {
+		return nil, err
 	}
-	return child
+	return child, nil
 }
 
 // Rank-weighted roulette selection uses the full rank as fitness. Adding one
@@ -242,7 +201,7 @@ func (mutation *Mutation) selectionWeight(candidate scoredPatch) float64 {
 	return rankWeight(candidate.score)
 }
 
-func (mutation *Mutation) selectParent(ranked []scoredPatch) *Patch {
+func (mutation *Mutation) selectParent(ranked []scoredPatch) patch {
 	totalWeight := 0.0
 	for _, candidate := range ranked {
 		totalWeight += mutation.selectionWeight(candidate)
@@ -295,14 +254,14 @@ func (mutation *Mutation) selectionPool(ranked []scoredPatch) []scoredPatch {
 
 // Rank-weighted selection preserves diversity, crossover combines compatible
 // patches, and the remaining children receive local mutations.
-func (mutation *Mutation) breedPopulation(ranked []scoredPatch) []populationCandidate {
+func (mutation *Mutation) breedPopulation(ranked []scoredPatch) ([]populationCandidate, error) {
 	pool := mutation.selectionPool(ranked)
 	population := make([]populationCandidate, 0, mutation.settings.roundSize)
-	appendElite := func(patch *Patch) {
+	appendElite := func(candidate patch) {
 		if len(population) >= mutation.settings.roundSize {
 			return
 		}
-		population = append(population, populationCandidate{patch: patch.clone(), reference: patch})
+		population = append(population, populationCandidate{patch: candidate.clone(), reference: candidate})
 	}
 	appendElite(mutation.parent)
 	for _, candidate := range ranked {
@@ -316,16 +275,19 @@ func (mutation *Mutation) breedPopulation(ranked []scoredPatch) []populationCand
 	for len(population) < mutation.settings.roundSize {
 		parentA := mutation.selectParent(pool)
 		parentB := mutation.selectParent(pool)
-		child := mutation.crossover(parentA, parentB, mutation.random.Float64() < mutation.settings.crossoverRate)
+		child, err := mutation.crossover(parentA, parentB, mutation.random.Float64() < mutation.settings.crossoverRate)
+		if err != nil {
+			return nil, err
+		}
 		child = mutation.mutatePatch(child, true)
 		population = append(population, populationCandidate{patch: child, reference: parentA})
 	}
-	return population
+	return population, nil
 }
 
 // Equal scores retain the earlier patch until the parent decays enough for a
 // new candidate to replace it.
-func (mutation *Mutation) advanceRanked(ranked []scoredPatch) (*Patch, int, bool) {
+func (mutation *Mutation) advanceRanked(ranked []scoredPatch) (patch, int, bool) {
 	candidate := ranked[0]
 	if mutation.parentScore != nil {
 		effectiveParentScore := mutation.effectiveParentScore()
