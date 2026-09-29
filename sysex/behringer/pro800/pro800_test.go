@@ -367,7 +367,7 @@ func TestVersion6FRoundTrip(t *testing.T) {
 		Version: Version6F,
 		Name:    "Poly Six F1A",
 		OscA:    Oscillator{Frequency: 0x7c00, Volume: 0x7fff, Saw: 1, Triangle: 1, PitchMode: 2},
-		OscB:    Oscillator{Frequency: 0x3d7f, Square: 1, Sync: 1, PitchMode: 2},
+		OscB:    OscillatorB{Oscillator: Oscillator{Frequency: 0x3d7f, Square: 1, PitchMode: 2}, Sync: 1},
 		Filter: Filter{
 			Cutoff:    0x5778,
 			Resonance: 0x772b,
@@ -534,15 +534,14 @@ func TestRejectsUnknownVersion(t *testing.T) {
 
 // A value the dump layout has nowhere to put must be refused, because
 // dropping it hands back a message that says something the caller never
-// asked for. These four are the cases: a setting the older layout lacks, and
-// the two fields that belong to oscillator B alone.
+// asked for. These are the settings the older layout lacks. The two fields
+// that belong to oscillator B alone are not among them: the record has no
+// place for them on the first oscillator, so there is no value to refuse.
 func TestRejectsValuesWithNoPlaceInTheLayout(t *testing.T) {
 	tests := []struct {
 		name  string
 		patch Patch
 	}{
-		{"oscillator A fine", Patch{Version: Version6E, Name: "x", OscA: Oscillator{Fine: 1}}},
-		{"oscillator A sync", Patch{Version: Version6E, Name: "x", OscA: Oscillator{Sync: 1}}},
 		{"voice spread in 6E", Patch{Version: Version6E, Name: "x", VoiceSpread: 1}},
 		{"tracking reference in 6E", Patch{Version: Version6E, Name: "x", TrackingReference: 3}},
 		{"glide mode in 6E", Patch{Version: Version6E, Name: "x", GlideMode: 1}},
@@ -723,16 +722,18 @@ func fullPatch(version int) Patch {
 			Triangle:   1,
 			PitchMode:  2,
 		},
-		OscB: Oscillator{
-			Frequency:  2001,
-			Volume:     2002,
-			PulseWidth: 2003,
-			Fine:       2004,
-			Saw:        1,
-			Triangle:   1,
-			Square:     1,
-			Sync:       1,
-			PitchMode:  3,
+		OscB: OscillatorB{
+			Oscillator: Oscillator{
+				Frequency:  2001,
+				Volume:     2002,
+				PulseWidth: 2003,
+				Saw:        1,
+				Triangle:   1,
+				Square:     1,
+				PitchMode:  3,
+			},
+			Fine: 2004,
+			Sync: 1,
 		},
 		Filter: Filter{
 			Envelope: Envelope{

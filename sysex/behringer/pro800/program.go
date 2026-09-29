@@ -9,9 +9,9 @@ import (
 // ErrNotRepresentable is returned when a patch holds a value that the dump
 // layout it is being written in has nowhere to put. It is distinct from a
 // range error because no value of the field would be acceptable: the
-// information the caller set is not something a 6E dump or an oscillator A
-// can carry, so dropping it silently would hand back a message that says
-// something the caller did not ask for.
+// information the caller set is not something a 6E dump can carry, so
+// dropping it silently would hand back a message that says something the
+// caller did not ask for.
 var ErrNotRepresentable = errors.New("value has no place in this dump layout")
 
 const (
@@ -45,27 +45,35 @@ const (
 
 // Oscillator is one of the instrument's two analogue oscillators. The first
 // 150 bytes of a patch hold the frequency, level and pulse width of each,
-// followed by the waveform switches.
-//
-// Fine and Sync belong to oscillator B alone: the record has nowhere to put
-// them for oscillator A, which the notes list as having a saw, a triangle and
-// a square and nothing else.
+// followed by the waveform switches. The notes list both oscillators as having
+// a saw, a triangle and a square and nothing else, so that is all this holds.
 type Oscillator struct {
 	Frequency  int `range:"0..65535"`
 	Volume     int `range:"0..65535"`
 	PulseWidth int `range:"0..65535"`
-	Fine       int `range:"0..65535"`
 	// The waveform switches are independent, so an oscillator mixes its
 	// shapes rather than choosing one: saw plus triangle is the usual
 	// starting point for a reed.
 	Saw      int `oneof:"0,1"`
 	Triangle int `oneof:"0,1"`
 	Square   int `oneof:"0,1"`
-	Sync     int `oneof:"0,1"`
 	// PitchMode is how far the pitch wheel moves this oscillator: free
 	// running, in semitones, in octaves, or fixed while the wheel does
 	// something else.
 	PitchMode int `oneof:"0,1,2,3"`
+}
+
+// OscillatorB is the second oscillator, the only one the record gives a fine
+// tuning and a sync switch. Declaring them here rather than on the shared
+// type is what lets a reader, and a generator walking the struct, see that
+// the first oscillator has nowhere to put them: there is no field to refuse
+// and nothing to check at encode time.
+type OscillatorB struct {
+	Oscillator
+	// Fine is the tuning offset the sync switch is measured against.
+	Fine int `range:"0..65535"`
+	// Sync is whether the second oscillator locks to the first.
+	Sync int `oneof:"0,1"`
 }
 
 // Envelope is a decay envelope's four times, which both the filter and the
@@ -181,7 +189,12 @@ type PitchBend struct {
 	// Range is the span in semitones. The notes give no scale for it, only
 	// a default of 12, so the value is the instrument's own and not a
 	// count of semitones.
-	Range int `range:"0..65535"`
+	//
+	// The span only exists in the 6F layout, so a 6E dump has nowhere to put
+	// a non-zero one. It is left out of the catalog for both layouts rather
+	// than for whichever the seed happened to carry, so that what a run can
+	// evolve does not depend on the layout it started from.
+	Range int `range:"0..65535" mutate:"skip"`
 }
 
 // Patch is one of the instrument's 400 memory slots, as laid out in the
@@ -201,10 +214,19 @@ type PitchBend struct {
 // give the curve, so the numbers are the instrument's own units and not
 // cents: a caller that wants to set a temperament has to interpolate from the
 // table the notes publish rather than scale a value itself.
+//
+// The range is the whole signed 32-bit field rather than the band the
+// published table covers. That table runs from -40 to +100 cents and nothing
+// says the instrument stops there, so a narrower tag would reject a dump the
+// instrument may well produce. It does mean a generator drawing from this
+// range has a far wider space to search than the other fields on the record.
 type Patch struct {
-	Version   int `oneof:"110,111"`
+	// Version selects the dump layout, and a run keeps the one its seed
+	// carries: the layouts hold different fields, so switching mid-search
+	// would change which patches are representable.
+	Version   int `oneof:"110,111" mutate:"skip"`
 	OscA      Oscillator
-	OscB      Oscillator
+	OscB      OscillatorB
 	Filter    Filter
 	Amp       Amplifier
 	PolyMod   PolyMod
@@ -222,10 +244,10 @@ type Patch struct {
 	UnisonDetune int `range:"0..65535"`
 	// Reserved is the one byte the notes mark unused between the mod wheel
 	// target and the first chord note.
-	Reserved   int    `range:"0..255"`
-	Chord      [8]int `range:"0..255"`
-	Tuning     [12]int32
-	NoiseLevel int `range:"0..65535"`
+	Reserved   int       `range:"0..255" mutate:"skip"`
+	Chord      [8]int    `range:"0..255"`
+	Tuning     [12]int32 `range:"-2147483648..2147483647"`
+	NoiseLevel int       `range:"0..65535"`
 	// ArpMode is the pattern the arpeggiator plays, and is the only part
 	// of the arpeggiator the patch record holds: nothing in it starts or
 	// stops the arpeggiator, so a patch can name a pattern but not turn it
@@ -253,22 +275,27 @@ type Patch struct {
 	LfoAftertouchPresent bool
 
 	// The four settings below exist only in the 6F layout, and are ignored
-	// by an instrument still running the older firmware.
+	// by an instrument still running the older firmware. All four are left
+	// out of the catalog for both layouts: a run seeded from a 6E dump has
+	// nowhere to put a non-zero one, and a run seeded from a 6F dump should
+	// not be able to grow a field that stops existing on older firmware.
+	// What a run can evolve therefore does not depend on the layout it
+	// started from.
 
 	// VoiceSpread is whether the unison stack spreads across the stereo
 	// field. The notes give its two values in opposite orders, one table
 	// listing it on then off and another off then on, so which value means
 	// which is not settled; the name does not depend on it.
-	VoiceSpread int `oneof:"0,1"`
+	VoiceSpread int `oneof:"0,1" mutate:"skip"`
 
 	// TrackingReference is the key the keyboard tracking is measured from,
 	// counting up from the lowest key. The notes give only that the value
 	// for the fourth octave is three.
-	TrackingReference int `range:"0..127"`
+	TrackingReference int `range:"0..127" mutate:"skip"`
 
 	// GlideMode is whether Glide is a time or a rate, which is what decides
 	// whether a long glide feels the same in a low voice and a high one.
-	GlideMode int `oneof:"0,1"`
+	GlideMode int `oneof:"0,1" mutate:"skip"`
 }
 
 // le16 reads the little endian sixteen bit values the record is built from.
@@ -333,16 +360,18 @@ func (p *Patch) decode(data []byte) error {
 			Square:     int(data[57]),
 			PitchMode:  int(data[74]),
 		},
-		OscB: Oscillator{
-			Frequency:  le16(data, 11),
-			Volume:     le16(data, 13),
-			PulseWidth: le16(data, 15),
-			Fine:       le16(data, 17),
-			Saw:        int(data[58]),
-			Triangle:   int(data[59]),
-			Square:     int(data[60]),
-			Sync:       int(data[61]),
-			PitchMode:  int(data[75]),
+		OscB: OscillatorB{
+			Oscillator: Oscillator{
+				Frequency:  le16(data, 11),
+				Volume:     le16(data, 13),
+				PulseWidth: le16(data, 15),
+				Saw:        int(data[58]),
+				Triangle:   int(data[59]),
+				Square:     int(data[60]),
+				PitchMode:  int(data[75]),
+			},
+			Fine: le16(data, 17),
+			Sync: int(data[61]),
 		},
 		Filter: Filter{
 			Envelope: Envelope{
@@ -474,11 +503,6 @@ func (p *Patch) decodeTail(data []byte) error {
 func (p *Patch) encode() ([]byte, error) {
 	if err := sysex.CheckTaggedFields(p); err != nil {
 		return nil, err
-	}
-	// Fine and Sync belong to oscillator B: the record has nowhere to put
-	// them for oscillator A, so they are refused rather than dropped.
-	if p.OscA.Fine != 0 || p.OscA.Sync != 0 {
-		return nil, ErrNotRepresentable
 	}
 	if len(p.Name) > nameSize {
 		return nil, sysex.ErrBadRange

@@ -355,7 +355,10 @@ func (d *DumpRequest) UnmarshalBinary(data []byte) error {
 // PatchData is one patch read back from the instrument, together with the
 // address it was read from, which is the bank and program the panel shows.
 type PatchData struct {
-	Address int `range:"0..399"`
+	// Address is which slot the panel shows, not a sound. A dump written
+	// back carries the address it was read from, which is the least
+	// surprising thing to hand the instrument.
+	Address int `range:"0..399" mutate:"skip"`
 	Patch   Patch
 }
 
