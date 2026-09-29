@@ -8,6 +8,7 @@ import (
 
 	"github.com/chzchzchz/midispa/sysex"
 	"github.com/chzchzchz/midispa/sysex/keystep37"
+	"github.com/chzchzchz/midispa/sysex/korg/microkorg"
 	"github.com/chzchzchz/midispa/sysex/sr16"
 	"github.com/chzchzchz/midispa/sysex/stanton"
 )
@@ -28,6 +29,14 @@ var reflectMap = map[string]interface{}{
 	"sysex/stanton/scs3d/ButtonsLeftMode":   &stanton.ButtonsLeftMode{},
 	"sysex/stanton/scs3d/ButtonsRightMode":  &stanton.ButtonsRightMode{},
 	"sysex/stanton/scs3d/CompatibilityMode": &stanton.CompatibilityMode{},
+
+	"sysex/korg/microkorg/ProgramData":         &microkorg.ProgramData{},
+	"sysex/korg/microkorg/ProgramBank":         &microkorg.ProgramBank{},
+	"sysex/korg/microkorg/GlobalData":          &microkorg.GlobalData{},
+	"sysex/korg/microkorg/AllData":             &microkorg.AllData{},
+	"sysex/korg/microkorg/DumpRequest":         &microkorg.DumpRequest{},
+	"sysex/korg/microkorg/ProgramWriteRequest": &microkorg.ProgramWriteRequest{},
+	"sysex/korg/microkorg/Status":              &microkorg.Status{},
 }
 
 func readReflectedJson(ty string, r io.Reader) (interface{}, error) {
