@@ -12,7 +12,10 @@ const (
 
 // SingleVoice is the 155-byte DX7 edit-buffer representation of a voice.
 type SingleVoice struct {
-	Channel int `range:"0..15"`
+	// Channel is routing, not a sound: it says which channel the dump
+	// addresses, and a caller sets it from its own channel rather than
+	// evolving it.
+	Channel int `range:"0..15" mutate:"skip"`
 	Voice
 }
 

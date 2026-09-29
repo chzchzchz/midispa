@@ -162,10 +162,17 @@ type Voice struct {
 	LfoWaveform      int    `range:"0..5"`
 	PitchModSens     int    `range:"0..7"`
 	Transpose        int    `range:"0..48"`
-	// A name is text a generator must produce readably, while the range tag
-	// keeps the permissive wire domain that a real dump may contain.
-	VoiceName  [10]byte `range:"0..127" ascii:"32..126"`
-	OperatorOn int      `range:"0..63"`
+	// VoiceName is a label, and the wire range stays permissive because a
+	// real dump may pad it with control bytes.
+	VoiceName [10]byte `range:"0..127" mutate:"skip"`
+	//
+	// There is deliberately no operator on/off field. Neither layout has one:
+	// a packed operator block is seventeen bytes holding twenty-one seven-bit
+	// parameters, and the bits left over are the ones the spec marks don't
+	// care, so no enable flag was ever allocated. The unpacked voice carries
+	// nothing either, and an operator that is switched off is written with an
+	// output level of zero, which is how it reads back in. A caller that wants
+	// to see an operator as off should compare its output level to zero.
 }
 
 func (v *Voice) check() error {

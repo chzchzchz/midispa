@@ -15,7 +15,7 @@ func TestBulkDataEncodeChecksum(t *testing.T) {
 	}
 
 	sum := 0
-	for _, value := range encoded[sysexHeaderSize:len(encoded)-2] {
+	for _, value := range encoded[sysexHeaderSize : len(encoded)-2] {
 		sum += int(value)
 	}
 	want := byte((-sum) & 0x7f)
@@ -133,13 +133,6 @@ func TestVoiceEncodeRejectsOutOfRangeField(t *testing.T) {
 	voice := Voice{PitchEgRate: [4]int{0, 0, 0, 100}}
 	if _, err := voice.encode(); err == nil {
 		t.Fatal("encode accepted an out-of-range voice field")
-	}
-}
-
-func TestVoiceEncodeRejectsInvalidOperatorOn(t *testing.T) {
-	voice := Voice{OperatorOn: 64}
-	if _, err := voice.encode(); err == nil {
-		t.Fatal("encode accepted an invalid operator mask")
 	}
 }
 
