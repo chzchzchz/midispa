@@ -7,9 +7,9 @@ import (
 type Event struct {
 	*Voice
 	Beat          float32
-	ChromaticNote int // MIDI note 0 through 127; chromatic voices only
+	ChromaticNote int  // MIDI note 0 through 127; chromatic voices only
 	Tie           bool // this event continues into the next event for this voice
-	Velocity      int // [0,127]
+	Velocity      int  // [0,127]
 }
 
 // IsChromatic reports whether the event's configured voice supplies its own pitch.

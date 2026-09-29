@@ -5,25 +5,31 @@ import (
 )
 
 type PatternBank struct {
-	Patterns      map[int]*Pattern
-	selPatIdx     int
-	selTrackRow   int // valid rows [1,4]
-	editingLength bool
-	editingNote   bool
-	stepCursor    int
-	pressedPads   uint64
-	rowPadMasks   [4]uint16
-	trackVoices   [4]int
-	f             *Fire
-	vb            *VoiceBank
-	playback      *Playback
+	Patterns          map[int]*Pattern
+	selPatIdx         int
+	selTrackRow       int // valid rows [1,4]
+	editingLength     bool
+	editingNote       bool
+	stepCursor        int
+	chromaticVelocity int
+	pressedPads       uint64
+	rowPadMasks       [4]uint16
+	trackVoices       [4]int
+	f                 *Fire
+	vb                *VoiceBank
+	playback          *Playback
 }
 
 func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 	if len(vb.voices) == 0 {
 		panic("no voices")
 	}
-	ret := &PatternBank{Patterns: make(map[int]*Pattern), f: f, vb: vb}
+	ret := &PatternBank{
+		Patterns:          make(map[int]*Pattern),
+		chromaticVelocity: defaultChromaticVelocity,
+		f:                 f,
+		vb:                vb,
+	}
 	for i := 0; i < 4; i++ {
 		ret.trackVoices[i] = i % len(vb.voices)
 	}

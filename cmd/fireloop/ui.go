@@ -217,7 +217,7 @@ func handlePatternGrid(aseq *alsa.Seq, x, y, vel int) error {
 		return nil
 	}
 	if patbank.editingNote {
-		return patbank.handleNoteEditPad(aseq, y, x, vel)
+		return patbank.handleNoteEditPad(aseq, y, x)
 	}
 	if shiftOn {
 		pendingNumber *= 10
@@ -289,9 +289,6 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		}
 		return patbank.ToggleLengthMode()
 	case NoteMode:
-		if err := stopPlayback(); err != nil {
-			return err
-		}
 		return patbank.ToggleNoteMode()
 	case NoteGridLeft:
 		return patbank.MoveStepCursor(-1)
@@ -321,6 +318,8 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		return handlePatternMute(3)
 	case NoteMute4:
 		return handlePatternMute(4)
+	case CCVolume:
+		return patbank.AdjustChromaticVelocity(aseq, velocity)
 	case CCSelect:
 		dir := 1
 		if int(ev.Data[2]) == EncoderLeft {

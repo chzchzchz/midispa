@@ -23,6 +23,31 @@ func (w *captureMidiWriter) WritePort(event alsa.SeqEvent, _ int) error {
 	return nil
 }
 
+func TestSharedMIDIDestination(t *testing.T) {
+	previous := sharedMIDIDestination
+	t.Cleanup(func() { sharedMIDIDestination = previous })
+	destination := alsa.SeqAddr{Client: 28, Port: 0}
+	message := []byte{midi.MakeNoteOn(0), 60, 100}
+
+	sharedMIDIDestination = false
+	writer := &captureMidiWriter{}
+	if err := writeMidiMsgs(writer, destination, [][]byte{message}); err != nil {
+		t.Fatal(err)
+	}
+	if writer.events[0].SeqAddr != destination {
+		t.Fatalf("per-device destination = %v, want %v", writer.events[0].SeqAddr, destination)
+	}
+
+	sharedMIDIDestination = true
+	writer = &captureMidiWriter{}
+	if err := writeMidiMsgs(writer, destination, [][]byte{message}); err != nil {
+		t.Fatal(err)
+	}
+	if writer.events[0].SeqAddr != alsa.SubsSeqAddr {
+		t.Fatalf("shared destination = %v, want %v", writer.events[0].SeqAddr, alsa.SubsSeqAddr)
+	}
+}
+
 func chromaticTestVoice(t *testing.T, notes ...*int) (*Voice, *Device) {
 	t.Helper()
 	voices := make([]Voice, len(notes))
@@ -159,6 +184,40 @@ func TestChromaticPatternEditingAndTieInvariants(t *testing.T) {
 	}
 }
 
+func TestModeDoesNotStopPlayback(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{
+		Channel: 1,
+		Voices:  []Voice{{Name: "lead", Channel: 1}},
+	}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	previousPatbank, previousSongbank := patbank, songbank
+	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
+	t.Cleanup(func() {
+		patbank, songbank = previousPatbank, previousSongbank
+		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
+	})
+	patbank, songbank = bank, nil
+	shiftOn, altOn = false, false
+	stopCalled := false
+	playbackStop = func() error {
+		stopCalled = true
+		return nil
+	}
+	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if stopCalled || playbackStop == nil {
+		t.Fatal("Mode stopped or cleared active playback")
+	}
+}
+
 func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	writeCount := 0
 	fire := NewFire(func([]byte) error {
@@ -205,7 +264,7 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	if len(preview.events) != 2 {
 		t.Fatalf("audition wrote %d messages, want 2", len(preview.events))
 	}
-	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(chromaticPaletteNote(0, 0)), 100})
+	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(chromaticPaletteNote(0, 0)), defaultChromaticVelocity})
 	assertMidiData(t, preview.events[1], []byte{midi.MakeNoteOff(0), byte(chromaticPaletteNote(0, 0)), 0})
 	if err := processPatternEvent(nil, padMessage(NoteGridRight, 100)); err != nil {
 		t.Fatal(err)
@@ -226,6 +285,159 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	}
 	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); !ok {
 		t.Fatal("Alt plus palette pad cleared a different step")
+	}
+}
+
+func TestChromaticVelocityControl(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{
+		Channel: 1,
+		Voices:  []Voice{{Name: "lead", Channel: 1}},
+	}})
+	voice := voiceBank.voices[0]
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	previousPatbank, previousSongbank := patbank, songbank
+	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
+	t.Cleanup(func() {
+		patbank, songbank = previousPatbank, previousSongbank
+		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
+	})
+	patbank, songbank = bank, nil
+	shiftOn, altOn, playbackStop = false, false, nil
+	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handlePatternGrid(nil, 0, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+	if !ok || event.Velocity != defaultChromaticVelocity {
+		t.Fatalf("initial velocity = %d/%v, want %d", event.Velocity, ok, defaultChromaticVelocity)
+	}
+	cc := alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCVolume), byte(EncoderLeft)}}
+	if err := processPatternEvent(nil, cc); err != nil {
+		t.Fatal(err)
+	}
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	if event.Velocity != defaultChromaticVelocity-chromaticVelocityStep {
+		t.Fatalf("downward velocity = %d, want %d", event.Velocity, defaultChromaticVelocity-chromaticVelocityStep)
+	}
+	cc.Data[2] = byte(EncoderRight)
+	if err := processPatternEvent(nil, cc); err != nil {
+		t.Fatal(err)
+	}
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	if event.Velocity != defaultChromaticVelocity {
+		t.Fatalf("upward velocity = %d, want %d", event.Velocity, defaultChromaticVelocity)
+	}
+
+	event, _ = bank.CurrentPattern().SetChromaticNote(0, voice, event.ChromaticNote, 0)
+	cc.Data[2] = byte(EncoderLeft)
+	if err := processPatternEvent(nil, cc); err != nil {
+		t.Fatal(err)
+	}
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	if event.Velocity != 0 {
+		t.Fatalf("velocity at lower bound = %d, want 0", event.Velocity)
+	}
+	cc.Data[2] = byte(EncoderRight)
+	if err := processPatternEvent(nil, cc); err != nil {
+		t.Fatal(err)
+	}
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	if event.Velocity != chromaticVelocityStep {
+		t.Fatalf("velocity above lower bound = %d, want %d", event.Velocity, chromaticVelocityStep)
+	}
+}
+
+func TestChromaticVelocityFollowsStep(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{
+		Channel: 1,
+		Voices:  []Voice{{Name: "lead", Channel: 1}},
+	}})
+	voice := voiceBank.voices[0]
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(0, voice, 60, 90)
+	pattern.SetChromaticNote(1, voice, 62, 40)
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	if bank.chromaticVelocity != 90 {
+		t.Fatalf("initial step velocity = %d, want 90", bank.chromaticVelocity)
+	}
+	if err := bank.MoveStepCursor(1); err != nil {
+		t.Fatal(err)
+	}
+	event, ok := pattern.EventAtStep(bank.StepCursor(), voice)
+	if !ok || event.Velocity != 40 || bank.chromaticVelocity != 40 {
+		t.Fatalf("step 2 velocity = %d/%d, want 40/40", event.Velocity, bank.chromaticVelocity)
+	}
+	if err := bank.MoveStepCursor(-1); err != nil {
+		t.Fatal(err)
+	}
+	event, ok = pattern.EventAtStep(bank.StepCursor(), voice)
+	if !ok || event.Velocity != 90 || bank.chromaticVelocity != 90 {
+		t.Fatalf("step 1 velocity = %d/%d, want 90/90", event.Velocity, bank.chromaticVelocity)
+	}
+}
+
+func TestChromaticStatusText(t *testing.T) {
+	event := &Event{ChromaticNote: 60, Velocity: 90, Tie: true}
+	if got := chromaticStatusText(0, event, 90, 1); got != "S01 C4@090->02" {
+		t.Fatalf("tied status = %q", got)
+	}
+	if got := chromaticStatusText(1, nil, 0, -1); got != "S02 --@000" {
+		t.Fatalf("empty status = %q", got)
+	}
+}
+
+func TestChromaticPadSetsEditingStep(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{
+		Channel: 1,
+		Voices:  []Voice{{Name: "lead", Channel: 1}},
+	}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	previousPatbank, previousSongbank := patbank, songbank
+	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
+	t.Cleanup(func() {
+		patbank, songbank = previousPatbank, previousSongbank
+		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
+	})
+	patbank, songbank = bank, nil
+	shiftOn, altOn, playbackStop = false, false, nil
+	if err := processPatternEvent(nil, padMessage(54+3, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if bank.StepCursor() != 3 {
+		t.Fatalf("step cursor after pad = %d, want 3", bank.StepCursor())
+	}
+	bank.releasePad(0, 3)
+	if err := processPatternEvent(nil, padMessage(54+5, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if bank.StepCursor() != 5 {
+		t.Fatalf("step cursor after second pad = %d, want 5", bank.StepCursor())
 	}
 }
 

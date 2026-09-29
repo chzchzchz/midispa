@@ -154,13 +154,29 @@ func (p *Pattern) SetChromaticNote(step int, v *Voice, note, velocity int) (Even
 		}
 	}
 	event := Event{
-		Voice:          v,
-		Beat:           stepBeat(step),
+		Voice:         v,
+		Beat:          stepBeat(step),
 		ChromaticNote: note,
-		Velocity:       velocity,
+		Velocity:      velocity,
 	}
 	insertAt := p.insertEventLocked(event)
 	return p.Events[insertAt], true
+}
+
+func (p *Pattern) SetChromaticVelocity(step int, v *Voice, velocity int) (Event, bool) {
+	if v == nil || !v.IsChromatic() || step < 0 || step >= p.LengthSteps() {
+		return Event{}, false
+	}
+	velocity = clampMidiDataValue(velocity)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, event := range p.Events {
+		if eventStep(event) == step && event.Voice == v {
+			p.Events[i].Velocity = velocity
+			return p.Events[i], true
+		}
+	}
+	return Event{}, false
 }
 
 // TieEventsAtSteps links two existing events only when the earlier event's next event is the later one.

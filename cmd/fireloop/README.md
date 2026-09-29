@@ -15,6 +15,8 @@ go build -o /tmp/fireloop ./cmd/fireloop
 
 `-port` selects the Fire MIDI port. Each device in the kit supplies its own destination port in `MidiPort`.
 
+`-shared-midi-destination` sends instrument MIDI through Fireloop's main ALSA port to every connected destination, matching the legacy broadcast behavior. The default remains per-device routing; shared mode intentionally sends every note to all connected outputs.
+
 ## Kit format
 
 A kit file is a top-level array of device objects, so each device can use a different MIDI port. A single device object is still accepted for compatibility. Omitting a voice's `Note` selects a chromatic instrument; an explicit `Note`, including `0`, selects a percussive instrument. A voice `Channel` overrides its device's channel:
@@ -48,12 +50,14 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 ### Pattern mode
 
 - Pad grid: toggle steps for a percussive voice. Empty chromatic steps are ignored here.
+- In pattern/step mode, a pad on the selected chromatic track moves the editing step cursor. Two held pads still create a tie.
 - Mute 1 through 4: select a track row and its voice.
 - Encoder: change the voice assigned to the selected row.
 - Grid left/right: move the current step cursor.
 - Overview: enter or leave length-edit mode.
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
-- Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid then selects pitches starting at MIDI 21 (A0), with four rows of sixteen semitones.
+- Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid then selects pitches starting at MIDI 21 (A0), with four rows of sixteen semitones. Toggling Mode does not stop playback.
+- Volume knob with a selected chromatic voice: each detent increments or decrements the current step's velocity by one, clamped to 0..127. The status line shows `S<STEP> <NOTE>@<VELOCITY>`.
 - Pad in note-edit mode: assign and audition the selected pitch. `Alt` plus a pad clears the event at the current step.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. Cross-row and three-or-more-pad gestures are ignored.
 - `Shift` plus a pad, then release `Shift`: enter a tempo.
@@ -63,6 +67,15 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 - Play while copied: paste the pattern.
 - Stop: stop playback and release active chromatic notes.
 - Pattern/song: switch modes.
+
+#### Chromatic editing flow
+
+1. Select a chromatic voice with Mute 1 through 4 and the Encoder if needed.
+2. In pattern/step mode, press a pad on the selected chromatic track to move the editing step cursor. This does not create or remove a note; two held pads still create a tie.
+3. Move the cursor with Grid left/right or by pressing another step pad. Steps beyond the current pattern length are ignored.
+4. Press Mode to enter note-edit mode. The pad grid becomes the pitch palette; press a palette pad to create or update the note at the cursor and audition it.
+5. Use the Volume encoder to change that step's velocity by one detent at a time. The status line shows `S<STEP> <NOTE>@<VELOCITY>`; an empty step shows `--`.
+6. Press Mode again to return to step mode. In note-edit mode, Alt plus a palette pad clears the current step.
 
 ### Song mode
 
