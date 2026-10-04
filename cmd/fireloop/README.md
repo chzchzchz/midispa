@@ -13,6 +13,14 @@ go build -o /tmp/fireloop ./cmd/fireloop
 
 `-kit` accepts a JSON file containing a top-level device array or a directory of JSON files. When a directory is supplied, each `.json` file is loaded and devices are ordered by their `Name` field. This makes it possible to keep output-port and voice mappings in separate files.
 
+`-kit` can be repeated, and the devices of every kit are merged in the order the flags are given:
+
+```sh
+/tmp/fireloop -kit cmd/fireloop/kits/gm_drums.json -kit my_leads.json -port 'FL STUDIO FIRE Jack 1'
+```
+
+A file and a directory can be mixed in one command line. A path that fails to load stops startup, because a half-loaded kit would silently drop voices. Track numbers follow the merged order, so reordering the flags renumbers the kit's voices.
+
 `-port` selects the Fire MIDI port. Each device in the kit supplies its own destination port in `MidiPort`.
 
 `-shared-midi-destination` sends instrument MIDI through Fireloop's main ALSA port to every connected destination, matching the legacy broadcast behavior. The default remains per-device routing; shared mode intentionally sends every note to all connected outputs.

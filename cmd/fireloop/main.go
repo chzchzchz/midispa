@@ -21,6 +21,8 @@ var sharedMIDIDestination bool
 const (
 	midiChannelMax = 16
 	midiNoteMax    = 127
+	// defaultKitPath is the kit loaded when -kit is not given.
+	defaultKitPath = "kit.json"
 )
 
 // Validate routing values before opening ports because invalid channels otherwise fail during playback.
@@ -35,7 +37,7 @@ func validateDevices(devices []Device) error {
 
 func validateDevice(index int, dev *Device) error {
 	if dev.MidiPort == "" {
-		return fmt.Errorf("device %d has an empty MidiPort", index)
+		return fmt.Errorf("device %d (%q) has an empty MidiPort", index, dev.Name)
 	}
 	if !validChannel(dev.Channel) {
 		return fmt.Errorf("device %q has invalid channel %d", dev.Name, dev.Channel)
@@ -170,6 +172,61 @@ func loadDevices(path string) ([]Device, error) {
 	return devices, nil
 }
 
+// loadKit merges the devices from every kit path in the order the paths are given, so
+// the voice list on the pad grid follows the command line rather than the file names.
+func loadKit(paths []string) ([]Device, error) {
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no kit specified")
+	}
+	var devices []Device
+	for _, path := range paths {
+		pathDevices, err := loadDevices(path)
+		if err != nil {
+			return nil, err
+		}
+		devices = append(devices, pathDevices...)
+	}
+	return devices, nil
+}
+
+// kitPaths collects repeated -kit arguments, which lets several kit files or directories
+// be merged. The flag package cannot repeat a string flag on its own, hence the Value.
+type kitPaths struct {
+	paths []string
+	given bool
+}
+
+func (k *kitPaths) String() string {
+	if len(k.paths) == 0 {
+		return defaultKitPath
+	}
+	return strings.Join(k.paths, ",")
+}
+
+// Set drops the default kit the first time the flag appears. Appending to it instead
+// would load the default alongside whatever the command line asked for, which fails
+// outright when no kit.json sits in the working directory.
+func (k *kitPaths) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("empty kit path")
+	}
+	if !k.given {
+		k.paths = nil
+		k.given = true
+	}
+	k.paths = append(k.paths, value)
+	return nil
+}
+
+// all returns the kit paths to load: the ones given on the command line, or the default
+// when there are none.
+func (k *kitPaths) all() []string {
+	if len(k.paths) == 0 {
+		return []string{defaultKitPath}
+	}
+	return k.paths
+}
+
 func must(err error) {
 	if err != nil {
 		panic(err)
@@ -177,7 +234,8 @@ func must(err error) {
 }
 
 func main() {
-	kitFlag := flag.String("kit", "kit.json", "kit of devices to load")
+	var kits kitPaths
+	flag.Var(&kits, "kit", "kit of devices to load; repeat to merge several kits")
 	midiPort := flag.String("port", "FL STUDIO FIRE Jack 1", "midi port for akai fire")
 	logLevel := flag.String("log-level", "info", "log verbosity: debug, info, warn or error")
 	logFormat := flag.String("log-format", "text", "log format: text or json")
@@ -193,11 +251,11 @@ func main() {
 	}
 	setLogger(newLogger(level, *logFormat))
 	logger.Info("fireloop starting",
-		"kit", *kitFlag, "port", *midiPort, "shared", sharedMIDIDestination,
+		"kits", kits.String(), "port", *midiPort, "shared", sharedMIDIDestination,
 		"level", level.String(), "format", strings.ToLower(*logFormat))
 
-	log.Println("loading kit", *kitFlag)
-	devs, err := loadDevices(*kitFlag)
+	log.Println("loading kit", kits.String())
+	devs, err := loadKit(kits.all())
 	if err != nil {
 		log.Fatal(err)
 	}
