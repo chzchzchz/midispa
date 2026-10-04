@@ -11,6 +11,8 @@ go build -o /tmp/fireloop ./cmd/fireloop
 /tmp/fireloop -kit cmd/fireloop/kits/gm_drums.json -port 'FL STUDIO FIRE Jack 1'
 ```
 
+`Ctrl-C` releases any note still sounding and blanks the unit before leaving, so the instrument is not left holding a note or showing the last frame.
+
 `-kit` accepts a JSON file containing a top-level device array or a directory of JSON files. When a directory is supplied, each `.json` file is loaded and devices are ordered by their `Name` field. This makes it possible to keep output-port and voice mappings in separate files.
 
 `-kit` can be repeated, and the devices of every kit are merged in the order the flags are given:

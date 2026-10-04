@@ -8,9 +8,11 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/chzchzchz/midispa/alsa"
 )
@@ -227,13 +229,129 @@ func (k *kitPaths) all() []string {
 	return k.paths
 }
 
-func must(err error) {
-	if err != nil {
-		panic(err)
+// sequencerSession is what shutdown needs from the ALSA client. It is an interface so the
+// shutdown path can be exercised without opening a port.
+type sequencerSession interface {
+	sequencerWriter
+	Close() error
+}
+
+// eventReader is the blocking half of the ALSA client.
+type eventReader interface {
+	Read() (alsa.SeqEvent, error)
+}
+
+// shutdown stops playback, releases every note still sounding, blanks the unit, and closes
+// the sequencer. It is the single way the program ends, so a note cannot be left on because
+// the process went away by any other route. One failure is reported but does not stop the
+// rest: a note still sounding matters more than a light that stayed on.
+func shutdown(aseq sequencerSession) error {
+	var firstErr error
+	if err := stopPlayback(); err != nil {
+		firstErr = err
+	}
+	if err := blankDevice(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := aseq.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// blankDevice leaves the unit dark. Shutting down without clearing it would leave the last
+// frame lit, which reads as a sequencer that hung rather than one that stopped. It goes
+// after the release because the release puts the step strip back, and a blackout suppresses
+// the display output that would undo it.
+func blankDevice() error {
+	if patbank == nil || patbank.f == nil {
+		return nil
+	}
+	return patbank.f.Blackout()
+}
+
+// handleIncomingEvent applies one Fire event. A failure stops playback and is reported
+// rather than ending the process: this runs on a goroutine, where a panic would take the
+// whole program with it, and a transient write failure should not end a performance.
+// Playback stops because nothing may keep sounding notes that are no longer tracked.
+func handleIncomingEvent(aseq *alsa.Seq, ev alsa.SeqEvent) {
+	err := processEvent(aseq, ev)
+	if err == nil {
+		return
+	}
+	logger.Error("event failed", "error", err, "data", fmt.Sprintf("% x", ev.Data))
+	if stopErr := stopPlayback(); stopErr != nil {
+		logger.Error("stopping after an event failure", "error", stopErr)
 	}
 }
 
+// readFire pumps the Fire's events to the handler. Reading blocks in the ALSA library, so
+// this owns the calling goroutine and returns only when the Fire stops answering, which is
+// the one thing that can end the program from here.
+func readFire(aseq eventReader, inc chan<- alsa.SeqEvent) error {
+	for {
+		ev, err := aseq.Read()
+		if err != nil {
+			return fmt.Errorf("reading the Fire: %w", err)
+		}
+		inc <- ev
+	}
+}
+
+// openPorts resolves every port Fireloop writes to and opens them, so a wrong port name is
+// reported before playback starts rather than as a panic later. It hands back the Fire port
+// address rather than resolving it twice, so setup cannot fail a second time on a name that
+// has already been found.
+func openPorts(aseq *alsa.Seq, firePort string, devs []Device) (alsa.SeqAddr, error) {
+	sa, err := aseq.PortAddress(firePort)
+	if err != nil {
+		return sa, fmt.Errorf("resolve Fire port %q: %w", firePort, err)
+	}
+	if err := aseq.OpenPortWrite(sa); err != nil {
+		return sa, fmt.Errorf("open Fire port for writing: %w", err)
+	}
+	if err := aseq.OpenPortRead(sa); err != nil {
+		return sa, fmt.Errorf("open Fire port for reading: %w", err)
+	}
+	if syncPort, err = aseq.CreatePortAddr("fireloop sync"); err != nil {
+		return sa, fmt.Errorf("create sync port: %w", err)
+	}
+	for i, dev := range devs {
+		dsa, err := aseq.PortAddress(dev.MidiPort)
+		if err != nil {
+			return sa, fmt.Errorf("resolve output port %q for %q: %w", dev.MidiPort, dev.Name, err)
+		}
+		if err := aseq.OpenPortWrite(dsa); err != nil {
+			return sa, fmt.Errorf("open output port %q for writing: %w", dev.MidiPort, err)
+		}
+		devs[i].SeqAddr = dsa
+	}
+	return sa, nil
+}
+
+// openSequencer opens the ALSA client and the ports Fireloop needs, closing the client
+// again if any of that fails, so a failed startup leaves nothing open behind it.
+func openSequencer(firePort string, devs []Device) (*alsa.Seq, alsa.SeqAddr, error) {
+	aseq, err := alsa.OpenSeq("fireloop")
+	if err != nil {
+		return nil, alsa.SeqAddr{}, fmt.Errorf("open sequencer: %w", err)
+	}
+	sa, err := openPorts(aseq, firePort, devs)
+	if err != nil {
+		aseq.Close()
+		return nil, sa, err
+	}
+	return aseq, sa, nil
+}
+
 func main() {
+	if err := run(); err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	var kits kitPaths
 	flag.Var(&kits, "kit", "kit of devices to load; repeat to merge several kits")
 	midiPort := flag.String("port", "FL STUDIO FIRE Jack 1", "midi port for akai fire")
@@ -254,60 +372,58 @@ func main() {
 		"kits", kits.String(), "port", *midiPort, "shared", sharedMIDIDestination,
 		"level", level.String(), "format", strings.ToLower(*logFormat))
 
-	log.Println("loading kit", kits.String())
 	devs, err := loadKit(kits.all())
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if err := validateDevices(devs); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	aseq, err := alsa.OpenSeq("fireloop")
+	aseq, sa, err := openSequencer(*midiPort, devs)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	defer aseq.Close()
-	sa, err := aseq.PortAddress(*midiPort)
-	must(err)
-	must(aseq.OpenPortWrite(sa))
-	must(aseq.OpenPortRead(sa))
-	syncPort, err = aseq.CreatePortAddr("fireloop sync")
-	must(err)
-
-	write := func(b []byte) error {
-		return aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: b})
-	}
-	f := NewFire(write)
-
-	for i, dev := range devs {
-		log.Printf("opening %q for writing", dev.MidiPort)
-		dsa, err := aseq.PortAddress(dev.MidiPort)
-		if err != nil {
-			log.Fatalf("resolve output port %q: %v", dev.MidiPort, err)
+	// Every way out of here goes through shutdown, including the failures below it.
+	defer func() {
+		if err := shutdown(aseq); err != nil {
+			logger.Error("shutdown", "error", err)
 		}
-		devs[i].SeqAddr = dsa
-		must(aseq.OpenPortWrite(dsa))
-	}
+	}()
+
+	f := NewFire(func(b []byte) error {
+		return aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: b})
+	})
 
 	vb := NewVoiceBank(devs)
-
 	patbank = NewPatternBank(f, vb)
-	must(f.Off())
-	must(patbank.Jump(1))
-
+	if err := f.Off(); err != nil {
+		return err
+	}
+	if err := patbank.Jump(1); err != nil {
+		return err
+	}
 	songbank = NewSongBank(f, patbank)
+
+	// A signal cannot interrupt the blocking read that ends this function, so it is handled
+	// where it can be: release everything sounding, close the client, and leave.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-signals
+		logger.Info("shutting down", "signal", sig)
+		if err := shutdown(aseq); err != nil {
+			logger.Error("shutdown", "error", err)
+		}
+		os.Exit(0)
+	}()
 
 	inc := make(chan alsa.SeqEvent, 4)
 	processEvent = processPatternEvent
 	go func() {
 		for ev := range inc {
-			must(processEvent(aseq, ev))
+			handleIncomingEvent(aseq, ev)
 		}
 	}()
-	for {
-		ev, err := aseq.Read()
-		must(err)
-		inc <- ev
-	}
+	return readFire(aseq, inc)
 }

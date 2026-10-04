@@ -1,10 +1,15 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 )
 
 func testNote(note int) *int {
@@ -230,4 +235,213 @@ func TestLoadDevicesRejectsEmptyKit(t *testing.T) {
 	if _, err := loadDevices(path); err == nil {
 		t.Fatal("expected an empty kit error")
 	}
+}
+
+// fakeSequencer stands in for the ALSA client so the shutdown path can be exercised without
+// a port.
+type fakeSequencer struct {
+	events   []alsa.SeqEvent
+	writeErr error
+	closeErr error
+	closes   int
+}
+
+func (f *fakeSequencer) Write(event alsa.SeqEvent) error {
+	f.events = append(f.events, event)
+	return f.writeErr
+}
+
+func (f *fakeSequencer) WritePort(event alsa.SeqEvent, _ int) error {
+	f.events = append(f.events, event)
+	return f.writeErr
+}
+
+func (f *fakeSequencer) Close() error {
+	f.closes++
+	return f.closeErr
+}
+
+// shutdownBank is a bank with one chromatic note sounding, which is the state a signal
+// arrives in. The display goes through a recorder so a test can see what the unit was left
+// showing.
+func shutdownBank(t *testing.T) (*Playback, *captureMidiWriter, *fireSim) {
+	t.Helper()
+	sim := newFireSim()
+	kit := trackWindowKit(4, 0)
+	bank := NewPatternBank(NewFire(sim.write), kit)
+	usePatternGlobals(t, bank)
+	writer := &captureMidiWriter{}
+	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
+	bank.playback = playback
+	if err := playback.playChromaticEvent(writer, Event{
+		Voice: kit.voices[0], ChromaticNote: 60, Velocity: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if playback.activeNoteCount() != 1 {
+		t.Fatal("the test needs a note sounding")
+	}
+	writer.events = nil
+	return playback, writer, sim
+}
+
+// Leaving the program must release the note that is sounding, or the instrument holds it
+// until its own timeout. It must also close the client.
+func TestShutdownReleasesSoundingNotes(t *testing.T) {
+	playback, writer, _ := shutdownBank(t)
+	client := &fakeSequencer{}
+
+	if err := shutdown(client); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("shutdown wrote %d messages, want the sounding note's note-off", len(writer.events))
+	}
+	assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), 60, 0})
+	if playback.activeNoteCount() != 0 {
+		t.Fatal("shutdown left a note marked as sounding")
+	}
+	if client.closes != 1 {
+		t.Fatalf("sequencer closed %d times, want once", client.closes)
+	}
+}
+
+// Leaving the unit showing the last frame reads as a sequencer that hung, so shutdown has to
+// leave it dark: no lit pad, no lit light, and a cleared screen.
+func TestShutdownBlanksTheUnit(t *testing.T) {
+	_, _, sim := shutdownBank(t)
+	// Light something first, so "dark" is a change rather than the state it started in.
+	if err := patbank.f.SetLed(NoteMode, LEDGreen); err != nil {
+		t.Fatal(err)
+	}
+	if err := patbank.f.LightPad(3, 1, 127, 127, 127); err != nil {
+		t.Fatal(err)
+	}
+	if err := patbank.f.Print(0, 0, "Pattern 001"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := shutdown(&fakeSequencer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for index, color := range sim.pads {
+		if color != [3]int{} {
+			t.Fatalf("pad %d is still lit %v after shutdown", index, color)
+		}
+	}
+	for control, value := range sim.leds {
+		// The top-left indicators are not plain on/off lights: zero lights Channel, so
+		// their dark state is a value of its own.
+		want := 0
+		if control == CCTopLeftLEDs {
+			want = CCTopLeftOff
+		}
+		if value != want {
+			t.Fatalf("light %d reads %d after shutdown, want %d", control, value, want)
+		}
+	}
+	if sim.fullClears == 0 {
+		t.Fatal("shutdown left the screen showing the last frame")
+	}
+}
+
+// A failing close is reported, and it must not stop the notes from being released or the
+// client from being closed.
+func TestShutdownReportsCloseFailure(t *testing.T) {
+	playback, writer, _ := shutdownBank(t)
+	client := &fakeSequencer{closeErr: errOutOfRange}
+
+	if err := shutdown(client); err == nil {
+		t.Fatal("a failing close was not reported")
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("shutdown wrote %d messages, want the note-off even when closing fails", len(writer.events))
+	}
+	if playback.activeNoteCount() != 0 {
+		t.Fatal("shutdown left a note marked as sounding")
+	}
+	if client.closes != 1 {
+		t.Fatalf("sequencer closed %d times, want once", client.closes)
+	}
+}
+
+// A handler failure runs on a goroutine, where a panic would take the process with it and
+// leave every note sounding. It must be reported instead, and playback must stop so that
+// nothing keeps sounding notes that are no longer tracked.
+func TestHandlerFailureStopsPlaybackWithoutEndingTheProcess(t *testing.T) {
+	playback, writer, _ := shutdownBank(t)
+	capture := useCaptureLog(t)
+	previousProcess := processEvent
+	t.Cleanup(func() { processEvent = previousProcess })
+	processEvent = func(*alsa.Seq, alsa.SeqEvent) error { return errOutOfRange }
+
+	handleIncomingEvent(nil, padMessage(NoteMute1, 100))
+
+	if playback.activeNoteCount() != 0 {
+		t.Fatal("a handler failure left playback running")
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("a handler failure wrote %d messages, want the sounding note released", len(writer.events))
+	}
+	if messages := capture.messages(); !slices.Contains(messages, "event failed") {
+		t.Fatalf("a handler failure was not reported: %v", messages)
+	}
+}
+
+// A failure to stop as well as to handle is still only reported, never fatal: the release
+// is what keeps the instrument from holding a note, so losing that must be visible.
+func TestHandlerFailureReportsAFailedStop(t *testing.T) {
+	playback, _, _ := shutdownBank(t)
+	playback.writer = &failingSequencerWriter{err: errOutOfRange}
+	capture := useCaptureLog(t)
+	previousProcess := processEvent
+	t.Cleanup(func() { processEvent = previousProcess })
+	processEvent = func(*alsa.Seq, alsa.SeqEvent) error { return errOutOfRange }
+
+	handleIncomingEvent(nil, padMessage(NoteMute1, 100))
+
+	messages := capture.messages()
+	if !slices.Contains(messages, "event failed") {
+		t.Fatalf("a handler failure was not reported: %v", messages)
+	}
+	if !slices.Contains(messages, "stopping after an event failure") {
+		t.Fatalf("a handler failure that could not stop playback was not reported: %v", messages)
+	}
+}
+
+// Reading the Fire fails when the port goes away, and that has to reach main as an error:
+// the read owns the goroutine, so a failure there is the only thing that can end the
+// program from that side, and it must not be swallowed.
+func TestReadFireReportsReadFailure(t *testing.T) {
+	inc := make(chan alsa.SeqEvent, 4)
+	reader := &fakeReader{
+		events: []alsa.SeqEvent{padMessage(NoteMute1, 100), padMessage(NoteMute2, 100)},
+		fail:   errOutOfRange,
+	}
+
+	err := readFire(reader, inc)
+	if !errors.Is(err, errOutOfRange) {
+		t.Fatalf("readFire returned %v, want the read failure", err)
+	}
+	if len(inc) != 2 {
+		t.Fatalf("readFire pumped %d events, want the 2 the reader held", len(inc))
+	}
+}
+
+// fakeReader hands out a fixed list of events and then fails, standing in for the blocking
+// read of a real client.
+type fakeReader struct {
+	events []alsa.SeqEvent
+	fail   error
+	index  int
+}
+
+func (f *fakeReader) Read() (alsa.SeqEvent, error) {
+	if f.index >= len(f.events) {
+		return alsa.SeqEvent{}, f.fail
+	}
+	ev := f.events[f.index]
+	f.index++
+	return ev, nil
 }
