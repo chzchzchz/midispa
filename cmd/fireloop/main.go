@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
 )
@@ -44,6 +45,12 @@ func validateDevice(index int, dev *Device) error {
 	if !validChannel(dev.Channel) {
 		return fmt.Errorf("device %q has invalid channel %d", dev.Name, dev.Channel)
 	}
+	if dev.Settle < 0 {
+		return fmt.Errorf("device %q has a negative settle %v", dev.Name, time.Duration(dev.Settle))
+	}
+	if err := validatePatch(fmt.Sprintf("device %q", dev.Name), dev, dev.Patch); err != nil {
+		return err
+	}
 	if len(dev.Voices) == 0 {
 		return fmt.Errorf("device %q has no voices", dev.Name)
 	}
@@ -66,9 +73,18 @@ func validateVoice(dev *Device, index int) error {
 	if resolveChannel(dev.Channel, voice.Channel) == 0 {
 		return fmt.Errorf("device %q voice %d has no MIDI channel", dev.Name, index)
 	}
+	what := fmt.Sprintf("device %q voice %d", dev.Name, index)
+	// resolvePatch rather than voice.EffectivePatch: validation runs before the voice
+	// bank exists, so the voice has no device backpointer to fall back to yet.
+	if err := validatePatch(what, dev, resolvePatch(dev.Patch, voice.Patch)); err != nil {
+		return err
+	}
 	return nil
 }
 
+// validChannel accepts the 1-16 a kit states a channel in, plus 0 for a voice that leaves
+// it to its device. The protocol's 0-15 numbering never reaches this layer, so a kit and a
+// log read the same way; protocolChannel converts at the wire.
 func validChannel(channel int) bool {
 	return channel >= 0 && channel <= midiChannelMax
 }
@@ -123,13 +139,25 @@ func loadDeviceFile(path string) ([]Device, error) {
 		if err := json.Unmarshal(data, &devices); err != nil {
 			return nil, err
 		}
+		// A kit is loaded from wherever it sits on disk, so a relative Patch is
+		// resolved against the file's own directory rather than the working one.
+		setKitBaseDir(devices, filepath.Dir(path))
 		return devices, nil
 	}
 	var device Device
 	if err := json.Unmarshal(data, &device); err != nil {
 		return nil, err
 	}
-	return []Device{device}, nil
+	devices := []Device{device}
+	setKitBaseDir(devices, filepath.Dir(path))
+	return devices, nil
+}
+
+// setKitBaseDir records where each device's kit file lives.
+func setKitBaseDir(devices []Device, dir string) {
+	for index := range devices {
+		devices[index].baseDir = dir
+	}
 }
 
 // A kit file contains a device array, or a directory can contain JSON files with device arrays.

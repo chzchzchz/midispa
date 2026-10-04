@@ -44,6 +44,14 @@ type Playback struct {
 	updatePads  func(curBeat float32) error
 	nextPattern func(curBeat float32) *Pattern
 
+	// vb is the kit whose patches are sent before the first note. It is nil when a
+	// playback is started without one, which is what tests and the pattern painters
+	// that run no worker do.
+	vb *VoiceBank
+	// settle is how long the worker waits after sending those patches before playing
+	// anything, which is only a wait when a vendor dump was among them.
+	settle time.Duration
+
 	positionMu sync.Mutex
 	activeMu   sync.Mutex
 	active     map[*Voice]activeChromaticNote
@@ -65,8 +73,8 @@ func patternDuration(pattern *Pattern, bpm int) time.Duration {
 	return time.Duration(float64(pattern.Beats()) * float64(beatDuration(bpm)))
 }
 
-func (p *Playback) Start(aseq *alsa.Seq) playbackStopFunc {
-	if aseq == nil {
+func (p *Playback) Start(aseq sequencerWriter) playbackStopFunc {
+	if isNilMidiWriter(aseq) {
 		p.reset()
 		return func() error { return nil }
 	}
@@ -76,6 +84,17 @@ func (p *Playback) Start(aseq *alsa.Seq) playbackStopFunc {
 func (p *Playback) start(aseq sequencerWriter) playbackStopFunc {
 	p.reset()
 	p.writer = aseq
+	// An instrument has to be set up before its first note, so the kit's patches go out
+	// here, ahead of the worker that plays the pattern. A patch that cannot be sent is
+	// logged rather than returned: playback that starts with the wrong settings is
+	// still playback, and an error escaping to the button handler would stop the
+	// process outright. A dump is not a channel message, so the worker waits out the
+	// settle the send asked for before it plays anything.
+	settle, err := sendKitPatches(aseq, p.vb)
+	p.settle = settle
+	if err != nil {
+		logger.Error("kit patches", "error", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	var runErr error
@@ -394,6 +413,17 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 	if p.nextPattern != nil {
 		curPattern = p.nextPattern(0)
 	}
+	// The settle wait belongs here rather than in the button handler, so a press while
+	// an instrument is loading is still read, and the start time is taken after it so
+	// the first measure keeps its full length.
+	if p.settle > 0 {
+		logger.Debug("settling after a patch", "duration", p.settle)
+		select {
+		case <-time.After(p.settle):
+		case <-ctx.Done():
+			return nil
+		}
+	}
 	// Compute measures w/r/t this start time + now() to avoid drift.
 	start := time.Now()
 	var timer *time.Timer
@@ -515,7 +545,7 @@ func (pb *PatternBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
 		lastColumn = thisColumn
 		return pb.drawPadColumnInvert(thisColumn)
 	}
-	p := &Playback{updatePads: update, nextPattern: next}
+	p := &Playback{updatePads: update, nextPattern: next, vb: pb.vb}
 	pb.playback = p
 	if isNilMidiWriter(aseq) {
 		p.reset()
@@ -524,8 +554,8 @@ func (pb *PatternBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
 	return p.start(aseq)
 }
 
-func (sb *SongBank) startSequencer(aseq *alsa.Seq) playbackStopFunc {
-	p := &Playback{}
+func (sb *SongBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
+	p := &Playback{vb: sb.kit()}
 	sb.playback = p
 	// Move to next song pattern.
 	p.nextPattern = func(beat float32) *Pattern {

@@ -4,6 +4,9 @@ type Voice struct {
 	Name    string
 	Note    *int
 	Channel int // [1,16] if set; otherwise use the device channel
+	// Patch names a .mid or .smf file played to this voice's device when playback
+	// starts. It overrides the device's Patch, the way Channel overrides its channel.
+	Patch string
 
 	device *Device // backpointer
 }
@@ -29,6 +32,24 @@ func resolveChannel(deviceChannel, voiceChannel int) int {
 	return deviceChannel
 }
 
+// protocolChannel converts a channel as a kit states it into the index the MIDI protocol
+// numbers channels with. A kit says 1-16, because that is the numbering a musician reads
+// off their controller and sees in the files they dump; the wire counts from zero. This is
+// the one place the two meet, so a note and a patch sent for the same voice cannot disagree
+// about which channel they are on.
+func protocolChannel(channel int) int {
+	return channel - 1
+}
+
+// resolvePatch is the same precedence for a patch: a voice names its own file or inherits
+// the device's. There is no way back to the device patch once a voice has overridden it.
+func resolvePatch(devicePatch, voicePatch string) string {
+	if voicePatch != "" {
+		return voicePatch
+	}
+	return devicePatch
+}
+
 // EffectiveChannel resolves a voice override before falling back to its device.
 func (v *Voice) EffectiveChannel() int {
 	if v == nil {
@@ -41,8 +62,32 @@ func (v *Voice) EffectiveChannel() int {
 	return resolveChannel(deviceChannel, v.Channel)
 }
 
+// EffectivePatch resolves a voice override before falling back to its device.
+func (v *Voice) EffectivePatch() string {
+	if v == nil {
+		return ""
+	}
+	devicePatch := ""
+	if v.device != nil {
+		devicePatch = v.device.Patch
+	}
+	return resolvePatch(devicePatch, v.Patch)
+}
+
+// patchPath is the voice's effective patch resolved to a file, or "" when it has none.
+func (v *Voice) patchPath() string {
+	if v == nil {
+		return ""
+	}
+	return resolvePatchPath(v.device, v.EffectivePatch())
+}
+
 type VoiceBank struct {
 	voices []*Voice
+	// patches keeps the kit's patch files read across sends rather than repeated on
+	// every Play. It belongs to the bank because the bank is what a kit turns into, so
+	// the files live as long as the kit does.
+	patches patchCache
 }
 
 func NewVoiceBank(devs []Device) *VoiceBank {

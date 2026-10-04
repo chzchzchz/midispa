@@ -29,6 +29,15 @@ func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
 	return sb
 }
 
+// kit is the voice bank the song's patterns are written against, which is also where the
+// patches sent when playback starts are read from.
+func (sb *SongBank) kit() *VoiceBank {
+	if sb == nil || sb.pb == nil {
+		return nil
+	}
+	return sb.pb.vb
+}
+
 func (sb *SongBank) CurrentSong() *Song {
 	return sb.Songs[sb.selSongIdx]
 }

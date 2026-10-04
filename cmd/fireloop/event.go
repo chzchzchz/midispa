@@ -59,7 +59,7 @@ func (ev *Event) NoteOnMidi() []byte {
 		velocity = ev.Velocity
 	}
 	return []byte{
-		midi.MakeNoteOn(ev.midiChannel() - 1),
+		midi.MakeNoteOn(protocolChannel(ev.midiChannel())),
 		byte(clampMidiDataValue(ev.NoteNumber())),
 		byte(clampMidiDataValue(velocity)),
 	}
@@ -72,7 +72,7 @@ func (ev *Event) NoteOffMidi() []byte {
 		velocity = 0
 	}
 	return []byte{
-		midi.MakeNoteOff(ev.midiChannel() - 1),
+		midi.MakeNoteOff(protocolChannel(ev.midiChannel())),
 		byte(clampMidiDataValue(ev.NoteNumber())),
 		byte(clampMidiDataValue(velocity)),
 	}

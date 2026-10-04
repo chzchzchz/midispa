@@ -67,6 +67,36 @@ A kit file is a top-level array of device objects, so each device can use a diff
 
 Percussion MIDI notes are in the range 0 through 127. Chromatic events store their own pitch in the pattern editor.
 
+#### Patches
+
+A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that device when playback starts, so the instrument is set up before the first note of a pattern or a song. A voice's `Patch` overrides its device's, exactly as a voice's `Channel` overrides its device's channel.
+
+```json
+[
+  {
+    "Name": "Lead",
+    "MidiPort": "MIDI4x4 MIDI 4",
+    "Channel": 1,
+    "Patch": "patches/dx7-lead.mid",
+    "Settle": "100ms",
+    "Voices": [
+      { "Name": "Lead", "Channel": 2 },
+      { "Name": "Bass", "Patch": "patches/dx7-bass.mid" }
+    ]
+  }
+]
+```
+
+- Every channel message in the file is re-stamped with the **voice's effective channel** — its `Channel`, or the device's. A file dumped on channel 1 still configures a voice routed to channel 3, which is what makes one patch usable across a kit's voices. SysEx is sent unchanged, because a dump addresses a device rather than a channel.
+- A relative `Patch` is looked for beside the kit file that declared it, so a kit travels with its patches. It is not also looked for in the working directory: a file of the same name standing there would be played in place of the one the kit asked for, and the wrong patch on an instrument reads as a fault in fireloop rather than a kit that lost its file.
+- Channels are written as 1 to 16 everywhere a kit or a log states them, which is the numbering used for MIDI in the files themselves; the conversion to the protocol's 0 to 15 happens once, where the bytes are made.
+- Voices sharing one patch are sent it once per channel they play on, rather than once per voice. A patch holding only SysEx is sent once per device, since a channel cannot change it.
+- The file is sent on every Play, in pattern mode and in song mode alike, and again after Stop. It is not re-sent at a pattern boundary.
+- `Settle` is how long a device is given to absorb a vendor dump before the first note, written as text such as `"100ms"`. It exists because a dump is not a channel message: on some instruments a note sent too early still sounds the previous patch. It is off unless the kit asks for it, it only applies when a dump was actually sent, and where several devices ask, the waits overlap and the longest one is used. Stopping during the wait takes effect at once rather than waiting it out.
+- A patch is read and played at startup, so a path that is missing, of the wrong type, or unreadable stops fireloop before any port is opened. A patch that turns out to be unreadable later is logged and playback starts anyway. A file is read once and kept for the session, so pressing Play again does not go back to the disk; a file that could not be read is looked for again on the next Play, and is reported once however many voices name it.
+- `-shared-midi-destination` applies to patches as it does to notes.
+- Nothing is filtered out of the file, including the volume, pan and reverb-send controllers a file may open with, so what the instrument hears is what the file says.
+
 ## Controls
 
 ### Pattern mode
