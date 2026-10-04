@@ -297,11 +297,13 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 }
 
 func handlePatternMute(n int) error {
-	if err := stopPlayback(); err != nil {
-		return err
-	}
 	if altOn {
-		// Alt stays engaged, so a run of rows can be cleared without pressing it again.
+		// Clearing a row removes the notes it holds, which the pattern cannot do while it
+		// is being played, so that one stops playback. Alt stays engaged, so a run of rows
+		// can be cleared without pressing it again.
+		if err := stopPlayback(); err != nil {
+			return err
+		}
 		return patbank.ClearTrackRow(n)
 	}
 	return patbank.SelectTrackRow(n)

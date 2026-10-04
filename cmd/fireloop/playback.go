@@ -482,7 +482,10 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 	}
 }
 
-func (pb *PatternBank) startSequencer(aseq *alsa.Seq) playbackStopFunc {
+// The writer is an interface so a test can drive the real sequencer loop with a stub
+// instead of a port. A missing writer still means nothing to drive: the painters are built
+// and published, but no worker starts, which is what Playback.Start's nil check did.
+func (pb *PatternBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
 	var lastColumn int
 	// Reset to start of pattern.
 	next := func(beat float32) *Pattern {
@@ -514,7 +517,11 @@ func (pb *PatternBank) startSequencer(aseq *alsa.Seq) playbackStopFunc {
 	}
 	p := &Playback{updatePads: update, nextPattern: next}
 	pb.playback = p
-	return p.Start(aseq)
+	if isNilMidiWriter(aseq) {
+		p.reset()
+		return func() error { return nil }
+	}
+	return p.start(aseq)
 }
 
 func (sb *SongBank) startSequencer(aseq *alsa.Seq) playbackStopFunc {

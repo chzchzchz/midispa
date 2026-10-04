@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // trackWindowKit builds a kit whose voices are percussive unless chromatic is set.
@@ -456,5 +458,111 @@ func TestScrollTracksClosesNoteEditOnScrolledRow(t *testing.T) {
 	}
 	if bank.pressedPads != 0 {
 		t.Fatal("scrolling kept a pad held from the previous window")
+	}
+}
+
+// stepPaints is how many pad writes the worker must make before a test starts switching
+// tracks, so the switch overlaps a running playhead.
+const stepPaints = 12
+
+// switchRounds is how many times the test moves the selection while the worker runs.
+const switchRounds = 60
+
+// Pressing a solo button selects a track, which is a view change rather than an edit, so it
+// must not cut a running pattern short. The sequencer is started for real here: its worker
+// is the reader that makes the switch a shared state question, and the race detector is the
+// point of the test.
+func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
+	var writes atomic.Int32
+	fire := NewFire(func([]byte) error {
+		writes.Add(1)
+		return nil
+	})
+	kit := trackWindowKit(8, 0)
+	bank := NewPatternBank(fire, kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	bank.CurrentPattern().SetChromaticNote(0, kit.voices[0], 40, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	previousBPM := currentBPM()
+	setBPM(300)
+	t.Cleanup(func() { setBPM(previousBPM) })
+	playbackStop = bank.startSequencer(&captureMidiWriter{})
+	// Wait for the worker to move the playhead a few steps, so the switches below land on
+	// top of it rather than in the first moments of playback.
+	waitFor(t, "the playhead to move", func() bool { return writes.Load() > stepPaints })
+
+	before := writes.Load()
+	time.Sleep(50 * time.Millisecond)
+	if writes.Load() <= before {
+		t.Fatal("the sequencer worker stopped painting")
+	}
+	// Keep switching for long enough that the worker is certainly running against it: one
+	// pass can finish between two of the worker's steps and prove nothing.
+	for i := 0; i < switchRounds; i++ {
+		// Alternate two rows: pressing the row that is already selected toggles it off,
+		// which is a different behaviour from moving the selection.
+		row := i%2 + 2 // rows two and three, neither of which starts selected
+		// Spread over several beats, so the switches interleave with the worker's own reads.
+		time.Sleep(3 * time.Millisecond)
+		if err := processPatternEvent(nil, padMessage(NoteMute1+row-1, 100)); err != nil {
+			t.Fatal(err)
+		}
+		if playbackStop == nil {
+			t.Fatalf("selecting track row %d stopped the pattern", row)
+		}
+		if bank.selTrackRow != row {
+			t.Fatalf("selected row = %d, want %d", bank.selTrackRow, row)
+		}
+	}
+	if err := stopPlayback(); err != nil {
+		t.Fatal(err)
+	}
+	if playbackStop != nil {
+		t.Fatal("stopping left the sequencer armed")
+	}
+}
+
+// Alt plus a solo button clears the row's notes, which changes what is being played, so
+// that one does stop playback. It must not drag the plain selection path down with it.
+func TestAltSoloStillStopsPlayback(t *testing.T) {
+	kit := trackWindowKit(8, 0)
+	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := kit.voices[0]
+	bank.CurrentPattern().ToggleEvent(Event{Voice: voice, Beat: stepBeat(0), Velocity: 100})
+	stopped := 0
+	playbackStop = func() error {
+		stopped++
+		return nil
+	}
+	altOn = true
+	if err := processPatternEvent(nil, padMessage(NoteMute1, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if stopped == 0 {
+		t.Fatal("clearing a row left the pattern playing")
+	}
+	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); ok {
+		t.Fatal("Alt plus the solo button did not clear the row")
+	}
+	// The same button without Alt is a selection, and it leaves the sequencer alone.
+	playbackStop = func() error {
+		stopped++
+		return nil
+	}
+	altOn = false
+	if err := processPatternEvent(nil, padMessage(NoteMute1, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 1 {
+		t.Fatalf("selection stopped playback %d times, want only the clear to", stopped)
 	}
 }

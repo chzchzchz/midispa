@@ -346,12 +346,18 @@ func (p *PatternBank) ClearTrackRow(row int) error {
 	return p.printChromaticStatus()
 }
 
+// SelectTrackRow moves the selection to a pad row and keeps the pattern playing. Choosing
+// a track to edit is a view change rather than an edit, so stopping to do it would cut a
+// performance short every time the row moved. The selection is not something the playback
+// worker reads, so this stays safe while a pattern runs.
+//
+// Note editing is left alone, which is also what keeps it safe: the worker reads whether
+// note editing owns the pad grid, and a playing pattern makes that a shared read. The
+// palette simply follows the selection, editing the voice now on the selected row; the
+// status row and the step guard already report that voice. Press Mode to leave.
 func (p *PatternBank) SelectTrackRow(row int) error {
 	if p.trackForPadRow(row) == 0 {
 		return nil
-	}
-	if err := stopPlayback(); err != nil {
-		return err
 	}
 	// Deselect currently selected row, if any.
 	if p.selTrackRow > 0 {
@@ -364,13 +370,9 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 			return err
 		}
 	}
-	p.editingNote = false
+	// A pad held for the previous selection would complete a gesture against the wrong
+	// voice, so the held pads go; the note itself is untouched.
 	p.clearPadState()
-	if p.f != nil {
-		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
-			return err
-		}
-	}
 	if p.selTrackRow == row {
 		p.selTrackRow = 0
 		return p.printChromaticStatus()

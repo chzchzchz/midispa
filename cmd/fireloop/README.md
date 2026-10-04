@@ -72,7 +72,7 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 - Pad grid: toggle steps for a percussive voice. Empty chromatic steps are ignored here.
 - In pattern/step mode, a pad on the selected chromatic track moves the editing step cursor. Two held pads still create a tie.
 - Pattern up/down: change the selected pattern from 1 to 999 and stop playback.
-- Mute 1 through 4: select a track row and its voice. The selected row lights green, and pressing it again deselects.
+- Mute 1 through 4: select a track row and its voice. The selected row lights green, and pressing it again deselects. A running pattern keeps playing, so a row can be followed while the pattern loops.
 - `Alt`, then pattern up/down: scroll the track window. `Alt` lights up while it is engaged and stays engaged until it is pressed again, so press it once more before using a mute button or stop.
 - `Shift` plus `Alt`: blackout. See [Blackout](#blackout).
 - The header shows the window as `<FIRST>/<TOTAL>`, for example `Pattern 001  3/8` means the pad rows show tracks 3, 4, 5, and 6 of 8.
@@ -80,14 +80,14 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 - Grid left/right: move the current step cursor.
 - Overview: enter or leave length-edit mode.
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
-- Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback.
+- Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback. Note editing follows the selection, so a mute button moves the palette to another voice rather than closing it; press Mode to leave.
 - Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step. The knob is not re-read from the step you select, so its value carries over to the next step.
 - Encoder in note-edit mode: transpose the palette by an octave. Left turns it down, right turns it up, and every palette pad's colour shifts with it, so the octave on screen is visible without reading anything. Only the pitches a pad press can choose change; notes already written into a pattern keep their pitch and their colour. The palette stops at the ends of the MIDI range, two octaves below A1 and three above.
 - Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
 - `Shift` plus a pad, then release `Shift`: enter a tempo. The entry shows on the bottom row only, so the rest of the display keeps showing the pattern, and a value from 21 to 299 is applied on release; anything else is discarded.
 - Tap: tap out a tempo. It takes at least two taps, ignores taps more than three seconds apart, averages the last five, and shows `Tempo: NNN` on the bottom row.
-- `Alt` plus a mute button: clear that track row. `Alt` stays engaged, so several rows can be cleared in a row.
+- `Alt` plus a mute button: clear that track row. `Alt` stays engaged, so several rows can be cleared in a row. Clearing changes what is being played, so it stops playback, unlike selecting a row.
 - `Alt` plus stop: clear the current pattern. `Alt` stays engaged.
 - Record: copy the current pattern, including pitches and ties. Record lights green while a copy is armed, and pressing Record again discards it. There is one copy slot; a new copy replaces the old one.
 - Play while copied: paste the pattern.
