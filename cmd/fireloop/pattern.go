@@ -172,11 +172,13 @@ func (p *Pattern) SetChromaticNote(step int, v *Voice, note, velocity int) (Even
 	return p.Events[insertAt], true
 }
 
-func (p *Pattern) SetChromaticVelocity(step int, v *Voice, velocity int) (Event, bool) {
-	if v == nil || !v.IsChromatic() || step < 0 || step >= p.LengthSteps() {
+// SetVelocity writes the dynamics of an existing step, whichever kind of voice it stands
+// on. A velocity change is not a new note, so the tie the step may carry is left alone.
+func (p *Pattern) SetVelocity(step int, v *Voice, velocity int) (Event, bool) {
+	if v == nil || step < 0 || step >= p.LengthSteps() {
 		return Event{}, false
 	}
-	velocity = clampMidiDataValue(velocity)
+	velocity = clampStepVelocity(v, velocity)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i, event := range p.Events {

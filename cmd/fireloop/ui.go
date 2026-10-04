@@ -525,7 +525,7 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	case NoteMute4:
 		return handlePatternMute(4)
 	case CCVolume:
-		return patbank.AdjustChromaticVelocity(aseq, velocity)
+		return patbank.AdjustVelocity(aseq, velocity)
 	case CCSelect:
 		dir := 1
 		if int(ev.Data[2]) == EncoderLeft {

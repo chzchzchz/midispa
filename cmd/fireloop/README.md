@@ -85,7 +85,7 @@ A kit file is a top-level array of device objects, so each device can use a diff
 ]
 ```
 
-Percussion MIDI notes are in the range 0 through 127. Chromatic events store their own pitch in the pattern editor.
+Percussion MIDI notes are in the range 0 through 127. Chromatic events store their own pitch in the pattern editor. Both kinds of event store a velocity of 0 through 127, and it is what the step plays at.
 
 #### Patches
 
@@ -121,7 +121,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 
 ### Pattern mode
 
-- Pad grid: toggle steps for a percussive voice. Empty chromatic steps are ignored here.
+- Pad grid: toggle steps for a percussive voice. How hard the pad is hit becomes that step's velocity, so a soft hit and a hard hit play differently. Empty chromatic steps are ignored here.
 - In pattern/step mode, a pad on the selected chromatic track moves the editing step cursor. Two held pads still create a tie.
 - Pattern up/down: change the selected pattern from 1 to 999 and stop playback.
 - Mute 1 through 4: select a track row and its voice. The selected row lights green, and pressing it again deselects. A running pattern keeps playing, so a row can be followed while the pattern loops.
@@ -134,6 +134,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
 - Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback. Note editing follows the selection, so a mute button moves the palette to another voice rather than closing it; press Mode to leave.
 - Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step. The knob is not re-read from the step you select, so its value carries over to the next step.
+- Volume knob with a selected percussive voice: each detent moves the selected step's velocity by one from the value it already holds, so the knob trims the hit rather than replacing it. See [Percussion dynamics](#percussion-dynamics).
 - Encoder in note-edit mode: transpose the palette by an octave. Left turns it down, right turns it up, and every palette pad's colour shifts with it, so the octave on screen is visible without reading anything. Only the pitches a pad press can choose change; notes already written into a pattern keep their pitch and their colour. The palette stops at the ends of the MIDI range, two octaves below A1 and three above.
 - Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
@@ -159,12 +160,31 @@ A track is a voice from the kit, and any voice can go on any track.
 4. Nothing stops two rows from holding the same voice. Clearing one of them clears the notes on both, and editing one edits the other, because the notes belong to the voice rather than the row.
 5. The track window decides which tracks you can reach this way. Scroll it with `Alt` plus pattern up/down when you want one voice per track rather than reaching voices a few at a time with the Encoder.
 
+#### Percussion dynamics
+
+A percussive step stores the velocity of the pad press that placed it, and plays at that velocity. A pattern is therefore hit-sensitive: hit the pad harder and the step is louder.
+
+1. Select a percussive voice with Mute 1 through 4 and the Encoder if needed.
+2. Press a pad to toggle the step. It lands with the velocity of that press.
+3. Move the step cursor onto it with Grid left/right. A percussive pad press toggles a step without selecting it, so this is what puts the edit on the step just placed.
+4. Turn the Volume knob. Each detent moves the step's velocity by one from the value it already holds, so the first detent trims the hit instead of jumping to whatever value the knob was last left at.
+5. Every detent auditions the step, so the velocity is heard while it is being set.
+
+The knob works differently from the chromatic one on purpose. A chromatic step counts from the knob's own carried value, so a step picked after the knob was set takes that value on its next detent. A percussive step counts from itself, because the hit that placed it is the expressive part and the knob is there to trim a hit rather than overwrite it.
+
+Two limits are worth knowing:
+
+- The knob stops at 1. Velocity zero is a note-off rather than a quiet note, so a step allowed to reach it would stop sounding instead of playing softly. The readout reports the same floor, so the display never claims a velocity nothing would play.
+- The knob edits the step under the cursor. On a step holding no note it does nothing, so a step has to be placed before its velocity can be set.
+
+The readout follows the cursor for a percussive track as well: `S<STEP> @<VELOCITY>`, or `S<STEP> --` on a step with no note. A percussive voice has no pitch to name, so only the step and its dynamics are shown.
+
 #### Display
 
 - Row 0: `Pattern 003  2/6`, the pattern number and the track window.
 - Row 1: a separator.
 - Rows 2 to 5: the voice on each visible track row, inverted for the selected row.
-- Row 6 is the readout row and carries one of: `Length NN steps` in length mode, `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, `S<STEP> --` for a selected chromatic track on a step with no note, or `Tempo: NNN` while a tempo is being entered. It is blank otherwise.
+- Row 6 is the readout row and carries one of: `Length NN steps` in length mode, `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, `S<STEP> @<VELOCITY>` for a selected percussive track, `S<STEP> --` for a step with no note, or `Tempo: NNN` while a tempo is being entered. It is blank otherwise.
 
 The pad grid shows the notes of the four visible tracks and the editing step is lit slightly brighter. A chromatic step is coloured by pitch, using the same colour as that pitch's palette pad, and a percussive step is dark green.
 

@@ -59,7 +59,7 @@ func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 	}
 	ret := &PatternBank{
 		Patterns:          make(map[int]*Pattern),
-		chromaticVelocity: defaultChromaticVelocity,
+		chromaticVelocity: defaultStepVelocity,
 		playheadStep:      noPlayheadStep,
 		noteEditHeldStep:  noHeldStep,
 		f:                 f,
@@ -386,7 +386,7 @@ func (p *PatternBank) redraw() error {
 			return err
 		}
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 func (p *PatternBank) ClearTrackRow(row int) error {
@@ -417,7 +417,7 @@ func (p *PatternBank) ClearTrackRow(row int) error {
 			return err
 		}
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 // SelectTrackRow moves the selection to a pad row and keeps the pattern playing. Choosing
@@ -449,7 +449,7 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 	p.clearPadState()
 	if p.selTrackRow == row {
 		p.selTrackRow = 0
-		return p.printChromaticStatus()
+		return p.printStepStatus()
 	}
 	// Select new row.
 	p.selTrackRow = row
@@ -464,7 +464,7 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 	if err := p.redrawTrackPads(row); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 // printTrackRow names the track on a pad row; the header shows which track the row starts at.
@@ -562,7 +562,7 @@ func (p *PatternBank) JogSelect(n int) error {
 	if err := p.redrawTrackPads(p.selTrackRow); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 func (p *PatternBank) redrawTrackPads(row int) error {
@@ -692,16 +692,10 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 		}
 		return Event{}, nil
 	}
-	if v < 0 {
-		v = 0
-	}
-	if v > midiNoteMax {
-		v = midiNoteMax
-	}
 	ev := Event{
 		Voice:    voice,
 		Beat:     stepBeat(col),
-		Velocity: v,
+		Velocity: clampStepVelocity(voice, v),
 	}
 	added := pattern.ToggleEvent(ev)
 	if !added {

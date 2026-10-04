@@ -496,9 +496,12 @@ func TestTraceStateGesturesReportOnTheReadoutRow(t *testing.T) {
 		t.Logf("%-20s readout %q", step.label, readout)
 		rows = append(rows, readout)
 	}
-	// A press of Browser on its own says nothing and writes nothing.
-	if rows[1] != "" {
-		t.Fatalf("Browser on its own reported %q, want nothing", rows[1])
+	// A press of Browser on its own says nothing and writes nothing. What the readout row
+	// already holds is the step status the selection left there, so what the press must not
+	// do is change it.
+	if rows[1] != rows[0] {
+		t.Fatalf("Browser on its own changed the readout from %q to %q, want it untouched",
+			rows[0], rows[1])
 	}
 	if !strings.HasPrefix(rows[3], "Saved") {
 		t.Fatalf("shift+browser reported %q, want the save", rows[3])

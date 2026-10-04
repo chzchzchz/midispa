@@ -163,7 +163,7 @@ func TestVoiceChannelOverridesDeviceChannel(t *testing.T) {
 	percussion := Event{Voice: voiceBank.voices[1], Velocity: 90}
 	messages := percussion.ToMidi()
 	assertMidiData(t, alsa.SeqEvent{Data: messages[0]}, []byte{midi.MakeNoteOff(8), 36, 90})
-	assertMidiData(t, alsa.SeqEvent{Data: messages[1]}, []byte{midi.MakeNoteOn(8), 36, 64})
+	assertMidiData(t, alsa.SeqEvent{Data: messages[1]}, []byte{midi.MakeNoteOn(8), 36, 90})
 	chromatic := Event{Voice: voiceBank.voices[2], ChromaticNote: 60, Velocity: 77}
 	assertMidiData(t, alsa.SeqEvent{Data: chromatic.NoteOnMidi()}, []byte{midi.MakeNoteOn(10), 60, 77})
 
@@ -262,7 +262,7 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 		t.Fatalf("palette assignment = %+v/%v", event, ok)
 	}
 	preview := &captureMidiWriter{}
-	if err := bank.auditionChromaticEvent(preview, event); err != nil {
+	if err := bank.auditionEvent(preview, event); err != nil {
 		t.Fatal(err)
 	}
 	if len(preview.events) != 2 {
@@ -308,8 +308,8 @@ func TestChromaticVelocityControl(t *testing.T) {
 	if !ok || event.Velocity != pressVelocity {
 		t.Fatalf("initial velocity = %d/%v, want the pad press %d", event.Velocity, ok, pressVelocity)
 	}
-	if bank.chromaticVelocity != defaultChromaticVelocity {
-		t.Fatalf("encoder value = %d, want it to start at %d", bank.chromaticVelocity, defaultChromaticVelocity)
+	if bank.chromaticVelocity != defaultStepVelocity {
+		t.Fatalf("encoder value = %d, want it to start at %d", bank.chromaticVelocity, defaultStepVelocity)
 	}
 	// A detent moves from the encoder's own value, so the first one does not start from
 	// the velocity the pad press gave the note.
@@ -318,16 +318,16 @@ func TestChromaticVelocityControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
-	if event.Velocity != defaultChromaticVelocity-chromaticVelocityStep {
-		t.Fatalf("downward velocity = %d, want %d", event.Velocity, defaultChromaticVelocity-chromaticVelocityStep)
+	if event.Velocity != defaultStepVelocity-velocityStep {
+		t.Fatalf("downward velocity = %d, want %d", event.Velocity, defaultStepVelocity-velocityStep)
 	}
 	cc.Data[2] = byte(EncoderRight)
 	if err := processPatternEvent(nil, cc); err != nil {
 		t.Fatal(err)
 	}
 	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
-	if event.Velocity != defaultChromaticVelocity {
-		t.Fatalf("upward velocity = %d, want %d", event.Velocity, defaultChromaticVelocity)
+	if event.Velocity != defaultStepVelocity {
+		t.Fatalf("upward velocity = %d, want %d", event.Velocity, defaultStepVelocity)
 	}
 	if event.Velocity > midiNoteMax {
 		t.Fatalf("velocity above the maximum = %d", event.Velocity)
@@ -380,15 +380,197 @@ func encoderCC(direction int) alsa.SeqEvent {
 	return alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCVolume), byte(direction)}}
 }
 
-func TestChromaticStatusText(t *testing.T) {
+func TestStepStatusText(t *testing.T) {
+	chromatic, _ := chromaticTestVoice(t, nil)
+	drum := 36
+	percussive, _ := chromaticTestVoice(t, &drum)
 	event := &Event{ChromaticNote: 60, Velocity: 90, Tie: true}
-	if got := chromaticStatusText(0, event, 90, 1); got != "S01 C4@090->02" {
+	if got := stepStatusText(chromatic, 0, event, 1); got != "S01 C4@090->02" {
 		t.Fatalf("tied status = %q", got)
 	}
 	// A step with no note must not show a velocity, or it reads as that step's own.
-	if got := chromaticStatusText(1, nil, 90, -1); got != "S02 --" {
+	if got := stepStatusText(chromatic, 1, nil, -1); got != "S02 --" {
 		t.Fatalf("empty status = %q", got)
 	}
+	// A percussive step has no pitch to name, so it reports its dynamics alone.
+	drumEvent := &Event{Velocity: 72}
+	if got := stepStatusText(percussive, 2, drumEvent, -1); got != "S03 @072" {
+		t.Fatalf("percussive status = %q", got)
+	}
+	if got := stepStatusText(percussive, 2, nil, -1); got != "S03 --" {
+		t.Fatalf("empty percussive status = %q", got)
+	}
+}
+
+// A percussive step sounds with the dynamics it was hit at, so the velocity stored on the
+// event is what reaches the wire. Velocity zero never gets there, because it is a note-off
+// rather than a silent note: a step that stored zero would stop sounding altogether.
+func TestPercussionNoteOnUsesTheEventVelocity(t *testing.T) {
+	note := 36
+	voice, _ := chromaticTestVoice(t, &note)
+	for _, stored := range []int{midi.DataMax, 72, minPercussionVelocity, 0, -5} {
+		event := Event{Voice: voice, Velocity: stored}
+		want := clampStepVelocity(voice, stored)
+		if want == 0 {
+			t.Fatalf("clamp allowed a percussive velocity of zero")
+		}
+		assertMidiData(t, alsa.SeqEvent{Data: event.NoteOnMidi()}, []byte{midi.MakeNoteOn(0), byte(note), byte(want)})
+	}
+}
+
+// A percussive step takes its dynamics from the pad that placed it, so the Volume knob
+// trims that hit rather than dragging the step up to the encoder's carried value. That
+// value belongs to the chromatic knob, and turning this one must leave it alone.
+func TestPercussionVelocityKnobTrimsTheHit(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := trackWindowKit(8, -1)
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	voice := voiceBank.voices[0]
+	note, _ := voice.PercussionNote()
+	hit := 100
+	if err := handlePatternGrid(nil, 3, 0, hit); err != nil {
+		t.Fatal(err)
+	}
+	event, ok := bank.CurrentPattern().EventAtStep(3, voice)
+	if !ok || event.Velocity != hit {
+		t.Fatalf("placed step velocity = %d/%v, want the hit %d", event.Velocity, ok, hit)
+	}
+	// A percussive pad press toggles a step without selecting it, so the edit still has to
+	// be moved onto it before the knob has anything to trim.
+	if err := bank.MoveStepCursor(3); err != nil {
+		t.Fatal(err)
+	}
+	// A detent counts from the hit, not from the encoder's own much higher value.
+	if err := processPatternEvent(nil, encoderCC(EncoderLeft)); err != nil {
+		t.Fatal(err)
+	}
+	event, _ = bank.CurrentPattern().EventAtStep(3, voice)
+	if event.Velocity != hit-velocityStep {
+		t.Fatalf("velocity after one detent = %d, want %d trimmed from the hit", event.Velocity, hit-velocityStep)
+	}
+	if bank.chromaticVelocity != defaultStepVelocity {
+		t.Fatalf("the detent moved the chromatic register to %d", bank.chromaticVelocity)
+	}
+	// Turning back restores the hit, and the audition carries the value the step now has.
+	preview := &captureMidiWriter{}
+	if err := bank.AdjustVelocity(preview, EncoderRight); err != nil {
+		t.Fatal(err)
+	}
+	event, _ = bank.CurrentPattern().EventAtStep(3, voice)
+	if event.Velocity != hit {
+		t.Fatalf("velocity after turning back = %d, want the hit %d", event.Velocity, hit)
+	}
+	if len(preview.events) != 2 {
+		t.Fatalf("the audition wrote %d messages, want a note-on and a note-off", len(preview.events))
+	}
+	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(note), byte(hit)})
+}
+
+// The knob cannot turn a percussive step off, because velocity zero is a note-off rather
+// than a quiet note. The floor is enforced on the stored value and again on the wire, so
+// the two can never disagree.
+func TestPercussionVelocityKnobStopsAtOne(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := trackWindowKit(8, -1)
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	recorder := useScreenRecorder(t, &bank.screen)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	voice := voiceBank.voices[0]
+	note, _ := voice.PercussionNote()
+	if err := handlePatternGrid(nil, 0, 0, 2); err != nil {
+		t.Fatal(err)
+	}
+	for range 8 {
+		if err := processPatternEvent(nil, encoderCC(EncoderLeft)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+	if !ok {
+		t.Fatal("turning the knob past the floor removed the step")
+	}
+	if event.Velocity != minPercussionVelocity {
+		t.Fatalf("velocity past the floor = %d, want it held at %d", event.Velocity, minPercussionVelocity)
+	}
+	// The readout reports the floor, so the display never claims a velocity nothing plays.
+	if status := recorder.row(lengthDisplayRow); status != "S01 @001" {
+		t.Fatalf("status at the floor = %q, want %q", status, "S01 @001")
+	}
+	assertMidiData(t, alsa.SeqEvent{Data: event.NoteOnMidi()}, []byte{midi.MakeNoteOn(0), byte(note), minPercussionVelocity})
+}
+
+// The Volume knob is the only way to change a percussive step's dynamics once it is
+// placed, so the readout has to report what the knob is doing. A percussive step has no
+// pitch to name, and an empty step shows no velocity at all.
+func TestPercussionStatusFollowsTheSelectedStep(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := trackWindowKit(8, -1)
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	recorder := useScreenRecorder(t, &bank.screen)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	voice := voiceBank.voices[0]
+	if err := handlePatternGrid(nil, 2, 0, 84); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.MoveStepCursor(2); err != nil {
+		t.Fatal(err)
+	}
+	if status := recorder.row(lengthDisplayRow); status != "S03 @084" {
+		t.Fatalf("status on a percussive step = %q, want %q", status, "S03 @084")
+	}
+	// An empty step shows nothing, the same as a chromatic one, so a velocity belonging to
+	// no step cannot make two steps look equal.
+	if err := bank.MoveStepCursor(2); err != nil {
+		t.Fatal(err)
+	}
+	if status := recorder.row(lengthDisplayRow); status != "S05 --" {
+		t.Fatalf("status on an empty step = %q, want %q", status, "S05 --")
+	}
+	if event, ok := bank.CurrentPattern().EventAtStep(2, voice); !ok || event.Velocity != 84 {
+		t.Fatalf("moving the cursor changed the step to %d/%v", event.Velocity, ok)
+	}
+}
+
+// A percussive step plays back with the dynamics it holds, which is the whole point of
+// letting the knob set them: a soft hit and a hard hit must not sound the same.
+func TestPercussionPlaybackHonoursTheStoredVelocity(t *testing.T) {
+	note := 36
+	voice, _ := chromaticTestVoice(t, &note)
+	pattern := &Pattern{}
+	pattern.ToggleEvent(Event{Voice: voice, Beat: stepBeat(0), Velocity: 40})
+	pattern.ToggleEvent(Event{Voice: voice, Beat: stepBeat(4), Velocity: 100})
+	writer := &captureMidiWriter{}
+	playback := &Playback{}
+	playback.setPosition(0, 0)
+	if _, err := playback.playBeat(writer, pattern); err != nil {
+		t.Fatal(err)
+	}
+	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), byte(note), 40})
+	writer.events = nil
+	playback.setPosition(stepBeat(4), stepBeat(4))
+	if _, err := playback.playBeat(writer, pattern); err != nil {
+		t.Fatal(err)
+	}
+	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), byte(note), 100})
 }
 
 func TestChromaticPadSetsEditingStep(t *testing.T) {
@@ -536,7 +718,7 @@ func TestChromaticMIDIOrderingAndCleanup(t *testing.T) {
 		t.Fatalf("percussion ToMidi returned %d messages, want 2", len(messages))
 	}
 	assertMidiData(t, alsa.SeqEvent{Data: messages[0]}, []byte{midi.MakeNoteOff(0), 60, 55})
-	assertMidiData(t, alsa.SeqEvent{Data: messages[1]}, []byte{midi.MakeNoteOn(0), 60, 64})
+	assertMidiData(t, alsa.SeqEvent{Data: messages[1]}, []byte{midi.MakeNoteOn(0), 60, 55})
 }
 
 func TestMixedPercussiveAndChromaticPlayback(t *testing.T) {

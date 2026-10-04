@@ -30,10 +30,10 @@ const (
 	chromaticPaletteRows    = 4
 	chromaticPaletteColumns = 12
 	// The columns past the palette are a strip of step indicators, one cell per step.
-	chromaticStepColumns     = padColumns - chromaticPaletteColumns
-	chromaticStepCells       = chromaticPaletteRows * chromaticStepColumns
-	defaultChromaticVelocity = midi.DataMax
-	chromaticVelocityStep    = 1
+	chromaticStepColumns  = padColumns - chromaticPaletteColumns
+	chromaticStepCells    = chromaticPaletteRows * chromaticStepColumns
+	defaultStepVelocity   = midi.DataMax
+	velocityStep          = 1
 	// chromaticOctaveShift is the distance one SELECT detent moves the palette. An octave is
 	// the only shift that keeps every row running A to G#, so it is the only one allowed.
 	chromaticOctaveShift = 12
@@ -139,7 +139,7 @@ func (p *PatternBank) ShiftPaletteOctave(detents int) error {
 	if err := p.drawNotePalette(); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 func midiNoteName(note int) string {
@@ -192,12 +192,12 @@ func (p *PatternBank) MoveStepCursor(delta int) error {
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
-		return p.printChromaticStatus()
+		return p.printStepStatus()
 	}
 	if err := p.redrawPatternRows(); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 func (p *PatternBank) setStepCursor(step int) error {
@@ -218,12 +218,12 @@ func (p *PatternBank) setStepCursor(step int) error {
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
-		return p.printChromaticStatus()
+		return p.printStepStatus()
 	}
 	if err := p.redrawPatternRows(); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 // The pad masks model held hardware state, rather than a timing window for gestures.
@@ -279,48 +279,88 @@ func (p *PatternBank) releasePad(row, col int) {
 	p.rowPadMasks[row] &^= uint16(1) << uint(col)
 }
 
-// AdjustChromaticVelocity moves the Volume encoder by one detent. The encoder carries its
-// own value: it is not re-read from the selected step, so a step picked after the encoder
-// was set takes the encoder's value on the next detent rather than its own. Each detent
-// writes that value to the selected step.
-func (p *PatternBank) AdjustChromaticVelocity(aseq midiWriter, encoderValue int) error {
+// AdjustVelocity moves the Volume encoder by one detent and writes the result to the step
+// under the cursor on the selected track, so a step's dynamics can be set without playing
+// the step again to get them.
+//
+// The two kinds of voice count from different places. A chromatic step counts from the
+// encoder's own carried value rather than from the step, so the value survives moving
+// between steps and a step picked after the encoder was set takes it on the next detent. A
+// percussive step counts from the velocity it holds: that is the hit the step was played
+// with, and the knob is there to trim a hit rather than to replace it with whatever value
+// the encoder happened to be left at.
+func (p *PatternBank) AdjustVelocity(aseq midiWriter, encoderValue int) error {
 	if p == nil || p.editingLength {
 		return nil
 	}
 	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() {
+	if voice == nil {
 		return nil
 	}
-	from := p.chromaticVelocity
-	var value int
-	switch encoderValue {
-	case EncoderRight:
-		value = from + chromaticVelocityStep
-	case EncoderLeft:
-		value = from - chromaticVelocityStep
-	default:
+	detent, turning := velocityDetent(encoderValue)
+	if !turning {
 		return nil
 	}
-	value = clampMidiDataValue(value)
-	p.chromaticVelocity = value
+	from := p.velocityBase(voice)
+	value := clampStepVelocity(voice, from+detent)
+	// The chromatic encoder keeps its own value whether or not the step holds a note,
+	// because a step chosen afterwards is meant to take it rather than its own.
+	if voice.IsChromatic() {
+		p.chromaticVelocity = value
+	}
+	event, updated := p.writeStepVelocity(voice, value)
 	// The step is in the log so a velocity change can always be traced to one step rather
-	// than guessed at from the sound.
-	updated := false
-	if pattern := p.CurrentPattern(); pattern != nil {
-		if event, ok := pattern.SetChromaticVelocity(p.stepCursor, voice, value); ok {
-			updated = true
-			if err := p.auditionChromaticEvent(aseq, event); err != nil {
-				return err
-			}
+	// than guessed at from the sound. It is logged before the audition, so the change is
+	// recorded even if writing the preview fails.
+	logger.Debug("volume knob", "step", p.stepCursor, "from", from, "to", value, "noteUpdated", updated)
+	if updated {
+		if err := p.auditionEvent(aseq, event); err != nil {
+			return err
 		}
 	}
-	logger.Debug("volume knob", "step", p.stepCursor, "from", from, "to", value, "noteUpdated", updated)
 	if p.editingNote {
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
+}
+
+// velocityDetent is how far one turn of the Volume encoder moves a step's velocity.
+func velocityDetent(encoderValue int) (detent int, turning bool) {
+	switch encoderValue {
+	case EncoderRight:
+		return velocityStep, true
+	case EncoderLeft:
+		return -velocityStep, true
+	default:
+		return 0, false
+	}
+}
+
+// velocityBase is the value a detent starts from: the encoder's carried value for a
+// chromatic voice, and the selected step's own velocity for a percussive one.
+func (p *PatternBank) velocityBase(voice *Voice) int {
+	if voice.IsChromatic() {
+		return p.chromaticVelocity
+	}
+	if pattern := p.CurrentPattern(); pattern != nil {
+		if event, ok := pattern.EventAtStep(p.stepCursor, voice); ok {
+			return event.Velocity
+		}
+	}
+	// An empty step has no dynamics to trim, so there is nothing to write either way.
+	return defaultStepVelocity
+}
+
+// writeStepVelocity stores the value on the step under the cursor, reporting whether that
+// step held a note to write it to.
+func (p *PatternBank) writeStepVelocity(voice *Voice, velocity int) (Event, bool) {
+	pattern := p.CurrentPattern()
+	if pattern == nil {
+		return Event{}, false
+	}
+	return pattern.SetVelocity(p.stepCursor, voice, velocity)
 }
 
 // Only a newly pressed pad can complete a two-pad tie gesture.
@@ -371,7 +411,7 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 			return true, err
 		}
 	}
-	return true, p.printChromaticStatus()
+	return true, p.printStepStatus()
 }
 
 // stepCellPaintColor is how a step cell reads right now: white while the playhead is on
@@ -456,13 +496,13 @@ func (p *PatternBank) handleNoteEditStepPress(pattern *Pattern, voice *Voice, st
 	}
 	if !pattern.TieEventsAtSteps(previous, step, voice) {
 		logger.Debug("tie refused", "from", previous, "to", step, "voice", voiceLabel(voice))
-		return p.printChromaticStatus()
+		return p.printStepStatus()
 	}
 	logger.Debug("tie", "from", previous, "to", step, "voice", voiceLabel(voice))
 	if err := p.drawNotePalette(); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 // In note-edit mode the left block chooses a pitch for the current step and the right-hand
@@ -510,7 +550,7 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
-		return p.printChromaticStatus()
+		return p.printStepStatus()
 	}
 	// How hard the pad was pressed is the step's dynamics, whether the note is new or its
 	// pitch is being changed. The Volume encoder still adjusts the value afterwards.
@@ -522,17 +562,17 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 	// A note has been chosen here, so the step's own pad is a pitch pad again.
 	p.noteChosen = true
 	logger.Debug("pitch", "step", step, "note", note, "velocity", event.Velocity)
-	if err := p.auditionChromaticEvent(aseq, event); err != nil {
+	if err := p.auditionEvent(aseq, event); err != nil {
 		return err
 	}
 	if err := p.drawNotePalette(); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 // Audition uses the edited velocity and always closes the preview with velocity zero.
-func (p *PatternBank) auditionChromaticEvent(aseq midiWriter, event Event) error {
+func (p *PatternBank) auditionEvent(aseq midiWriter, event Event) error {
 	if event.Voice == nil {
 		return nil
 	}
@@ -564,7 +604,7 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
-		return p.printChromaticStatus()
+		return p.printStepStatus()
 	}
 	if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
 		return err
@@ -572,7 +612,7 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 	if err := p.redrawPatternRows(); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 func (p *PatternBank) ToggleNoteMode() error {
@@ -662,48 +702,52 @@ func chromaticPaletteColor(note int) [3]int {
 	return Dim(oledColorTable[chromaticColorIndex(note)], chromaticPaletteDim)
 }
 
-// chromaticStatusText shows the step, its note and its velocity. A step with no note shows
-// no velocity at all, because the value the next note would inherit is not that step's
-// velocity and reading it as one made two steps look equal.
-func chromaticStatusText(step int, event *Event, velocity, tieStep int) string {
+// stepStatusText is the readout for the step under the cursor: its note, its velocity, and
+// the step a tie runs into. A percussive step has no pitch to name, so it reports its
+// dynamics alone. A step holding no note shows no velocity at all, because the value the
+// next note would inherit is not that step's velocity and reading it as one made two steps
+// look equal.
+func stepStatusText(voice *Voice, step int, event *Event, tieStep int) string {
 	if event == nil {
 		return fmt.Sprintf("S%02d --", step+1)
 	}
-	text := fmt.Sprintf("S%02d %s@%03d", step+1, midiNoteName(event.ChromaticNote), velocity)
+	pitch := ""
+	if voice.IsChromatic() {
+		pitch = midiNoteName(event.ChromaticNote)
+	}
+	text := fmt.Sprintf("S%02d %s@%03d", step+1, pitch, event.Velocity)
 	if event.Tie && tieStep >= 0 {
 		text = fmt.Sprintf("%s->%02d", text, tieStep+1)
 	}
 	return text
 }
 
-// The bottom OLED row shows the current step, pitch, velocity, and tie target.
-func (p *PatternBank) printChromaticStatus() error {
+// The bottom OLED row shows the current step, its note and its velocity, and the tie target
+// when there is one. A percussive track reports the step and its dynamics too, because the
+// Volume knob sets them and a readout that went blank would leave the knob turning blind.
+func (p *PatternBank) printStepStatus() error {
 	if p == nil || p.f == nil || p.editingLength {
 		return nil
 	}
 	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() {
+	if voice == nil {
 		return p.clearTextRows(lengthDisplayRow, 1)
 	}
 	if err := p.clearTextRows(lengthDisplayRow, 1); err != nil {
 		return err
 	}
 	pattern := p.CurrentPattern()
-	event, ok := Event{}, false
-	if pattern != nil {
-		event, ok = pattern.EventAtStep(p.stepCursor, voice)
-	}
-	velocity := p.chromaticVelocity
 	tieStep := -1
-	var eventPtr *Event
-	if ok {
-		velocity = event.Velocity
-		eventPtr = &event
-		if next, nextOK := pattern.NextTiedEvent(p.stepCursor, voice); nextOK {
-			tieStep = eventStep(next)
+	var event *Event
+	if pattern != nil {
+		if current, ok := pattern.EventAtStep(p.stepCursor, voice); ok {
+			event = &current
+			if next, nextOK := pattern.NextTiedEvent(p.stepCursor, voice); nextOK {
+				tieStep = eventStep(next)
+			}
 		}
 	}
-	return p.printText(lengthDisplayRow, 0, fitOLEDText(chromaticStatusText(p.stepCursor, eventPtr, velocity, tieStep)), false)
+	return p.printText(lengthDisplayRow, 0, fitOLEDText(stepStatusText(voice, p.stepCursor, event, tieStep)), false)
 }
 
 // oledTextWidth is how many characters a readout row holds. Text meant for a row is built

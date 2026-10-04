@@ -52,16 +52,29 @@ func clampMidiDataValue(value int) int {
 	return value
 }
 
-// NoteOnMidi uses the event velocity for chromatic voices and the legacy fixed velocity for percussion.
-func (ev *Event) NoteOnMidi() []byte {
-	velocity := 64
-	if ev.IsChromatic() {
-		velocity = ev.Velocity
+// minPercussionVelocity is how quiet a percussive step may be turned down. Velocity zero is
+// not a silent note but a note-off on the wire, so a step allowed to reach it would stop
+// sounding altogether while the readout still claimed a velocity, and a note that never
+// starts cannot be softened any further.
+const minPercussionVelocity = 1
+
+// clampStepVelocity keeps a velocity inside the range its voice can send: the MIDI data
+// range for every voice, and never zero for a percussive one.
+func clampStepVelocity(voice *Voice, velocity int) int {
+	velocity = clampMidiDataValue(velocity)
+	if voice != nil && !voice.IsChromatic() && velocity < minPercussionVelocity {
+		return minPercussionVelocity
 	}
+	return velocity
+}
+
+// NoteOnMidi sends the velocity the event carries, so a percussive step sounds with the
+// dynamics it was hit at rather than a fixed one.
+func (ev *Event) NoteOnMidi() []byte {
 	return []byte{
 		midi.MakeNoteOn(protocolChannel(ev.midiChannel())),
 		byte(clampMidiDataValue(ev.NoteNumber())),
-		byte(clampMidiDataValue(velocity)),
+		byte(clampStepVelocity(ev.Voice, ev.Velocity)),
 	}
 }
 

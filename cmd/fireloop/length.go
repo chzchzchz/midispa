@@ -26,7 +26,7 @@ func (p *PatternBank) setLengthMode(active bool) error {
 	if err := p.f.SetLed(NoteOverview, LEDOff); err != nil {
 		return err
 	}
-	return p.printChromaticStatus()
+	return p.printStepStatus()
 }
 
 func (p *PatternBank) AdjustLength(delta int) error {
