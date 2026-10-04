@@ -103,7 +103,11 @@ A track is a voice from the kit, and any voice can go on any track.
 - Rows 2 to 5: the voice on each visible track row, inverted for the selected row.
 - Row 6 is the readout row and carries one of: `Length NN steps` in length mode, `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, `S<STEP> --` for a selected chromatic track on a step with no note, or `Tempo: NNN` while a tempo is being entered. It is blank otherwise.
 
-The pad grid shows the notes of the four visible tracks, the editing step is lit slightly brighter, and during playback the playing column is inverted while the others are redrawn dimmer.
+The pad grid shows the notes of the four visible tracks and the editing step is lit slightly brighter. A chromatic step is coloured by pitch, using the same colour as that pitch's palette pad, and a percussive step is dark green.
+
+During playback the playing column is inverted while the others are redrawn dimmer. Inversion is per channel, so a chromatic step keeps its pitch colour while being played and returns to it exactly when the playhead moves on. A tied step is marked by pushing its colour away from the playhead, lifted normally and lowered when inverted.
+
+While choosing notes the palette owns the grid, so the playhead lights the matching cell of the step strip instead and the palette is never overwritten.
 
 #### Track window
 
@@ -125,7 +129,7 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 3. Move the cursor with Grid left/right or by pressing another step pad. Steps beyond the current pattern length are ignored.
 4. Press Mode to enter note-edit mode. The pad grid splits in two: the left twelve columns are the pitch palette and the rightmost four show the sixteen steps.
 5. The palette runs four rows from A1, each starting on A and spanning the twelve semitones to the G# above it, so the rows cover A1–G#2, A2–G#3, A3–G#4 and A4–G#5. Press a palette pad to create or update the note at the current step and audition it.
-6. The step strip reads four steps per row, in the same order as the step grid. Each cell is dark when the step holds no note and otherwise shows that note's colour, with the step being edited brightened. Press a cell to move the edit there.
+6. The step strip reads four steps per row, in the same order as the step grid. Each cell is dark when the step holds no note and otherwise shows that note's colour, with the step being edited brightened. Press a cell to move the edit there. While a pattern plays, the cell the playhead is on goes white.
 7. `A1`, the palette's first pad, means "no note", so pressing it clears the current step. `Alt` plus any palette pad does the same.
 8. How hard a palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it by one detent at a time, clamped to 0..127. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
 9. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note.

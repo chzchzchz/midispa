@@ -494,6 +494,11 @@ func (pb *PatternBank) startSequencer(aseq *alsa.Seq) playbackStopFunc {
 	}
 	// Light up column if new position.
 	update := func(beat float32) error {
+		if pb.NoteEditActive() {
+			// Note editing owns the grid with the pitch palette, so the playhead moves
+			// along the step strip rather than over the palette.
+			return pb.drawStepPlayhead(eventStep(Event{Beat: beat}))
+		}
 		thisColumn := int(math.Floor(float64(beat*patternStepsPerBeat))) % 16
 		if thisColumn == lastColumn {
 			// No update.

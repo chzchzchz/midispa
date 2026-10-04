@@ -53,6 +53,11 @@ func stopPlayback() error {
 			patbank.playback = nil
 		}
 		patbank.clearPadState()
+		// A playhead left lit on the step strip would outlive the playback that put it
+		// there, so put it back.
+		if err := patbank.clearStepPlayhead(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if songbank != nil {
 		if playback := songbank.playback; playback != nil {

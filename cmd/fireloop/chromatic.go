@@ -15,6 +15,13 @@ import (
 // over at A. It uses the first twelve columns of each sixteen-column pad row; the last four
 // are left dark, because a row that wrapped past G# would put the next row's A somewhere
 // unexpected. Rows therefore cover A1 to G#2, A2 to G#3, A3 to G#4 and A4 to G#5.
+// A tie mark lifts a dark channel to tieMarkAmount, or lowers an inverted one from
+// tieMarkFloor.
+const (
+	tieMarkAmount = 32
+	tieMarkFloor  = 95
+)
+
 const (
 	chromaticBaseNote       = 33
 	chromaticPaletteRows    = 4
@@ -104,8 +111,13 @@ func (p *PatternBank) MoveStepCursor(delta int) error {
 	if p == nil || p.editingLength {
 		return nil
 	}
+	previous := p.stepCursor
 	p.stepCursor += delta
 	p.clampStepCursor()
+	if p.stepCursor != previous {
+		// A guard belongs to the step that was left behind.
+		p.noteChosen = false
+	}
 	logger.Debug("cursor", "step", p.stepCursor)
 	if p.editingNote {
 		if err := p.drawNotePalette(); err != nil {
@@ -126,6 +138,10 @@ func (p *PatternBank) setStepCursor(step int) error {
 	pattern := p.CurrentPattern()
 	if pattern == nil || step < 0 || step >= pattern.LengthSteps() {
 		return nil
+	}
+	if step != p.stepCursor {
+		// A guard belongs to the step that was left behind.
+		p.noteChosen = false
 	}
 	p.stepCursor = step
 	logger.Debug("cursor", "step", p.stepCursor)
@@ -277,6 +293,74 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 	return true, p.printChromaticStatus()
 }
 
+// stepCellPaintColor is how a step cell reads right now: white while the playhead is on
+// it, otherwise the step's note colour, brightened while it is the step being edited.
+// Sharing one rule means any redraw keeps the playhead visible.
+func (p *PatternBank) stepCellPaintColor(pattern *Pattern, voice *Voice, step int) [3]int {
+	if step == p.playheadStep {
+		return oledWhite
+	}
+	return p.stepCellColor(pattern, voice, step)
+}
+
+// chromaticStepCell is the grid position of the strip cell standing for a step.
+func chromaticStepCell(step int) (row, col int, ok bool) {
+	if step < 0 || step >= chromaticStepCells {
+		return 0, 0, false
+	}
+	return step / chromaticStepColumns, chromaticPaletteColumns + step%chromaticStepColumns, true
+}
+
+// drawStepCell paints one strip cell.
+func (p *PatternBank) drawStepCell(step int) error {
+	row, col, ok := chromaticStepCell(step)
+	if !ok || p.f == nil {
+		return nil
+	}
+	voice := p.SelectedVoice()
+	pattern := p.CurrentPattern()
+	if voice == nil || !voice.IsChromatic() || pattern == nil {
+		return nil
+	}
+	color := p.stepCellPaintColor(pattern, voice, step)
+	return p.f.LightPad(col, row, color[0], color[1], color[2])
+}
+
+// drawStepPlayhead moves the note-edit playhead along the step strip. The column playhead
+// stays out of note-edit mode, where it would overwrite the pitch palette.
+func (p *PatternBank) drawStepPlayhead(step int) error {
+	previous := p.playheadStep
+	if previous == step {
+		return nil
+	}
+	p.playheadStep = step
+	if err := p.drawStepCell(previous); err != nil {
+		return err
+	}
+	return p.drawStepCell(step)
+}
+
+// clearStepPlayhead puts the strip back when playback stops, so no cell is left lit.
+func (p *PatternBank) clearStepPlayhead() error {
+	if p.playheadStep == noPlayheadStep {
+		return nil
+	}
+	previous := p.playheadStep
+	p.playheadStep = noPlayheadStep
+	return p.drawStepCell(previous)
+}
+
+// guardsPad reports whether a palette pad is the one standing for the step being edited.
+// On the selected track's own pad row, column n is step n in step mode, so that press
+// means "this step" rather than a pitch. Only the first palette columns are involved: past
+// them the right-hand block already treats a press as a step.
+func (p *PatternBank) guardsPad(row, col int) bool {
+	if p.noteChosen || p.selTrackRow < 1 || row != p.selTrackRow-1 {
+		return false
+	}
+	return col == p.stepCursor && col < chromaticPaletteColumns
+}
+
 // In note-edit mode the left block chooses a pitch for the current step and the right-hand
 // block chooses which step is being edited. Alt plus a pad removes the event, and so does
 // A1, the palette's first pad, which stands for "no note here". How hard a pad was hit sets
@@ -301,6 +385,14 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		// Neither a pitch nor a step, so there is nothing here to edit.
 		return nil
 	}
+	if p.guardsPad(row, col) && !altOn {
+		// This pad stands for the step being edited, so treating it as a pitch pad here
+		// would rewrite the note the user was trying to reach, and as A1 it would erase
+		// it. The guard lifts once a note has been chosen at this step. Alt still clears,
+		// because that is a request about the step rather than a pitch.
+		logger.Debug("pitch refused", "step", step, "padRow", row, "padCol", col)
+		return nil
+	}
 	if altOn || note == chromaticBaseNote {
 		// A1 is where the palette starts, which makes it the natural key for "no note".
 		reason := "palette"
@@ -321,6 +413,8 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 	if !ok {
 		return nil
 	}
+	// A note has been chosen here, so the step's own pad is a pitch pad again.
+	p.noteChosen = true
 	logger.Debug("pitch", "step", step, "note", note, "velocity", event.Velocity)
 	if err := p.auditionChromaticEvent(aseq, event); err != nil {
 		return err
@@ -350,10 +444,10 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 		return nil
 	}
 	p.editingNote = active
+	// The step rows are about to be redrawn, which puts the strip back on its own, so
+	// the note-edit playhead stops lighting a cell here.
+	p.playheadStep = noPlayheadStep
 	p.clearPadState()
-	if active {
-		p.chromaticVelocity = clampMidiDataValue(p.chromaticVelocity)
-	}
 	if p.f == nil {
 		return nil
 	}
@@ -420,7 +514,7 @@ func (p *PatternBank) drawNotePalette() error {
 		for col := 0; col < padColumns; col++ {
 			color := [3]int{}
 			if step := chromaticStepAt(row, col); step >= 0 {
-				color = p.stepCellColor(pattern, voice, step)
+				color = p.stepCellPaintColor(pattern, voice, step)
 			} else if note, onPalette := chromaticPaletteNote(row, col); onPalette {
 				color = chromaticPaletteColor(note)
 				if note == selectedNote {
@@ -533,10 +627,19 @@ func chromaticEventColor(event Event) [3]int {
 	return chromaticPaletteColor(event.ChromaticNote)
 }
 
-func markTieColor(color [3]int) [3]int {
+// A tied step is marked by pushing its colour away from the playhead: a dark colour is
+// lifted, and an inverted one is pushed down, because lifting an already bright colour
+// would be invisible.
+func markTieColor(color [3]int, invert bool) [3]int {
 	for i := range color {
-		if color[i] < 32 {
-			color[i] = 32
+		if invert {
+			if color[i] > tieMarkFloor {
+				color[i] -= tieMarkAmount
+			}
+			continue
+		}
+		if color[i] < tieMarkAmount {
+			color[i] = tieMarkAmount
 		}
 	}
 	return color

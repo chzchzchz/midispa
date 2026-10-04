@@ -800,7 +800,23 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 	if _, ok := bank.CurrentPattern().EventAtStep(5, voice); !ok {
 		t.Fatal("the note on step 5 disappeared")
 	}
-	// A palette pad now edits step 5.
+	// Column 5 on the selected row is step 6 in step mode, so that pad is guarded until a
+	// note has been chosen at this step.
+	guarded, _ := bank.CurrentPattern().EventAtStep(5, voice)
+	if err := bank.handleNoteEditPad(nil, 0, 5, 100); err != nil {
+		t.Fatal(err)
+	}
+	if event, _ := bank.CurrentPattern().EventAtStep(5, voice); event.ChromaticNote != guarded.ChromaticNote {
+		t.Fatalf("the step's own pad changed the pitch to %d", event.ChromaticNote)
+	}
+	// Choosing a note elsewhere lifts the guard, and a palette pad then edits step 5.
+	if err := bank.handleNoteEditPad(nil, 1, 3, 100); err != nil {
+		t.Fatal(err)
+	}
+	chosen, _ := chromaticPaletteNote(1, 3)
+	if event, _ := bank.CurrentPattern().EventAtStep(5, voice); event.ChromaticNote != chosen {
+		t.Fatalf("step 5 pitch = %d, want %d", event.ChromaticNote, chosen)
+	}
 	if err := bank.handleNoteEditPad(nil, 0, 5, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -810,7 +826,7 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 	}
 	want, _ := chromaticPaletteNote(0, 5)
 	if event.ChromaticNote != want {
-		t.Fatalf("step 5 pitch = %d, want %d", event.ChromaticNote, want)
+		t.Fatalf("step 5 pitch = %d, want the lifted guard to allow %d", event.ChromaticNote, want)
 	}
 
 	// A1 is the palette's first pad and means no note.
@@ -858,5 +874,374 @@ func TestChromaticStepCellsShowNoteColours(t *testing.T) {
 	emptyRow, emptyCol := 0, chromaticPaletteColumns // step 0
 	if sim.pads[emptyRow*padColumns+emptyCol] != [3]int{} {
 		t.Fatalf("empty step cell = %v, want dark", sim.pads[emptyRow*padColumns+emptyCol])
+	}
+}
+
+// A grid pad is a step selector in step mode and a pitch pad in note-edit mode. Pressing
+// the same pad again in note-edit mode must not rewrite the note the user navigated to,
+// until a note has been chosen at that step.
+func TestPalettePadThatSelectedTheStepIsRefused(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	pattern := bank.CurrentPattern()
+	original := 40 // E2, which the palette pad below would not choose
+	pattern.SetChromaticNote(6, voice, original, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	press := func(row, col, vel int) {
+		if err := processPatternEvent(nil, padMessage(54+row*16+col, vel)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row, col := 0, 6 // the pad that means "step 7" in step mode
+	paletteNote, _ := chromaticPaletteNote(row, col)
+	if paletteNote == original {
+		t.Fatalf("the test needs a palette pad whose pitch differs from %d", original)
+	}
+
+	// Select the step with that pad in step mode, then release it.
+	press(row, col, 100)
+	press(row, col, 0)
+	if bank.StepCursor() != 6 || bank.NoteEditActive() {
+		t.Fatalf("after the step press: cursor=%d noteEdit=%v", bank.StepCursor(), bank.NoteEditActive())
+	}
+	// Enter note selection. The step's note must survive the same pad being pressed.
+	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
+		t.Fatal(err)
+	}
+	press(row, col, 100)
+	press(row, col, 0)
+	event, ok := pattern.EventAtStep(6, voice)
+	if !ok || event.ChromaticNote != original {
+		t.Fatalf("note = %d/%v, want the guarded pad to leave it at %d", event.ChromaticNote, ok, original)
+	}
+
+	// Choosing a note lifts the guard, so the same pad is a pitch pad again.
+	press(1, 3, 100)
+	press(1, 3, 0)
+	chosen, _ := pattern.EventAtStep(6, voice)
+	if chosen.ChromaticNote == original {
+		t.Fatal("choosing a note on another pad did nothing")
+	}
+	press(row, col, 100)
+	event, _ = pattern.EventAtStep(6, voice)
+	if event.ChromaticNote != paletteNote {
+		t.Fatalf("note = %d, want the lifted guard to allow the palette pitch %d", event.ChromaticNote, paletteNote)
+	}
+}
+
+// The guard belongs to the step it was armed on: moving the cursor lifts it.
+func TestPaletteGuardLiftsWhenTheCursorMoves(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(6, voice, 40, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	press := func(row, col, vel int) {
+		if err := processPatternEvent(nil, padMessage(54+row*16+col, vel)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row, col := 0, 6
+	paletteNote, _ := chromaticPaletteNote(row, col)
+
+	press(row, col, 100)
+	press(row, col, 0)
+	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
+		t.Fatal(err)
+	}
+	// The guard holds while the cursor stays on step 7.
+	press(row, col, 100)
+	press(row, col, 0)
+	if event, _ := pattern.EventAtStep(6, voice); event.ChromaticNote != 40 {
+		t.Fatalf("note = %d while the guard should hold, want 40", event.ChromaticNote)
+	}
+	// Moving to another step lifts it, so the pad is a pitch pad again.
+	if err := bank.MoveStepCursor(2); err != nil {
+		t.Fatal(err)
+	}
+	press(row, col, 100)
+	if event, _ := pattern.EventAtStep(8, voice); event.ChromaticNote != paletteNote {
+		t.Fatalf("note on the newly selected step = %d, want %d", event.ChromaticNote, paletteNote)
+	}
+	if event, _ := pattern.EventAtStep(6, voice); event.ChromaticNote != 40 {
+		t.Fatalf("the note left behind changed to %d", event.ChromaticNote)
+	}
+}
+
+// The pad standing for step 1 is also A1, the erase key, so the guard has to run before
+// the removal or it deletes the note it is meant to protect. Alt still clears.
+func TestStepOnePadDoesNotEraseTheNote(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(0, voice, 43, 100) // G2 on step 1
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	// The step pad for step 1 is palette (0,0), which is A1.
+	if err := bank.handleNoteEditPad(nil, 0, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	if event, ok := pattern.EventAtStep(0, voice); !ok || event.ChromaticNote != 43 {
+		t.Fatalf("note = %d/%v, want the step's own pad to leave it at 43", event.ChromaticNote, ok)
+	}
+	// Alt on the same pad is a request about the step, so it clears.
+	altOn = true
+	if err := bank.handleNoteEditPad(nil, 0, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := pattern.EventAtStep(0, voice); ok {
+		t.Fatal("Alt on the step pad did not clear the note")
+	}
+}
+
+// paletteRegion is the pitch palette as the unit holds it, excluding the step strip.
+func paletteRegion(sim *fireSim) [][3]int {
+	var out [][3]int
+	for row := 0; row < chromaticPaletteRows; row++ {
+		for col := 0; col < chromaticPaletteColumns; col++ {
+			out = append(out, sim.pads[row*padColumns+col])
+		}
+	}
+	return out
+}
+
+// stripCell is one step cell as the unit holds it.
+func stripCell(sim *fireSim, step int) [3]int {
+	row, col, ok := chromaticStepCell(step)
+	if !ok {
+		return [3]int{}
+	}
+	return sim.pads[row*padColumns+col]
+}
+
+// Playing a pattern while choosing notes must not disturb the palette. The column
+// playhead repaints every pad row, which in note-edit mode is the palette.
+func TestNoteEditPlayheadLeavesThePaletteAlone(t *testing.T) {
+	sim := newFireSim()
+	voiceBank := trackWindowKit(8, 0)
+	bank := NewPatternBank(NewFire(sim.write), voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	for _, step := range []int{1, 3, 7} {
+		bank.CurrentPattern().SetChromaticNote(step, voice, 36+step, 100)
+	}
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	if err := processPatternEvent(nil, padMessage(NotePlay, 100)); err != nil {
+		t.Fatal(err)
+	}
+	before := paletteRegion(sim)
+	for step := 0; step < maxPatternSteps; step++ {
+		if err := patbank.playback.updatePads(stepBeat(step)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, want := range before {
+		row, col := i/chromaticPaletteColumns, i%chromaticPaletteColumns
+		if got := sim.pads[row*padColumns+col]; got != want {
+			t.Fatalf("palette pad row %d col %d changed from %v to %v during playback", row, col, want, got)
+		}
+	}
+}
+
+// In note-edit mode the playhead moves along the step strip, one cell per step, and the
+// cell it leaves goes back to that step's note colour.
+func TestNoteEditPlayheadLightsTheStepStrip(t *testing.T) {
+	sim := newFireSim()
+	voiceBank := trackWindowKit(8, 0)
+	bank := NewPatternBank(NewFire(sim.write), voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	bank.CurrentPattern().SetChromaticNote(5, voice, 40, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	if err := processPatternEvent(nil, padMessage(NotePlay, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stripCell(sim, 5); got == oledWhite {
+		t.Fatalf("step 5 cell = %v before the playhead arrived, want its note colour", got)
+	}
+	if err := patbank.playback.updatePads(stepBeat(5)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stripCell(sim, 5); got != oledWhite {
+		t.Fatalf("step 5 cell = %v while the playhead is there, want white", got)
+	}
+	// The step the note is on keeps its colour apart from the playhead.
+	noteColor := chromaticPaletteColor(40)
+	if err := patbank.playback.updatePads(stepBeat(6)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stripCell(sim, 6); got != oledWhite {
+		t.Fatalf("step 6 cell = %v while the playhead is there, want white", got)
+	}
+	if got := stripCell(sim, 5); got == oledWhite {
+		t.Fatal("the cell the playhead left is still lit")
+	}
+	if got := stripCell(sim, 5); got != noteColor {
+		t.Fatalf("step 5 cell = %v after the playhead left, want the note colour %v", got, noteColor)
+	}
+}
+
+// Stopping must put the strip back, or a lit cell outlives the playback that put it there.
+func TestNoteEditPlayheadClearsOnStop(t *testing.T) {
+	sim := newFireSim()
+	voiceBank := trackWindowKit(8, 0)
+	bank := NewPatternBank(NewFire(sim.write), voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	bank.CurrentPattern().SetChromaticNote(5, voice, 40, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	if err := processPatternEvent(nil, padMessage(NotePlay, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := patbank.playback.updatePads(stepBeat(5)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stripCell(sim, 5); got != oledWhite {
+		t.Fatalf("step 5 cell = %v, want white while playing", got)
+	}
+	if err := stopPlayback(); err != nil {
+		t.Fatal(err)
+	}
+	if got := stripCell(sim, 5); got == oledWhite {
+		t.Fatal("stopping left a strip cell lit")
+	}
+	if got := stripCell(sim, 5); got != chromaticPaletteColor(40) {
+		t.Fatalf("step 5 cell = %v after stopping, want the note colour", got)
+	}
+}
+
+// playheadTestKit is one chromatic voice followed by one percussive voice, so the two
+// colour rules can be compared side by side.
+func playheadTestKit() *VoiceBank {
+	kick := 36
+	return NewVoiceBank([]Device{{
+		Channel: 1,
+		Voices:  []Voice{{Name: "lead", Channel: 1}, {Name: "kick", Note: &kick, Channel: 1}},
+	}})
+}
+
+// The playhead must not flatten a chromatic step to green. It keeps the pitch colour, and
+// the column behind it restores that exact colour rather than a flat one.
+func TestPlayheadKeepsChromaticPitchColour(t *testing.T) {
+	sim := newFireSim()
+	kit := playheadTestKit()
+	bank := NewPatternBank(NewFire(sim.write), kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	chromatic, percussive := kit.voices[0], kit.voices[1]
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(3, chromatic, 40, 100) // E2, untied
+	pattern.ToggleEvent(Event{Voice: percussive, Beat: stepBeat(3), Velocity: 100})
+
+	pitch := chromaticPaletteColor(40)
+	drum := chromaticEventColor(Event{Voice: percussive})
+
+	if err := bank.drawPadColumnInvert(3); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sim.pads[3], invertColor(pitch); got != want {
+		t.Fatalf("inverted chromatic step = %v, want the inverted pitch colour %v", got, want)
+	}
+	if got, want := sim.pads[3+padColumns], invertColor(drum); got != want {
+		t.Fatalf("inverted percussive step = %v, want %v", got, want)
+	}
+
+	// The column the playhead leaves goes back to the real colours.
+	if err := bank.drawPadColumn(3); err != nil {
+		t.Fatal(err)
+	}
+	if got := sim.pads[3]; got != pitch {
+		t.Fatalf("restored chromatic step = %v, want the pitch colour %v", got, pitch)
+	}
+	if got := sim.pads[3+padColumns]; got != drum {
+		t.Fatalf("restored percussive step = %v, want %v", got, drum)
+	}
+}
+
+// A tie is marked by pushing the colour away from the playhead, which means lifting it
+// normally and lowering it when inverted, where lifting would be invisible.
+func TestPlayheadMarksTiesBothWays(t *testing.T) {
+	sim := newFireSim()
+	kit := playheadTestKit()
+	bank := NewPatternBank(NewFire(sim.write), kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := kit.voices[0]
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(3, voice, 40, 100)
+	pattern.SetChromaticNote(5, voice, 43, 100)
+	pattern.TieEventsAtSteps(3, 5, voice)
+
+	if err := bank.drawPadColumn(3); err != nil {
+		t.Fatal(err)
+	}
+	lifted := markTieColor(chromaticPaletteColor(40), false)
+	if got := sim.pads[3]; got != lifted {
+		t.Fatalf("tied step behind the playhead = %v, want the lifted colour %v", got, lifted)
+	}
+	if err := bank.drawPadColumnInvert(3); err != nil {
+		t.Fatal(err)
+	}
+	lowered := markTieColor(invertColor(chromaticPaletteColor(40)), true)
+	if got := sim.pads[3]; got != lowered {
+		t.Fatalf("tied step under the playhead = %v, want the lowered colour %v", got, lowered)
+	}
+	// The mark has to differ from the unmarked colour in both directions.
+	if lowered == invertColor(chromaticPaletteColor(40)) {
+		t.Fatal("a tie under the playhead is not distinguishable")
 	}
 }

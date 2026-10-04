@@ -8,6 +8,9 @@ import (
 // padRows is the number of hardware pad rows. The track window shows one track per row.
 const padRows = 4
 
+// noPlayheadStep means the note-edit playhead is not lighting a strip cell.
+const noPlayheadStep = -1
+
 type PatternBank struct {
 	Patterns          map[int]*Pattern
 	selPatIdx         int
@@ -26,6 +29,14 @@ type PatternBank struct {
 	screen   textScreen
 	vb       *VoiceBank
 	playback *Playback
+	// playheadStep is the strip cell the note-edit playhead is lighting, or
+	// noPlayheadStep when it is not lighting one.
+	playheadStep int
+	// noteChosen records that a note has been picked at the current step. Until then the
+	// pad standing for that step is guarded, because in note-edit mode a grid pad is a
+	// pitch pad and pressing the one the user means as "this step" would rewrite the note
+	// they were trying to reach.
+	noteChosen bool
 	// trackMu guards the track window. The playback worker draws the visible tracks
 	// from its own goroutine, so scrolling must not race with it.
 	trackMu sync.RWMutex
@@ -38,6 +49,7 @@ func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 	ret := &PatternBank{
 		Patterns:          make(map[int]*Pattern),
 		chromaticVelocity: defaultChromaticVelocity,
+		playheadStep:      noPlayheadStep,
 		f:                 f,
 		screen:            f,
 		vb:                vb,
@@ -225,6 +237,7 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 	oldPat.mu.Unlock()
 	p.editingNote = false
 	p.stepCursor = 0
+	p.noteChosen = false
 	p.clearPadState()
 	if p.f != nil {
 		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
@@ -252,6 +265,7 @@ func (p *PatternBank) Jump(n int) error {
 	if changed {
 		p.editingNote = false
 		p.stepCursor = 0
+		p.noteChosen = false
 		p.clearPadState()
 		if p.f != nil {
 			if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
@@ -479,7 +493,7 @@ func (p *PatternBank) redrawTrackPads(row int) error {
 		}
 		rgb[idx] = chromaticEventColor(ev)
 		if ev.Tie {
-			rgb[idx] = markTieColor(rgb[idx])
+			rgb[idx] = markTieColor(rgb[idx], false)
 		}
 	}
 	if !p.editingNote {
@@ -490,30 +504,49 @@ func (p *PatternBank) redrawTrackPads(row int) error {
 	return p.f.LightPadRow(row-1, rgb)
 }
 
+// drawPadColumn repaints a column the playhead has moved off, so each step goes back to
+// its own colour.
 func (p *PatternBank) drawPadColumn(col int) error {
-	f := func(ev *Event) [3]int {
-		if ev == nil {
-			return [3]int{0, 0, 0}
-		}
-		return [3]int{0, 50, 0}
-	}
-	return p.drawPadColumnColor(col, f)
+	return p.drawPadColumnColor(col, false)
 }
 
+// drawPadColumnInvert repaints the column the playhead is on, inverting each step's own
+// colour so a pitch still reads while it is being played.
 func (p *PatternBank) drawPadColumnInvert(col int) error {
-	f := func(ev *Event) [3]int {
-		if ev == nil {
-			return [3]int{50, 50, 50}
-		}
-		return [3]int{50, 0, 50}
-	}
-	return p.drawPadColumnColor(col, f)
+	return p.drawPadColumnColor(col, true)
 }
 
-type evColorFunc func(*Event) [3]int
+// playheadEventColor is a step under the playhead. A chromatic step keeps its pitch colour
+// either way, so the playhead does not paint it green and the column behind it restores
+// the real colour rather than a flat one.
+func playheadEventColor(event Event, invert bool) [3]int {
+	color := chromaticEventColor(event)
+	if invert {
+		return invertColor(color)
+	}
+	return color
+}
 
-func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
-	if col < 0 || col > 15 {
+// invertColor is per channel, so an inverted step reads as its own colour played hot.
+func invertColor(color [3]int) [3]int {
+	var out [3]int
+	for i, value := range color {
+		out[i] = midiNoteMax - clampMidiDataValue(value)
+	}
+	return out
+}
+
+// emptyStepColor is how a column with no note reads: black behind the playhead, grey under
+// it. An empty cell is not inverted, because inverting black would be blinding.
+func emptyStepColor(invert bool) [3]int {
+	if invert {
+		return [3]int{50, 50, 50}
+	}
+	return [3]int{}
+}
+
+func (p *PatternBank) drawPadColumnColor(col int, invert bool) error {
+	if col < 0 || col >= padColumns {
 		return errOutOfRange
 	}
 	if p == nil || p.f == nil {
@@ -524,8 +557,8 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 		return nil
 	}
 	var rgb [padRows][3]int
-	for row := 0; row < padRows; row++ {
-		rgb[row] = f(nil)
+	for row := range rgb {
+		rgb[row] = emptyStepColor(invert)
 	}
 	evs := pattern.FindBeat(stepBeat(col))
 	for _, ev := range evs {
@@ -538,9 +571,9 @@ func (p *PatternBank) drawPadColumnColor(col int, f evColorFunc) error {
 		}
 		for row, rowVoice := range p.visibleTrackVoices() {
 			if ev.Voice == rowVoice {
-				rgb[row] = f(&ev)
+				rgb[row] = playheadEventColor(ev, invert)
 				if ev.Tie {
-					rgb[row] = markTieColor(rgb[row])
+					rgb[row] = markTieColor(rgb[row], invert)
 				}
 			}
 		}

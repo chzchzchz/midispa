@@ -20,10 +20,9 @@ import (
 
 // The pad light message is f0 47 7f 43 65, two length bytes, then four bytes per pad.
 const (
-	padLightCommand  = 0x65
-	padLightPayload  = 7
-	padLightPerPad   = 4
-	padLightTotalLen = padLightPayload + padColumns*padLightPerPad + 1
+	padLightCommand = 0x65
+	padLightPayload = 7
+	padLightPerPad  = 4
 	// screenHeaderLen is f0, maker, device, family, command, two length bytes, then the
 	// first band, last band, first column and last column.
 	screenHeaderLen = 11
@@ -45,8 +44,11 @@ func newFireSim() *fireSim {
 	return &fireSim{leds: make(map[int]int)}
 }
 
+// isPadLight recognises the pad command by its header. The pad count is whatever the
+// payload holds, so single pads, columns and whole rows are all covered.
 func isPadLight(data []byte) bool {
-	return len(data) >= padLightTotalLen && data[0] == 0xf0 && data[4] == padLightCommand
+	return len(data) > padLightPayload+1 && data[0] == 0xf0 &&
+		data[1] == 0x47 && data[4] == padLightCommand
 }
 
 func (s *fireSim) write(data []byte) error {
