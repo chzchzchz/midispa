@@ -1488,3 +1488,160 @@ func TestPlayheadMarksTiesBothWays(t *testing.T) {
 		t.Fatal("a tie under the playhead is not distinguishable")
 	}
 }
+
+// stepCellPad is the grid pad note of the strip cell standing for a step, which is where the
+// tie gesture is made while the palette owns the grid.
+func stepCellPad(step int) int {
+	row, col, ok := chromaticStepCell(step)
+	if !ok {
+		return 0
+	}
+	return 54 + row*padColumns + col
+}
+
+// A tie is what holds a note past its step, so the gesture that makes one matters as much as
+// playback honouring it: two step cells held together tie the two steps, the same gesture
+// step mode uses on the step grid. This drives the pads through the real handler.
+func TestNoteEditStepCellsTieSteps(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(0, voice, 60, 100)
+	pattern.SetChromaticNote(3, voice, 64, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	// Hold the cell for step 1, then press the cell for step 4 without letting go.
+	press := func(step, velocity int) {
+		if err := processPatternEvent(nil, padMessage(stepCellPad(step), velocity)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	press(0, 100)
+	press(3, 100)
+	first, _ := pattern.EventAtStep(0, voice)
+	second, _ := pattern.EventAtStep(3, voice)
+	if !first.Tie {
+		t.Fatalf("two held cells did not tie step 1 to step 4: %+v", first)
+	}
+	if second.Tie {
+		t.Fatal("the tie landed on the later event as well")
+	}
+	// The edit stays on the step it came from, which is what a tie is holding.
+	if bank.StepCursor() != 0 {
+		t.Fatalf("the tie moved the edit to step %d", bank.StepCursor()+1)
+	}
+	// Letting go of both ends the gesture.
+	press(0, 0)
+	press(3, 0)
+	if bank.noteEditHeldStep != noHeldStep {
+		t.Fatalf("held step = %d after releasing the cells", bank.noteEditHeldStep)
+	}
+
+	// The tie is what the pattern plays back: the first note sounds until the tied step.
+	writer := &captureMidiWriter{}
+	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
+	for step := 0; step < 5; step++ {
+		playback.setPosition(stepBeat(step), stepBeat(step))
+		if _, err := playback.playBeat(writer, pattern); err != nil {
+			t.Fatal(err)
+		}
+		switch step {
+		case 0:
+			// The tie starts the note and nothing releases it afterwards on its own.
+			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 60, 100})
+			if len(writer.events) != 1 {
+				t.Fatalf("step 1 wrote %d messages, want only the note-on", len(writer.events))
+			}
+		case 1, 2:
+			// The gap the tie covers: silence on the wire, not a note-off.
+			if len(writer.events) != 0 {
+				t.Fatalf("step %d wrote %d messages, want none while the note is held", step+1, len(writer.events))
+			}
+		case 3:
+			// Legato into the tied step: the next note starts before the first stops.
+			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 64, 100})
+			assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOff(0), 60, 0})
+		default:
+			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), 64, 0})
+		}
+		writer.events = nil
+	}
+}
+
+// A tie needs a note on both steps and nothing in between. A gesture that cannot tie is
+// refused whole: the edit does not jump to a step whose note has nothing to hold, and the
+// pattern is left as it was.
+func TestNoteEditTieGestureRefusesWhenItCannotTie(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(0, voice, 60, 100)
+	pattern.SetChromaticNote(4, voice, 64, 100)
+	pattern.SetChromaticNote(6, voice, 65, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	press := func(step, velocity int) {
+		if err := processPatternEvent(nil, padMessage(stepCellPad(step), velocity)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A cell on its own just moves the edit.
+	press(0, 100)
+	if bank.StepCursor() != 0 {
+		t.Fatalf("the first cell press moved the edit to step %d", bank.StepCursor()+1)
+	}
+	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
+		t.Fatal("one cell press tied a step")
+	}
+	// Step 3 holds no note, so there is nothing for step 1 to hold on to.
+	press(3, 100)
+	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
+		t.Fatal("a step with no note was tied")
+	}
+	if bank.StepCursor() != 0 {
+		t.Fatalf("a refused tie moved the edit to step %d", bank.StepCursor()+1)
+	}
+	// Step 5 would tie step 1 to step 7, but step 5's own note sits between them, and
+	// tying across it would make that note unreachable. Refused, so the edit stays put.
+	press(0, 0)
+	press(6, 100)
+	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
+		t.Fatal("a tie crossed an intervening note")
+	}
+	if bank.StepCursor() != 0 {
+		t.Fatalf("a refused tie moved the edit to step %d", bank.StepCursor()+1)
+	}
+	if event, _ := pattern.EventAtStep(4, voice); event.Tie {
+		t.Fatal("a refused tie landed on the wrong event")
+	}
+	// Releasing between presses ends the gesture, so two separate presses never tie.
+	press(4, 0)
+	press(0, 100)
+	press(1, 100)
+	press(1, 0)
+	press(0, 0)
+	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
+		t.Fatal("a released cell still took part in the gesture")
+	}
+}

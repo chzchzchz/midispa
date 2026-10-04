@@ -11,6 +11,9 @@ const padRows = 4
 // noPlayheadStep means the note-edit playhead is not lighting a strip cell.
 const noPlayheadStep = -1
 
+// noHeldStep means no step cell is held, so a press cannot be the second half of a tie.
+const noHeldStep = -1
+
 type PatternBank struct {
 	Patterns          map[int]*Pattern
 	selPatIdx         int
@@ -37,6 +40,10 @@ type PatternBank struct {
 	// pitch pad and pressing the one the user means as "this step" would rewrite the note
 	// they were trying to reach.
 	noteChosen bool
+	// noteEditHeldStep is the step cell held while note editing. A second cell pressed
+	// before that one is released ties the two steps, which is the tie gesture step mode
+	// uses on the step grid. noHeldStep when nothing is held.
+	noteEditHeldStep int
 	// paletteOctave is how many octaves the SELECT knob has moved the note palette. It is a
 	// view setting: it decides which pitches a pad press can reach and leaves the notes
 	// already written into a pattern exactly where they are.
@@ -54,6 +61,7 @@ func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 		Patterns:          make(map[int]*Pattern),
 		chromaticVelocity: defaultChromaticVelocity,
 		playheadStep:      noPlayheadStep,
+		noteEditHeldStep:  noHeldStep,
 		f:                 f,
 		screen:            f,
 		vb:                vb,

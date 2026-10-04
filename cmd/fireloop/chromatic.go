@@ -233,6 +233,7 @@ func (p *PatternBank) clearPadState() {
 	}
 	p.pressedPads = 0
 	p.rowPadMasks = [padRows]uint16{}
+	p.noteEditHeldStep = noHeldStep
 }
 
 func (p *PatternBank) pressPad(row, col int) bool {
@@ -256,7 +257,18 @@ func (p *PatternBank) heldPadCount() int {
 }
 
 func (p *PatternBank) releasePad(row, col int) {
-	if p == nil || row < 0 || row >= len(p.rowPadMasks) || col < 0 || col >= chromaticPaletteColumns {
+	if p == nil {
+		return
+	}
+	// A step cell names a step rather than a pitch, so it is not one of the pads the mask
+	// bookkeeping below knows about. It is the held step that drives the tie gesture, so
+	// letting go of that cell is what ends the gesture.
+	if p.noteEditHeldStep != noHeldStep {
+		if step := chromaticStepAt(row, col); step >= 0 && step == p.noteEditHeldStep {
+			p.noteEditHeldStep = noHeldStep
+		}
+	}
+	if row < 0 || row >= len(p.rowPadMasks) || col < 0 || col >= chromaticPaletteColumns {
 		return
 	}
 	bit := uint64(1) << uint(row*chromaticPaletteColumns+col)
@@ -430,11 +442,34 @@ func (p *PatternBank) guardsPad(row, col int) bool {
 	return col == p.stepCursor && col < chromaticPaletteColumns
 }
 
+// handleNoteEditStepPress moves the edit to a step cell, or ties the two steps when another
+// cell is already held. That is the gesture step mode uses on the step grid, and the strip
+// is where a step lives while the palette owns the rest of the grid.
+//
+// A tie needs an event on both steps, so a gesture that cannot tie is refused whole: the edit
+// stays where it was rather than jumping to a step whose note has nothing to hold.
+func (p *PatternBank) handleNoteEditStepPress(pattern *Pattern, voice *Voice, step, row, col int) error {
+	previous := p.noteEditHeldStep
+	p.noteEditHeldStep = step
+	if previous < 0 || previous == step {
+		return p.setStepCursor(step)
+	}
+	if !pattern.TieEventsAtSteps(previous, step, voice) {
+		logger.Debug("tie refused", "from", previous, "to", step, "voice", voiceLabel(voice))
+		return p.printChromaticStatus()
+	}
+	logger.Debug("tie", "from", previous, "to", step, "voice", voiceLabel(voice))
+	if err := p.drawNotePalette(); err != nil {
+		return err
+	}
+	return p.printChromaticStatus()
+}
+
 // In note-edit mode the left block chooses a pitch for the current step and the right-hand
-// block chooses which step is being edited. Alt plus a pad removes the event, and so does
-// A1, the palette's first pad, which stands for "no note here". How hard a pad was hit sets
-// the note's velocity, so a new step lands with the dynamics that were played and the
-// display reports that same value.
+// block chooses which step is being edited. Two held cells tie those two steps. Alt plus a
+// pad removes the event, and so does A1, the palette's first pad, which stands for "no note
+// here". How hard a pad was hit sets the note's velocity, so a new step lands with the
+// dynamics that were played and the display reports that same value.
 func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) error {
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() || !p.editingNote {
@@ -445,8 +480,9 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		return nil
 	}
 	if step := chromaticStepAt(row, col); step >= 0 {
-		// The right-hand block edits a step rather than assigning a pitch to one.
-		return p.setStepCursor(step)
+		// The right-hand block edits a step rather than assigning a pitch to one, and two
+		// cells held together tie those two steps.
+		return p.handleNoteEditStepPress(pattern, voice, step, row, col)
 	}
 	step := p.stepCursor
 	note, onPalette := chromaticPaletteNote(row, col, p.paletteOctave)
