@@ -84,7 +84,7 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 - Play while copied: paste the pattern.
 - Stop: stop playback and release active chromatic notes.
 - Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
-- Channel, Mixer, User 1 and User 2 (top left): not bound to anything yet. Their lights are cleared whenever the indicators are cleared, so they stay dark.
+- The four lights at the top left, labelled Channel, Mixer, User 1 and User 2, are indicators with no button behind them. Fireloop does not report state on them yet, and clears them whenever it clears the indicators, so they stay dark.
 
 #### Choosing voices
 

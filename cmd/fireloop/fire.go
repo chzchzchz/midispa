@@ -21,9 +21,11 @@ type writeFunc func([]byte) error
 var (
 	CCTopLeftLEDs = 0x1B
 
-	// The top-left buttons are Channel, Mixer, User 1 and User 2, and one control drives
-	// all four lights. The mode bit 0x10 chooses how the low bits are read. Both forms
-	// were confirmed on the hardware:
+	// The four lights at the top left are labelled Channel, Mixer, User 1 and User 2.
+	// They are indicators only: there are no buttons there to press, so the sequencer can
+	// report state on them but cannot be driven by them. One control drives all four, and
+	// the mode bit 0x10 chooses how the low bits are read. Both forms were confirmed on
+	// the hardware:
 	//
 	//	0x00 0x01 0x02 0x03  index form, lights exactly one, in that order
 	//	0x10                  mask form with no bits set, all four off
@@ -31,9 +33,9 @@ var (
 	//	0x13                  mask form, two lights
 	//	0x1f                  mask form, all four
 	//
-	// Only the mask form can light more than one light at a time, since the index form
-	// names a single button. Zero is the index for Channel rather than a blank, which is
-	// why clearing the indicators sends CCTopLeftOff and not zero.
+	// Only the mask form can light more than one at a time, since the index form names a
+	// single light. Zero is the index for Channel rather than a blank, which is why
+	// clearing the indicators sends CCTopLeftOff and not zero.
 	CCTopLeftOff           = 0x10
 	CCTopLeftMaskBase      = 0x10
 	CCTopLeftSelectChannel = 0x00
@@ -113,7 +115,7 @@ func NewFire(w writeFunc) *Fire {
 
 // topLeftMask builds the top-left value that lights the named lights. Lighting more than
 // one at a time requires the mask form, because the index form can only name a single
-// button. With no lights named it returns the value that blanks all four, which is what
+// light. With no lights named it returns the value that blanks all four, which is what
 // clearing the indicators wants.
 func topLeftMask(lights ...int) int {
 	mask := CCTopLeftMaskBase
@@ -184,7 +186,7 @@ func (f *Fire) LedsOff() error {
 			return err
 		}
 	}
-	// The top-left control is not a plain on/off: zero selects Channel.
+	// The top-left control is not a plain on/off: zero lights Channel.
 	if err := f.SetLed(CCTopLeftLEDs, CCTopLeftOff); err != nil {
 		return err
 	}
