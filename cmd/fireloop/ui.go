@@ -447,6 +447,11 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		if patbank.editingLength {
 			return patbank.AdjustLength(dir)
 		}
+		if patbank.NoteEditActive() {
+			// In note-edit mode the knob moves the palette by an octave rather than the
+			// track's voice, so the pitch being chosen stays on screen while it moves.
+			return patbank.ShiftPaletteOctave(dir)
+		}
 		return patbank.JogSelect(dir)
 	case NotePlay:
 		if patternClipboard != nil {

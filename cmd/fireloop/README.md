@@ -76,12 +76,13 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 - `Alt`, then pattern up/down: scroll the track window. `Alt` lights up while it is engaged and stays engaged until it is pressed again, so press it once more before using a mute button or stop.
 - `Shift` plus `Alt`: blackout. See [Blackout](#blackout).
 - The header shows the window as `<FIRST>/<TOTAL>`, for example `Pattern 001  3/8` means the pad rows show tracks 3, 4, 5, and 6 of 8.
-- Encoder: change the voice assigned to the selected row.
+- Encoder: change the voice assigned to the selected row. In note-edit mode it moves the palette by an octave instead, because changing the voice there would take the editor to a different instrument.
 - Grid left/right: move the current step cursor.
 - Overview: enter or leave length-edit mode.
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
 - Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback.
 - Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step. The knob is not re-read from the step you select, so its value carries over to the next step.
+- Encoder in note-edit mode: transpose the palette by an octave. Left turns it down, right turns it up, and every palette pad's colour shifts with it, so the octave on screen is visible without reading anything. Only the pitches a pad press can choose change; notes already written into a pattern keep their pitch and their colour. The palette stops at the ends of the MIDI range, two octaves below A1 and three above.
 - Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
 - `Shift` plus a pad, then release `Shift`: enter a tempo. The entry shows on the bottom row only, so the rest of the display keeps showing the pattern, and a value from 21 to 299 is applied on release; anything else is discarded.
@@ -98,9 +99,9 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 
 A track is a voice from the kit, and any voice can go on any track.
 
-1. The kit is the list of voices loaded from `-kit`, in file order. Percussive voices have a `Note`; chromatic voices omit it.
+1. The kit is the list of voices loaded from `-kit`, in the order the kit paths are given. Percussive voices have a `Note`; chromatic voices omit it.
 2. Press Mute 1 through 4 to select a track row. Its name appears on the display as `NAME [DRM]` or `NAME [CHR]`, inverted while selected, so the two kinds are easy to tell apart at a glance.
-3. Turn the Encoder to move that track through the kit's voices. It wraps around at either end, so every voice is reachable from every row.
+3. Turn the Encoder to move that track through the kit's voices. It wraps around at either end, so every voice is reachable from every row. In note-edit mode the Encoder turns the palette instead, so press Mode again before changing the voice.
 4. Nothing stops two rows from holding the same voice. Clearing one of them clears the notes on both, and editing one edits the other, because the notes belong to the voice rather than the row.
 5. The track window decides which tracks you can reach this way. Scroll it with `Alt` plus pattern up/down when you want one voice per track rather than reaching voices a few at a time with the Encoder.
 
@@ -137,11 +138,12 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 3. Move the cursor with Grid left/right or by pressing another step pad. Steps beyond the current pattern length are ignored.
 4. Press Mode to enter note-edit mode. The pad grid splits in two: the left twelve columns are the pitch palette and the rightmost four show the sixteen steps.
 5. The palette runs four rows from A1, each starting on A and spanning the twelve semitones to the G# above it, so the rows cover A1–G#2, A2–G#3, A3–G#4 and A4–G#5. Press a palette pad to create or update the note at the current step and audition it.
-6. The step strip reads four steps per row, in the same order as the step grid. Each cell is dark when the step holds no note and otherwise shows that note's colour, with the step being edited brightened. Press a cell to move the edit there. While a pattern plays, the cell the playhead is on goes white.
-7. `A1`, the palette's first pad, means "no note", so pressing it clears the current step. `Alt` plus any palette pad does the same.
-8. How hard a palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it by one detent at a time, clamped to 0..127. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
-9. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note.
-10. Press Mode again to return to step mode.
+6. Turn the Encoder to move the whole palette by an octave: left takes it down, right takes it up, and the pad colours shift with it so the octave is visible. It changes nothing already written into the pattern; only the pitches a pad press can choose. The position holds for the session, so it is still there when you come back to this voice.
+7. The step strip reads four steps per row, in the same order as the step grid. Each cell is dark when the step holds no note and otherwise shows that note's colour, with the step being edited brightened. Press a cell to move the edit there. While a pattern plays, the cell the playhead is on goes white.
+8. The palette's first pad means "no note", so pressing it clears the current step. It is A1 until the palette is turned, and moves with the palette afterwards. `Alt` plus any palette pad does the same.
+9. How hard a palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it by one detent at a time, clamped to 0..127. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
+10. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note.
+11. Press Mode again to return to step mode.
 
 #### Chromatic note length
 

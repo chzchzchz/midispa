@@ -15,6 +15,9 @@ import (
 // over at A. It uses the first twelve columns of each sixteen-column pad row; the last four
 // are left dark, because a row that wrapped past G# would put the next row's A somewhere
 // unexpected. Rows therefore cover A1 to G#2, A2 to G#3, A3 to G#4 and A4 to G#5.
+// The SELECT knob moves the whole palette by whole octaves, so those rows become whichever
+// four octaves the user has turned the palette to. The shift changes nothing already written
+// into a pattern; it only decides which pitches a pad press can reach.
 // A tie mark lifts a dark channel to tieMarkAmount, or lowers an inverted one from
 // tieMarkFloor.
 const (
@@ -31,6 +34,15 @@ const (
 	chromaticStepCells       = chromaticPaletteRows * chromaticStepColumns
 	defaultChromaticVelocity = midi.DataMax
 	chromaticVelocityStep    = 1
+	// chromaticOctaveShift is the distance one SELECT detent moves the palette. An octave is
+	// the only shift that keeps every row running A to G#, so it is the only one allowed.
+	chromaticOctaveShift = 12
+	// chromaticPaletteSpan is the highest offset the palette reaches above its first pad, so
+	// an octave shift can be clamped to a range where every pad still names a playable note.
+	chromaticPaletteSpan = chromaticPaletteRows*chromaticPaletteColumns - 1
+	// chromaticPaletteDim keeps a palette colour bright enough to read as a colour rather
+	// than as the white selection highlight.
+	chromaticPaletteDim = 4
 )
 
 var chromaticNoteNames = [...]string{
@@ -60,17 +72,74 @@ func (p *PatternBank) NoteEditActive() bool {
 	return p != nil && p.editingNote
 }
 
-// chromaticPaletteNote is the pitch at a palette position. A row or column outside the
-// palette has no pitch, which is reported rather than clamped, so pressing an unused
-// column cannot assign the first note of the first row by accident.
-func chromaticPaletteNote(row, col int) (int, bool) {
+// chromaticPaletteNote is the pitch at a palette position, moved by whole octaves. A row or
+// column outside the palette has no pitch, which is reported rather than clamped, so
+// pressing an unused column cannot assign the first note of the first row by accident. The
+// octave is the caller's to clamp with clampPaletteOctave; a shift beyond that still returns
+// a playable note rather than a byte the sequencer cannot send.
+func chromaticPaletteNote(row, col, octave int) (int, bool) {
 	if row < 0 || row >= chromaticPaletteRows {
 		return 0, false
 	}
 	if col < 0 || col >= chromaticPaletteColumns {
 		return 0, false
 	}
-	return clampMidiDataValue(chromaticBaseNote + row*chromaticPaletteColumns + col), true
+	base := chromaticBaseNote + chromaticOctaveShift*octave
+	return clampMidiDataValue(base + row*chromaticPaletteColumns + col), true
+}
+
+// chromaticOctaveBounds are the palette shifts that keep every pad inside the MIDI range.
+// Down, the first pad must stay at or above zero; Go truncates a division towards zero, so
+// the bound is negated after the division to land on the shift that stays in range. Up, the
+// last pad, chromaticPaletteSpan semitones above the first, must stay at or below the
+// highest MIDI note.
+func chromaticOctaveBounds() (min, max int) {
+	min = -((chromaticBaseNote - 1) / chromaticOctaveShift)
+	max = (midiNoteMax - chromaticPaletteSpan - chromaticBaseNote) / chromaticOctaveShift
+	return min, max
+}
+
+func clampPaletteOctave(octave int) int {
+	min, max := chromaticOctaveBounds()
+	if octave < min {
+		return min
+	}
+	if octave > max {
+		return max
+	}
+	return octave
+}
+
+// paletteBase is the pitch of the palette's first pad, which is also the pad that erases.
+func (p *PatternBank) paletteBase() int {
+	return chromaticBaseNote + chromaticOctaveShift*p.paletteOctave
+}
+
+// ShiftPaletteOctave moves the note palette by one detent's worth of detents, which is an
+// octave each. Only the pitches the palette offers change: notes already in the pattern keep
+// their pitch, and each pad keeps its colour rule, so the colours travel with the palette and
+// the shift shows on the grid without a word on the display. It does nothing outside
+// note-edit mode, where the knob moves the selected track's voice instead.
+func (p *PatternBank) ShiftPaletteOctave(detents int) error {
+	if p == nil || p.editingLength {
+		return nil
+	}
+	voice := p.SelectedVoice()
+	if voice == nil || !voice.IsChromatic() || !p.editingNote {
+		return nil
+	}
+	previous := p.paletteOctave
+	p.paletteOctave = clampPaletteOctave(previous + detents)
+	if p.paletteOctave == previous {
+		// Already at the end of the MIDI range, so there is nothing to redraw.
+		logger.Debug("palette octave held", "octave", p.paletteOctave, "detents", detents)
+		return nil
+	}
+	logger.Debug("palette octave", "from", previous, "to", p.paletteOctave, "base", p.paletteBase())
+	if err := p.drawNotePalette(); err != nil {
+		return err
+	}
+	return p.printChromaticStatus()
 }
 
 func midiNoteName(note int) string {
@@ -380,7 +449,7 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		return p.setStepCursor(step)
 	}
 	step := p.stepCursor
-	note, onPalette := chromaticPaletteNote(row, col)
+	note, onPalette := chromaticPaletteNote(row, col, p.paletteOctave)
 	if !onPalette {
 		// Neither a pitch nor a step, so there is nothing here to edit.
 		return nil
@@ -393,8 +462,9 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		logger.Debug("pitch refused", "step", step, "padRow", row, "padCol", col)
 		return nil
 	}
-	if altOn || note == chromaticBaseNote {
-		// A1 is where the palette starts, which makes it the natural key for "no note".
+	if altOn || note == p.paletteBase() {
+		// The palette's first pad is where the palette starts, whichever octave that is,
+		// which makes it the natural key for "no note".
 		reason := "palette"
 		if altOn {
 			reason = "alt"
@@ -515,7 +585,7 @@ func (p *PatternBank) drawNotePalette() error {
 			color := [3]int{}
 			if step := chromaticStepAt(row, col); step >= 0 {
 				color = p.stepCellPaintColor(pattern, voice, step)
-			} else if note, onPalette := chromaticPaletteNote(row, col); onPalette {
+			} else if note, onPalette := chromaticPaletteNote(row, col, p.paletteOctave); onPalette {
 				color = chromaticPaletteColor(note)
 				if note == selectedNote {
 					color = oledWhite
@@ -540,13 +610,20 @@ func chromaticStepAt(row, col int) int {
 	return row*chromaticStepColumns + (col - chromaticPaletteColumns)
 }
 
-func chromaticPaletteColor(note int) [3]int {
-	index := note - chromaticBaseNote
+// chromaticColorIndex counts semitones from the unshifted palette base rather than from the
+// note's class, so turning the palette moves every colour with it and the shift is visible on
+// the grid. The index is normalized because a palette below the base would otherwise go
+// negative and collapse onto the first colour, leaving several pads indistinguishable.
+func chromaticColorIndex(note int) int {
+	index := (note - chromaticBaseNote) % len(oledColorTable)
 	if index < 0 {
-		index = 0
+		index += len(oledColorTable)
 	}
-	color := oledColorTable[index%len(oledColorTable)]
-	return Dim(color, 4)
+	return index
+}
+
+func chromaticPaletteColor(note int) [3]int {
+	return Dim(oledColorTable[chromaticColorIndex(note)], chromaticPaletteDim)
 }
 
 // chromaticStatusText shows the step, its note and its velocity. A step with no note shows

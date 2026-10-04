@@ -258,7 +258,7 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 		t.Fatal(err)
 	}
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
-	firstNote, _ := chromaticPaletteNote(0, 1)
+	firstNote, _ := chromaticPaletteNote(0, 1, 0)
 	if !ok || event.ChromaticNote != firstNote {
 		t.Fatalf("palette assignment = %+v/%v", event, ok)
 	}
@@ -669,7 +669,7 @@ func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 // The pitch palette is four octaves from A1, twelve semitones to the row, so every row
 // starts on A and the four columns past G# carry no pitch.
 func TestChromaticPaletteLayout(t *testing.T) {
-	if got, _ := chromaticPaletteNote(0, 0); got != 33 {
+	if got, _ := chromaticPaletteNote(0, 0, 0); got != 33 {
 		t.Fatalf("first palette note = %d (%s), want A1 at 33", got, midiNoteName(got))
 	}
 	if name := midiNoteName(33); name != "A1" {
@@ -686,14 +686,14 @@ func TestChromaticPaletteLayout(t *testing.T) {
 		t.Fatalf("step block has %d cells, want one per step", chromaticStepCells)
 	}
 	for row := 0; row < chromaticPaletteRows; row++ {
-		first, ok := chromaticPaletteNote(row, 0)
+		first, ok := chromaticPaletteNote(row, 0, 0)
 		if !ok {
 			t.Fatalf("row %d has no first note", row)
 		}
 		if name := midiNoteName(first); name != fmt.Sprintf("A%d", row+1) {
 			t.Fatalf("row %d starts on %s, want A%d", row, name, row+1)
 		}
-		last, ok := chromaticPaletteNote(row, chromaticPaletteColumns-1)
+		last, ok := chromaticPaletteNote(row, chromaticPaletteColumns-1, 0)
 		if !ok {
 			t.Fatalf("row %d has no last note", row)
 		}
@@ -707,16 +707,259 @@ func TestChromaticPaletteLayout(t *testing.T) {
 		}
 		// The columns past the palette have no pitch at all.
 		for _, col := range []int{12, 13, 14, 15} {
-			if note, ok := chromaticPaletteNote(row, col); ok {
+			if note, ok := chromaticPaletteNote(row, col, 0); ok {
 				t.Fatalf("row %d column %d has pitch %d, want none", row, col, note)
 			}
 		}
 	}
-	if _, ok := chromaticPaletteNote(-1, 0); ok {
+	if _, ok := chromaticPaletteNote(-1, 0, 0); ok {
 		t.Fatal("a row above the palette reported a pitch")
 	}
-	if _, ok := chromaticPaletteNote(0, -1); ok {
+	if _, ok := chromaticPaletteNote(0, -1, 0); ok {
 		t.Fatal("a column left of the palette reported a pitch")
+	}
+}
+
+// paletteTestBank is a bank sitting in note-edit mode on a chromatic track, which is the
+// only state the palette octave is used from.
+func paletteTestBank(t *testing.T) (*PatternBank, *Voice, *fireSim) {
+	t.Helper()
+	sim := newFireSim()
+	kit := trackWindowKit(8, 0)
+	bank := NewPatternBank(NewFire(sim.write), kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	return bank, kit.voices[0], sim
+}
+
+func selectKnobCC(direction int) alsa.SeqEvent {
+	return alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCSelect), byte(direction)}}
+}
+
+// The SELECT knob is an octave transpose for the palette: it moves which pitches the pads
+// choose, and nothing that is already written into the pattern.
+func TestSelectKnobShiftsPaletteByOctave(t *testing.T) {
+	bank, voice, _ := paletteTestBank(t)
+	voiceBefore := bank.trackVoice(1)
+
+	if err := bank.handleNoteEditPad(nil, 1, 3, pressVelocity); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := chromaticPaletteNote(1, 3, 0)
+	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != first {
+		t.Fatalf("palette note = %d, want %d", event.ChromaticNote, first)
+	}
+
+	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
+		t.Fatal(err)
+	}
+	if bank.paletteOctave != 1 {
+		t.Fatalf("palette octave = %d after one detent, want 1", bank.paletteOctave)
+	}
+	if bank.trackVoice(1) != voiceBefore {
+		t.Fatal("the knob moved the track's voice instead of the palette")
+	}
+	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != first {
+		t.Fatalf("stored note = %d after the shift, want it left at %d", event.ChromaticNote, first)
+	}
+
+	// The same pad now reaches the pitch an octave up.
+	if err := bank.handleNoteEditPad(nil, 1, 3, pressVelocity); err != nil {
+		t.Fatal(err)
+	}
+	up, _ := chromaticPaletteNote(1, 3, bank.paletteOctave)
+	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != up {
+		t.Fatalf("note after shifting up = %d, want %d", event.ChromaticNote, up)
+	}
+	if up != first+chromaticOctaveShift {
+		t.Fatalf("shifted palette note = %d, want an octave above %d", up, first)
+	}
+
+	// And an octave down takes it back past where it started.
+	for range 2 {
+		if err := processPatternEvent(nil, selectKnobCC(EncoderLeft)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bank.handleNoteEditPad(nil, 1, 3, pressVelocity); err != nil {
+		t.Fatal(err)
+	}
+	down, _ := chromaticPaletteNote(1, 3, bank.paletteOctave)
+	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != down {
+		t.Fatalf("note after shifting down = %d, want %d", event.ChromaticNote, down)
+	}
+	if down != first-chromaticOctaveShift {
+		t.Fatalf("lowered palette note = %d, want an octave below %d", down, first)
+	}
+}
+
+// The palette has to say which octave it is offering, so every pad's colour travels with it
+// while the steps keep the colours of the notes they hold.
+func TestPaletteShiftMovesColours(t *testing.T) {
+	bank, voice, sim := paletteTestBank(t)
+	bank.CurrentPattern().SetChromaticNote(3, voice, 40, pressVelocity)
+	if err := bank.setStepCursor(3); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.drawNotePalette(); err != nil {
+		t.Fatal(err)
+	}
+	stepColour := stripCell(sim, 3)
+	before := paletteRegion(sim)
+
+	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
+		t.Fatal(err)
+	}
+	after := paletteRegion(sim)
+	changed := 0
+	for i := range before {
+		row, col := i/chromaticPaletteColumns, i%chromaticPaletteColumns
+		index := row*padColumns + col
+		if before[i] != after[i] {
+			changed++
+		}
+		note, _ := chromaticPaletteNote(row, col, bank.paletteOctave)
+		if want := chromaticPaletteColor(note); sim.pads[index] != want {
+			t.Fatalf("palette pad row %d col %d = %v, want the shifted pitch colour %v",
+				row, col, sim.pads[index], want)
+		}
+	}
+	if changed != len(before) {
+		t.Fatalf("%d of %d palette pads changed colour, want the shift visible on all of them",
+			changed, len(before))
+	}
+	// A note already in the pattern keeps its own colour; only the palette moved.
+	if got := stripCell(sim, 3); got != stepColour {
+		t.Fatalf("step 3 cell = %v after the shift, want the note colour %v", got, stepColour)
+	}
+}
+
+// A palette below the unshifted base must keep its colours apart instead of collapsing them
+// onto the first entry of the table.
+func TestPaletteBelowBaseKeepsDistinctColours(t *testing.T) {
+	bank, _, sim := paletteTestBank(t)
+	for range 2 {
+		if err := processPatternEvent(nil, selectKnobCC(EncoderLeft)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if bank.paletteOctave >= 0 {
+		t.Fatalf("palette octave = %d, want the palette below its base", bank.paletteOctave)
+	}
+	for row := 0; row < chromaticPaletteRows; row++ {
+		seen := make(map[[3]int]bool, chromaticPaletteColumns)
+		for col := 0; col < chromaticPaletteColumns; col++ {
+			seen[sim.pads[row*padColumns+col]] = true
+		}
+		if len(seen) != chromaticPaletteColumns {
+			t.Fatalf("row %d has %d colours across %d pads, want one each",
+				row, len(seen), chromaticPaletteColumns)
+		}
+	}
+}
+
+// The palette may only turn as far as the MIDI range allows, or a pad would name a note
+// that cannot be sent.
+func TestPaletteOctaveStaysInsideMIDIRange(t *testing.T) {
+	bank, _, _ := paletteTestBank(t)
+	lowest, highest := chromaticOctaveBounds()
+	if lowest != -2 || highest != 3 {
+		t.Fatalf("octave bounds = %d to %d, want -2 to 3 for a palette from A1", lowest, highest)
+	}
+
+	for _, direction := range []int{EncoderRight, EncoderLeft} {
+		for range 8 {
+			if err := processPatternEvent(nil, selectKnobCC(direction)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		octave := bank.paletteOctave
+		// Turning further must not move it, or the palette would leave the MIDI range.
+		if err := processPatternEvent(nil, selectKnobCC(direction)); err != nil {
+			t.Fatal(err)
+		}
+		if bank.paletteOctave != octave {
+			t.Fatalf("palette octave = %d after turning past the end, want it held at %d",
+				bank.paletteOctave, octave)
+		}
+		base := bank.paletteBase()
+		last, _ := chromaticPaletteNote(chromaticPaletteRows-1, chromaticPaletteColumns-1, octave)
+		if base < 0 || last > midiNoteMax {
+			t.Fatalf("palette spans %d to %d, outside the MIDI range", base, last)
+		}
+		if direction == EncoderRight && octave != highest {
+			t.Fatalf("palette stopped at octave %d, want the top %d", octave, highest)
+		}
+		if direction == EncoderLeft && octave != lowest {
+			t.Fatalf("palette stopped at octave %d, want the bottom %d", octave, lowest)
+		}
+	}
+}
+
+// The erase key is wherever the palette starts, so it moves with the palette.
+func TestPaletteFirstPadErasesAfterShift(t *testing.T) {
+	bank, voice, _ := paletteTestBank(t)
+	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
+		t.Fatal(err)
+	}
+	base := bank.paletteBase()
+	if base == chromaticBaseNote {
+		t.Fatalf("palette base = %d, want it shifted off A1", base)
+	}
+	// A pad an octave along places the shifted pitch.
+	if err := bank.handleNoteEditPad(nil, 1, 0, pressVelocity); err != nil {
+		t.Fatal(err)
+	}
+	placed, _ := chromaticPaletteNote(1, 0, bank.paletteOctave)
+	if placed == base {
+		t.Fatalf("the test needs a pad that is not the palette's first one: %d", placed)
+	}
+	if event, ok := bank.CurrentPattern().EventAtStep(0, voice); !ok || event.ChromaticNote != placed {
+		t.Fatalf("note = %d/%v, want the shifted palette pitch %d", event.ChromaticNote, ok, placed)
+	}
+	// The palette's first pad is the erase key wherever the palette has moved to. Placing
+	// the note above also lifted the guard on that pad, which doubles as the step-one pad.
+	if err := bank.handleNoteEditPad(nil, 0, 0, pressVelocity); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); ok {
+		t.Fatalf("the palette's first pad at %d did not erase", base)
+	}
+}
+
+// Outside note-edit mode the knob is still what chooses the track's voice, and the palette
+// is left where the user put it.
+func TestSelectKnobJogsVoiceOutsideNoteEdit(t *testing.T) {
+	sim := newFireSim()
+	kit := trackWindowKit(8, 0)
+	bank := NewPatternBank(NewFire(sim.write), kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	before := bank.trackVoice(1)
+	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
+		t.Fatal(err)
+	}
+	if bank.trackVoice(1) == before {
+		t.Fatal("the knob did not jog the track's voice")
+	}
+	if bank.paletteOctave != 0 {
+		t.Fatalf("palette octave = %d outside note-edit mode, want it untouched", bank.paletteOctave)
+	}
+	if bank.NoteEditActive() {
+		t.Fatal("the knob entered note-edit mode")
 	}
 }
 
@@ -813,7 +1056,7 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 	if err := bank.handleNoteEditPad(nil, 1, 3, 100); err != nil {
 		t.Fatal(err)
 	}
-	chosen, _ := chromaticPaletteNote(1, 3)
+	chosen, _ := chromaticPaletteNote(1, 3, 0)
 	if event, _ := bank.CurrentPattern().EventAtStep(5, voice); event.ChromaticNote != chosen {
 		t.Fatalf("step 5 pitch = %d, want %d", event.ChromaticNote, chosen)
 	}
@@ -824,7 +1067,7 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 	if !ok {
 		t.Fatal("a palette pad stopped editing the selected step")
 	}
-	want, _ := chromaticPaletteNote(0, 5)
+	want, _ := chromaticPaletteNote(0, 5, 0)
 	if event.ChromaticNote != want {
 		t.Fatalf("step 5 pitch = %d, want the lifted guard to allow %d", event.ChromaticNote, want)
 	}
@@ -851,7 +1094,7 @@ func TestChromaticStepCellsShowNoteColours(t *testing.T) {
 	}
 	usePatternGlobals(t, bank)
 	voice := voiceBank.voices[0]
-	note, _ := chromaticPaletteNote(1, 4)
+	note, _ := chromaticPaletteNote(1, 4, 0)
 	bank.CurrentPattern().SetChromaticNote(6, voice, note, 100)
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
@@ -901,7 +1144,7 @@ func TestPalettePadThatSelectedTheStepIsRefused(t *testing.T) {
 		}
 	}
 	row, col := 0, 6 // the pad that means "step 7" in step mode
-	paletteNote, _ := chromaticPaletteNote(row, col)
+	paletteNote, _ := chromaticPaletteNote(row, col, 0)
 	if paletteNote == original {
 		t.Fatalf("the test needs a palette pad whose pitch differs from %d", original)
 	}
@@ -958,7 +1201,7 @@ func TestPaletteGuardLiftsWhenTheCursorMoves(t *testing.T) {
 		}
 	}
 	row, col := 0, 6
-	paletteNote, _ := chromaticPaletteNote(row, col)
+	paletteNote, _ := chromaticPaletteNote(row, col, 0)
 
 	press(row, col, 100)
 	press(row, col, 0)

@@ -37,6 +37,10 @@ type PatternBank struct {
 	// pitch pad and pressing the one the user means as "this step" would rewrite the note
 	// they were trying to reach.
 	noteChosen bool
+	// paletteOctave is how many octaves the SELECT knob has moved the note palette. It is a
+	// view setting: it decides which pitches a pad press can reach and leaves the notes
+	// already written into a pattern exactly where they are.
+	paletteOctave int
 	// trackMu guards the track window. The playback worker draws the visible tracks
 	// from its own goroutine, so scrolling must not race with it.
 	trackMu sync.RWMutex

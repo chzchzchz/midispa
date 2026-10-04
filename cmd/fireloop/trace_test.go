@@ -443,7 +443,7 @@ func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
 	if event.Velocity != 60 {
 		t.Fatalf("velocity after a pitch change = %d, want the new press 60", event.Velocity)
 	}
-	if want, _ := chromaticPaletteNote(1, 2); event.ChromaticNote != want {
+	if want, _ := chromaticPaletteNote(1, 2, 0); event.ChromaticNote != want {
 		t.Fatalf("pitch = %d, want the palette note", event.ChromaticNote)
 	}
 }
