@@ -482,7 +482,7 @@ func decodeSeqEvent(event *C.snd_seq_event_t) (ret SeqEvent, err error) {
 	case C.SND_SEQ_EVENT_KEYPRESS:
 		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 		ret.Data = []byte{
-			midi.KeyAftertouch | byte(note.channel),
+			midi.MakeKeyAftertouch(int(note.channel)),
 			byte(note.note),
 			byte(note.velocity)}
 	case C.SND_SEQ_EVENT_CHANPRESS:
@@ -490,17 +490,14 @@ func decodeSeqEvent(event *C.snd_seq_event_t) (ret SeqEvent, err error) {
 		if ctrl.value < 0 || ctrl.value > midi.DataMax {
 			return ret, fmt.Errorf("invalid channel pressure: %d", ctrl.value)
 		}
-		ret.Data = []byte{midi.ChannelAftertouch | byte(ctrl.channel), byte(ctrl.value)}
+		ret.Data = []byte{midi.MakeChannelAftertouch(int(ctrl.channel)), byte(ctrl.value)}
 	case C.SND_SEQ_EVENT_PITCHBEND:
 		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
 		if ctrl.value < -midi.PitchCenter || ctrl.value > midi.PitchMax-midi.PitchCenter {
 			return ret, fmt.Errorf("invalid pitch bend: %d", ctrl.value)
 		}
-		value := int(ctrl.value) + midi.PitchCenter
-		ret.Data = []byte{
-			midi.Pitch | byte(ctrl.channel),
-			byte(value & midi.DataMax),
-			byte(value >> midi.DataBits)}
+		low, high := midi.MakePitchBend(uint16(int(ctrl.value) + midi.PitchCenter))
+		ret.Data = []byte{midi.MakePitch(int(ctrl.channel)), low, high}
 	case C.SND_SEQ_EVENT_NOTEON:
 		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
 		ret.Data = []byte{

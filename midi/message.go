@@ -95,7 +95,19 @@ func MessageName(status byte) string {
 	}
 }
 
-func MakeNoteOn(channel int) byte  { return byte(channel) | NoteOn }
-func MakeNoteOff(channel int) byte { return byte(channel) | NoteOff }
-func MakeCC(channel int) byte      { return byte(channel) | CC }
-func MakePgm(channel int) byte     { return byte(channel) | Pgm }
+// The Make functions are the one place a channel index is turned into a status byte, so
+// that the 1-16 a kit states and the 0-15 the protocol numbers meet in a single place for
+// every kind of channel message rather than in each caller that sends one.
+func MakeNoteOn(channel int) byte            { return byte(channel) | NoteOn }
+func MakeNoteOff(channel int) byte           { return byte(channel) | NoteOff }
+func MakeCC(channel int) byte                { return byte(channel) | CC }
+func MakePgm(channel int) byte               { return byte(channel) | Pgm }
+func MakeKeyAftertouch(channel int) byte     { return byte(channel) | KeyAftertouch }
+func MakeChannelAftertouch(channel int) byte { return byte(channel) | ChannelAftertouch }
+func MakePitch(channel int) byte             { return byte(channel) | Pitch }
+
+// MakePitchBend splits a 14-bit pitch bend value into its two data bytes, least
+// significant first, which is the order the protocol carries it in.
+func MakePitchBend(value uint16) (byte, byte) {
+	return byte(value & DataMax), byte(value >> DataBits)
+}

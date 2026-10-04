@@ -191,16 +191,12 @@ func patchMessage(msg gomidi.Message, channelIndex int) (data []byte, ok bool) {
 	case channel.ProgramChange:
 		return []byte{midi.MakePgm(channelIndex), event.Program()}, true
 	case channel.Pitchbend:
-		value := event.AbsValue()
-		return []byte{
-			midi.Pitch | byte(channelIndex),
-			byte(value & midi.DataMax),
-			byte(value >> 7),
-		}, true
+		low, high := midi.MakePitchBend(event.AbsValue())
+		return []byte{midi.MakePitch(channelIndex), low, high}, true
 	case channel.Aftertouch:
-		return []byte{midi.ChannelAftertouch | byte(channelIndex), event.Pressure()}, true
+		return []byte{midi.MakeChannelAftertouch(channelIndex), event.Pressure()}, true
 	case channel.PolyAftertouch:
-		return []byte{midi.KeyAftertouch | byte(channelIndex), event.Key(), event.Pressure()}, true
+		return []byte{midi.MakeKeyAftertouch(channelIndex), event.Key(), event.Pressure()}, true
 	}
 	return nil, false
 }
