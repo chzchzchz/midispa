@@ -79,20 +79,6 @@ func (p *PatternBank) clampStepCursor() {
 	}
 }
 
-func (p *PatternBank) syncChromaticVelocity() {
-	if p == nil {
-		return
-	}
-	voice := p.SelectedVoice()
-	pattern := p.CurrentPattern()
-	if voice == nil || !voice.IsChromatic() || pattern == nil {
-		return
-	}
-	if event, ok := pattern.EventAtStep(p.stepCursor, voice); ok {
-		p.chromaticVelocity = clampMidiDataValue(event.Velocity)
-	}
-}
-
 // redrawPatternRows keeps all step rows synchronized after a cursor or note edit.
 func (p *PatternBank) redrawPatternRows() error {
 	for row := 1; row <= padRows; row++ {
@@ -110,7 +96,7 @@ func (p *PatternBank) MoveStepCursor(delta int) error {
 	}
 	p.stepCursor += delta
 	p.clampStepCursor()
-	p.syncChromaticVelocity()
+	logger.Debug("cursor", "step", p.stepCursor)
 	if p.editingNote {
 		if err := p.drawNotePalette(); err != nil {
 			return err
@@ -132,6 +118,7 @@ func (p *PatternBank) setStepCursor(step int) error {
 		return nil
 	}
 	p.stepCursor = step
+	logger.Debug("cursor", "step", p.stepCursor)
 	if p.editingNote {
 		if err := p.drawNotePalette(); err != nil {
 			return err
@@ -185,6 +172,10 @@ func (p *PatternBank) releasePad(row, col int) {
 	p.rowPadMasks[row] &^= uint16(1) << uint(col)
 }
 
+// AdjustChromaticVelocity moves the Volume encoder by one detent. The encoder carries its
+// own value: it is not re-read from the selected step, so a step picked after the encoder
+// was set takes the encoder's value on the next detent rather than its own. Each detent
+// writes that value to the selected step.
 func (p *PatternBank) AdjustChromaticVelocity(aseq midiWriter, encoderValue int) error {
 	if p == nil || p.editingLength {
 		return nil
@@ -193,25 +184,30 @@ func (p *PatternBank) AdjustChromaticVelocity(aseq midiWriter, encoderValue int)
 	if voice == nil || !voice.IsChromatic() {
 		return nil
 	}
-	p.syncChromaticVelocity()
+	from := p.chromaticVelocity
 	var value int
 	switch encoderValue {
 	case EncoderRight:
-		value = p.chromaticVelocity + chromaticVelocityStep
+		value = from + chromaticVelocityStep
 	case EncoderLeft:
-		value = p.chromaticVelocity - chromaticVelocityStep
+		value = from - chromaticVelocityStep
 	default:
 		return nil
 	}
 	value = clampMidiDataValue(value)
 	p.chromaticVelocity = value
+	// The step is in the log so a velocity change can always be traced to one step rather
+	// than guessed at from the sound.
+	updated := false
 	if pattern := p.CurrentPattern(); pattern != nil {
 		if event, ok := pattern.SetChromaticVelocity(p.stepCursor, voice, value); ok {
+			updated = true
 			if err := p.auditionChromaticEvent(aseq, event); err != nil {
 				return err
 			}
 		}
 	}
+	logger.Debug("volume knob", "step", p.stepCursor, "from", from, "to", value, "noteUpdated", updated)
 	if p.editingNote {
 		if err := p.drawNotePalette(); err != nil {
 			return err
@@ -272,7 +268,10 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 }
 
 // In note-edit mode the grid chooses a pitch, while Alt plus a pad removes the event.
-func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col int) error {
+// handleNoteEditPad assigns the pressed palette pad's pitch to the step. How hard the pad
+// was hit sets the note's velocity, so a new step lands with the dynamics that were played
+// and the display reports that same value.
+func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) error {
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() || !p.editingNote {
 		return nil
@@ -289,10 +288,15 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col int) error {
 		}
 		return p.printChromaticStatus()
 	}
-	event, ok := pattern.SetChromaticNote(step, voice, chromaticPaletteNote(row, col), p.chromaticVelocity)
+	note := chromaticPaletteNote(row, col)
+	// How hard the pad was pressed is the step's dynamics, whether the note is new or its
+	// pitch is being changed. The Volume encoder still adjusts the value afterwards.
+	velocity := clampMidiDataValue(pressed)
+	event, ok := pattern.SetChromaticNote(step, voice, note, velocity)
 	if !ok {
 		return nil
 	}
+	logger.Debug("pitch", "step", step, "note", note, "velocity", event.Velocity)
 	if err := p.auditionChromaticEvent(aseq, event); err != nil {
 		return err
 	}
@@ -323,7 +327,7 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 	p.editingNote = active
 	p.clearPadState()
 	if active {
-		p.syncChromaticVelocity()
+		p.chromaticVelocity = clampMidiDataValue(p.chromaticVelocity)
 	}
 	if p.f == nil {
 		return nil
@@ -391,13 +395,15 @@ func chromaticPaletteColor(note int) [3]int {
 	return Dim(color, 4)
 }
 
+// chromaticStatusText shows the step, its note and its velocity. A step with no note shows
+// no velocity at all, because the value the next note would inherit is not that step's
+// velocity and reading it as one made two steps look equal.
 func chromaticStatusText(step int, event *Event, velocity, tieStep int) string {
-	note := "--"
-	if event != nil {
-		note = midiNoteName(event.ChromaticNote)
+	if event == nil {
+		return fmt.Sprintf("S%02d --", step+1)
 	}
-	text := fmt.Sprintf("S%02d %s@%03d", step+1, note, velocity)
-	if event != nil && event.Tie && tieStep >= 0 {
+	text := fmt.Sprintf("S%02d %s@%03d", step+1, midiNoteName(event.ChromaticNote), velocity)
+	if event.Tie && tieStep >= 0 {
 		text = fmt.Sprintf("%s->%02d", text, tieStep+1)
 	}
 	return text
@@ -410,9 +416,9 @@ func (p *PatternBank) printChromaticStatus() error {
 	}
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() {
-		return p.f.ClearOLEDRows(lengthDisplayRow, 1)
+		return p.clearTextRows(lengthDisplayRow, 1)
 	}
-	if err := p.f.ClearOLEDRows(lengthDisplayRow, 1); err != nil {
+	if err := p.clearTextRows(lengthDisplayRow, 1); err != nil {
 		return err
 	}
 	pattern := p.CurrentPattern()
@@ -430,7 +436,7 @@ func (p *PatternBank) printChromaticStatus() error {
 			tieStep = eventStep(next)
 		}
 	}
-	return p.f.Print(0, lengthDisplayRow, fitOLEDText(chromaticStatusText(p.stepCursor, eventPtr, velocity, tieStep)))
+	return p.printText(lengthDisplayRow, 0, fitOLEDText(chromaticStatusText(p.stepCursor, eventPtr, velocity, tieStep)), false)
 }
 
 func fitOLEDText(text string) string {

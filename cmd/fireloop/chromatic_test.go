@@ -9,6 +9,9 @@ import (
 	"github.com/chzchzchz/midispa/midi"
 )
 
+// pressVelocity is the strength the tests hit a palette pad with.
+const pressVelocity = 100
+
 type captureMidiWriter struct {
 	events []alsa.SeqEvent
 }
@@ -264,7 +267,8 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	if len(preview.events) != 2 {
 		t.Fatalf("audition wrote %d messages, want 2", len(preview.events))
 	}
-	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(chromaticPaletteNote(0, 0)), defaultChromaticVelocity})
+	// The palette pad was pressed at pressVelocity, so that is the note's velocity.
+	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(chromaticPaletteNote(0, 0)), pressVelocity})
 	assertMidiData(t, preview.events[1], []byte{midi.MakeNoteOff(0), byte(chromaticPaletteNote(0, 0)), 0})
 	if err := processPatternEvent(nil, padMessage(NoteGridRight, 100)); err != nil {
 		t.Fatal(err)
@@ -317,9 +321,14 @@ func TestChromaticVelocityControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
-	if !ok || event.Velocity != defaultChromaticVelocity {
-		t.Fatalf("initial velocity = %d/%v, want %d", event.Velocity, ok, defaultChromaticVelocity)
+	if !ok || event.Velocity != pressVelocity {
+		t.Fatalf("initial velocity = %d/%v, want the pad press %d", event.Velocity, ok, pressVelocity)
 	}
+	if bank.chromaticVelocity != defaultChromaticVelocity {
+		t.Fatalf("encoder value = %d, want it to start at %d", bank.chromaticVelocity, defaultChromaticVelocity)
+	}
+	// A detent moves from the encoder's own value, so the first one does not start from
+	// the velocity the pad press gave the note.
 	cc := alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCVolume), byte(EncoderLeft)}}
 	if err := processPatternEvent(nil, cc); err != nil {
 		t.Fatal(err)
@@ -336,27 +345,14 @@ func TestChromaticVelocityControl(t *testing.T) {
 	if event.Velocity != defaultChromaticVelocity {
 		t.Fatalf("upward velocity = %d, want %d", event.Velocity, defaultChromaticVelocity)
 	}
-
-	event, _ = bank.CurrentPattern().SetChromaticNote(0, voice, event.ChromaticNote, 0)
-	cc.Data[2] = byte(EncoderLeft)
-	if err := processPatternEvent(nil, cc); err != nil {
-		t.Fatal(err)
-	}
-	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
-	if event.Velocity != 0 {
-		t.Fatalf("velocity at lower bound = %d, want 0", event.Velocity)
-	}
-	cc.Data[2] = byte(EncoderRight)
-	if err := processPatternEvent(nil, cc); err != nil {
-		t.Fatal(err)
-	}
-	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
-	if event.Velocity != chromaticVelocityStep {
-		t.Fatalf("velocity above lower bound = %d, want %d", event.Velocity, chromaticVelocityStep)
+	if event.Velocity > midiNoteMax {
+		t.Fatalf("velocity above the maximum = %d", event.Velocity)
 	}
 }
 
-func TestChromaticVelocityFollowsStep(t *testing.T) {
+// The encoder keeps its value across steps, so a step picked after the encoder was set
+// takes that value on the next detent instead of its own.
+func TestVelocityEncoderValueIsInheritedByTheNextStep(t *testing.T) {
 	fire := NewFire(func([]byte) error { return nil })
 	voiceBank := NewVoiceBank([]Device{{
 		Channel: 1,
@@ -370,29 +366,51 @@ func TestChromaticVelocityFollowsStep(t *testing.T) {
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
+	previousPatbank, previousSongbank := patbank, songbank
+	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
+	t.Cleanup(func() {
+		patbank, songbank = previousPatbank, previousSongbank
+		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
+	})
+	patbank, songbank = bank, nil
+	shiftOn, altOn, playbackStop = false, false, nil
+
 	pattern := bank.CurrentPattern()
-	pattern.SetChromaticNote(0, voice, 60, 90)
+	pattern.SetChromaticNote(0, voice, 60, 100)
 	pattern.SetChromaticNote(1, voice, 62, 40)
 	if err := bank.ToggleNoteMode(); err != nil {
 		t.Fatal(err)
 	}
-	if bank.chromaticVelocity != 90 {
-		t.Fatalf("initial step velocity = %d, want 90", bank.chromaticVelocity)
+	// Put the encoder at 100 by turning it, then leave that step.
+	for bank.chromaticVelocity > 100 {
+		if err := processPatternEvent(nil, encoderCC(EncoderLeft)); err != nil {
+			t.Fatal(err)
+		}
 	}
+	if bank.chromaticVelocity != 100 {
+		t.Fatalf("encoder value = %d, want 100", bank.chromaticVelocity)
+	}
+	// Selecting the second step must not drag the encoder back to that step's 40.
 	if err := bank.MoveStepCursor(1); err != nil {
 		t.Fatal(err)
 	}
-	event, ok := pattern.EventAtStep(bank.StepCursor(), voice)
-	if !ok || event.Velocity != 40 || bank.chromaticVelocity != 40 {
-		t.Fatalf("step 2 velocity = %d/%d, want 40/40", event.Velocity, bank.chromaticVelocity)
+	if bank.chromaticVelocity != 100 {
+		t.Fatalf("encoder value after selecting = %d, want the inherited 100", bank.chromaticVelocity)
 	}
-	if err := bank.MoveStepCursor(-1); err != nil {
+	if err := processPatternEvent(nil, encoderCC(EncoderLeft)); err != nil {
 		t.Fatal(err)
 	}
-	event, ok = pattern.EventAtStep(bank.StepCursor(), voice)
-	if !ok || event.Velocity != 90 || bank.chromaticVelocity != 90 {
-		t.Fatalf("step 1 velocity = %d/%d, want 90/90", event.Velocity, bank.chromaticVelocity)
+	if event, _ := pattern.EventAtStep(1, voice); event.Velocity != 99 {
+		t.Fatalf("second step velocity = %d, want the encoder's 99", event.Velocity)
 	}
+	// The first step is untouched by the encoder moving on the second.
+	if event, _ := pattern.EventAtStep(0, voice); event.Velocity != 100 {
+		t.Fatalf("first step velocity = %d, want it left at 100", event.Velocity)
+	}
+}
+
+func encoderCC(direction int) alsa.SeqEvent {
+	return alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCVolume), byte(direction)}}
 }
 
 func TestChromaticStatusText(t *testing.T) {
@@ -400,7 +418,8 @@ func TestChromaticStatusText(t *testing.T) {
 	if got := chromaticStatusText(0, event, 90, 1); got != "S01 C4@090->02" {
 		t.Fatalf("tied status = %q", got)
 	}
-	if got := chromaticStatusText(1, nil, 0, -1); got != "S02 --@000" {
+	// A step with no note must not show a velocity, or it reads as that step's own.
+	if got := chromaticStatusText(1, nil, 90, -1); got != "S02 --" {
 		t.Fatalf("empty status = %q", got)
 	}
 }

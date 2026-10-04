@@ -151,18 +151,27 @@ func wakeBlackout() error {
 	if !patbank.f.Wake() {
 		return nil
 	}
+	logger.Info("wake from blackout")
 	if err := restoreIndicators(); err != nil {
 		return err
 	}
 	return patbank.redraw()
 }
 
+// tapTempoWindow is how long a tap stays usable, which is a minimum of twenty beats per
+// minute. It is a variable so a test can exercise the reset path in milliseconds.
+var tapTempoWindow = time.Minute / 20
+
+// tempoDisplayRow is where an in-progress tempo entry is shown. It shares the bottom row
+// with the length and chromatic status, which are transient readouts too.
+const tempoDisplayRow = lengthDisplayRow
+
 func tapTempo() error {
 	// TODO: have this use the pads instead
 	if len(tapTempoTimes) > 0 {
-		// Reset if below minimum of 20 bpm.
+		// Reset if the last tap was too long ago to be part of the same tempo.
 		last := tapTempoTimes[len(tapTempoTimes)-1]
-		if time.Since(last) > time.Minute/20 {
+		if time.Since(last) > tapTempoWindow {
 			tapTempoTimes = nil
 		}
 	}
@@ -195,7 +204,9 @@ func handleSongGrid(x, y int) error {
 }
 
 func toggleAlt() error {
-	if altOn = !altOn; altOn {
+	altOn = !altOn
+	logger.Debug("alt", "on", altOn, "shift", shiftOn)
+	if altOn {
 		return patbank.f.SetLed(NoteAlt, LEDYellow)
 	}
 	return patbank.f.SetLed(NoteAlt, 0)
@@ -205,22 +216,26 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
-	if err := wakeBlackout(); err != nil {
-		return err
-	}
 	status := ev.Data[0]
 	velocity := int(ev.Data[2])
-	if !(midi.IsCC(status) || midi.IsNoteOn(status)) {
-		return nil
-	}
-	if x, y, ok := Note2Grid(int(ev.Data[1])); ok {
+	logIncoming(int(ev.Data[1]), int(status), velocity)
+	x, y, onGrid := Note2Grid(int(ev.Data[1]))
+	if onGrid {
 		if isPadRelease(status, velocity) {
 			return nil
 		}
-		return handleSongGrid(x, y)
+	} else if !(midi.IsCC(status) || midi.IsNoteOn(status)) {
+		return nil
 	}
 	if midi.IsNoteOn(status) && velocity == 0 {
 		return nil
+	}
+	// A release must not end a blackout, so the wake waits for a real press.
+	if err := wakeBlackout(); err != nil {
+		return err
+	}
+	if onGrid {
+		return handleSongGrid(x, y)
 	}
 	switch int(ev.Data[1]) {
 	case NotePlay:
@@ -293,7 +308,7 @@ func handlePatternGrid(aseq *alsa.Seq, x, y, vel int) error {
 		return nil
 	}
 	if patbank.editingNote {
-		return patbank.handleNoteEditPad(aseq, y, x)
+		return patbank.handleNoteEditPad(aseq, y, x, vel)
 	}
 	if shiftOn {
 		pendingNumber *= 10
@@ -305,11 +320,13 @@ func handlePatternGrid(aseq *alsa.Seq, x, y, vel int) error {
 			addend = 0
 		}
 		pendingNumber += addend
-		if err := patbank.f.ClearOLED(); err != nil {
+		logger.Debug("tempo entry", "pending", pendingNumber, "padX", x, "padY", y)
+		// Only the row the number goes on is cleared. Wiping the whole display here
+		// looked like a blackout: the screen went dark while the pads stayed lit.
+		if err := patbank.clearTextRows(tempoDisplayRow, 1); err != nil {
 			return err
 		}
-		s := fmt.Sprintf("Tempo: %03d", pendingNumber)
-		return patbank.f.Print(4, 3, s)
+		return patbank.printText(tempoDisplayRow, 4, fmt.Sprintf("Tempo: %03d", pendingNumber), false)
 	}
 	if handled, err := patbank.handleChromaticStepPress(y, x); handled {
 		return err
@@ -328,27 +345,35 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
-	if err := wakeBlackout(); err != nil {
-		return err
-	}
 	status := ev.Data[0]
 	velocity := int(ev.Data[2])
-	if x, y, ok := Note2Grid(int(ev.Data[1])); ok {
+	logIncoming(int(ev.Data[1]), int(status), velocity)
+	x, y, onGrid := Note2Grid(int(ev.Data[1]))
+	if onGrid {
 		if isPadRelease(status, velocity) {
 			patbank.releasePad(y, x)
 			return nil
 		}
-		if midi.IsNoteOn(status) {
-			return handlePatternGrid(aseq, x, y, velocity)
+		if !midi.IsNoteOn(status) {
+			return nil
 		}
+	} else if !(midi.IsCC(status) || midi.IsNoteOn(status)) {
 		return nil
 	}
-	if !(midi.IsCC(status) || midi.IsNoteOn(status)) || (midi.IsNoteOn(status) && velocity == 0) {
+	if midi.IsNoteOn(status) && velocity == 0 {
 		return nil
+	}
+	// A release must not end a blackout, so the wake waits for a real press.
+	if err := wakeBlackout(); err != nil {
+		return err
+	}
+	if onGrid {
+		return handlePatternGrid(aseq, x, y, velocity)
 	}
 	switch int(ev.Data[1]) {
 	case NoteShift:
 		shiftOn = !shiftOn
+		logger.Debug("shift", "on", shiftOn, "alt", altOn)
 		if !shiftOn {
 			if err := patbank.f.SetLed(NoteShift, 0); err != nil {
 				return err
@@ -395,6 +420,7 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		if shiftOn {
 			// Blackout. The controls keep their state, so the next press brings the
 			// lights and screen back to it, the Alt light included.
+			logger.Info("blackout")
 			return patbank.f.Blackout()
 		}
 		return toggleAlt()

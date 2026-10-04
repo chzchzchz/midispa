@@ -27,10 +27,20 @@ func (r *ledRecorder) write(data []byte) error {
 	return nil
 }
 
+// ledOffValue is the value that puts a control out. Most take zero, but the top-left
+// cluster selects a button at zero and is blanked by CCTopLeftOff instead, so treating
+// zero as off would report Channel as lit.
+func ledOffValue(control int) int {
+	if control == CCTopLeftLEDs {
+		return CCTopLeftOff
+	}
+	return LEDOff
+}
+
 func (r *ledRecorder) lit() []int {
 	var out []int
 	for control, value := range r.leds {
-		if value != LEDOff {
+		if value != ledOffValue(control) {
 			out = append(out, control)
 		}
 	}

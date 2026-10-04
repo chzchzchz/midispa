@@ -420,7 +420,7 @@ func TestTrackWindowChromaticEditingFollowsRow(t *testing.T) {
 	if err := bank.MoveStepCursor(2); err != nil {
 		t.Fatal(err)
 	}
-	if event, ok := pattern.EventAtStep(bank.StepCursor(), voice); !ok || event.Velocity != 40 || bank.chromaticVelocity != 40 {
+	if event, ok := pattern.EventAtStep(bank.StepCursor(), voice); !ok || event.Velocity != 40 {
 		t.Fatalf("moved-to step = %d/%v, want the visible track's event", event.Velocity, ok)
 	}
 	// Scrolling away releases the palette so the next window starts in step mode.

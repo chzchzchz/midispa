@@ -42,8 +42,8 @@ func (p *PatternBank) AdjustLength(delta int) error {
 }
 
 func (p *PatternBank) printLength() error {
-	return p.f.Print(0, lengthDisplayRow, fmt.Sprintf(
+	return p.printText(lengthDisplayRow, 0, fmt.Sprintf(
 		"Length %02d steps",
 		p.CurrentPattern().LengthSteps(),
-	))
+	), false)
 }

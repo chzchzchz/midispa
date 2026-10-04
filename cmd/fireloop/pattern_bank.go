@@ -21,8 +21,11 @@ type PatternBank struct {
 	rowPadMasks       [padRows]uint16
 	trackVoices       []int
 	f                 *Fire
-	vb                *VoiceBank
-	playback          *Playback
+	// screen is where text goes. It is the Fire by default and a recorder in tests, so a
+	// test reads what a row says instead of decoding pixels.
+	screen   textScreen
+	vb       *VoiceBank
+	playback *Playback
 	// trackMu guards the track window. The playback worker draws the visible tracks
 	// from its own goroutine, so scrolling must not race with it.
 	trackMu sync.RWMutex
@@ -36,6 +39,7 @@ func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 		Patterns:          make(map[int]*Pattern),
 		chromaticVelocity: defaultChromaticVelocity,
 		f:                 f,
+		screen:            f,
 		vb:                vb,
 	}
 	ret.trackVoices = make([]int, padRows)
@@ -268,10 +272,10 @@ func (p *PatternBank) redraw() error {
 	if p.f == nil {
 		return nil
 	}
-	if err := p.f.Print(0, 0, p.headerText()); err != nil {
+	if err := p.printText(0, 0, p.headerText(), false); err != nil {
 		return err
 	}
-	if err := p.f.Print(0, 1, "-----------"); err != nil {
+	if err := p.printText(1, 0, "-----------", false); err != nil {
 		return err
 	}
 	for row := 1; row <= padRows; row++ {
@@ -374,14 +378,47 @@ func (p *PatternBank) printTrackRow(row int, inv bool) error {
 	if p.f == nil {
 		return nil
 	}
-	if err := p.f.ClearOLEDRows(row+1, 1); err != nil {
+	if err := p.clearTextRows(row+1, 1); err != nil {
 		return err
 	}
-	name := voiceDisplayName(p.trackVoice(row))
-	if inv {
-		return p.f.PrintInvert(0, row+1, name)
+	return p.printText(row+1, 0, voiceDisplayName(p.trackVoice(row)), inv)
+}
+
+// textScreen is the text layer of the display. The Fire rasterizes what it is given; a
+// recorder keeps the strings so a test can read a row.
+type textScreen interface {
+	Print(x, y int, s string) error
+	PrintInvert(x, y int, s string) error
+	ClearOLEDRows(y, n int) error
+}
+
+// printText writes to the text layer, falling back to the Fire when none was set.
+func (p *PatternBank) printText(row, col int, text string, inverted bool) error {
+	screen := p.textLayer()
+	if screen == nil {
+		return nil
 	}
-	return p.f.Print(0, row+1, name)
+	if inverted {
+		return screen.PrintInvert(col, row, text)
+	}
+	return screen.Print(col, row, text)
+}
+
+// clearTextRows blanks rows on the text layer.
+func (p *PatternBank) clearTextRows(row, n int) error {
+	screen := p.textLayer()
+	if screen == nil {
+		return nil
+	}
+	return screen.ClearOLEDRows(row, n)
+}
+
+// textLayer is where text goes: the recorder in a test, the Fire otherwise.
+func (p *PatternBank) textLayer() textScreen {
+	if p.screen != nil {
+		return p.screen
+	}
+	return p.f
 }
 
 func (p *PatternBank) JogSelect(n int) error {

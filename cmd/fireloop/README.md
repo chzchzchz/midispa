@@ -17,6 +17,18 @@ go build -o /tmp/fireloop ./cmd/fireloop
 
 `-shared-midi-destination` sends instrument MIDI through Fireloop's main ALSA port to every connected destination, matching the legacy broadcast behavior. The default remains per-device routing; shared mode intentionally sends every note to all connected outputs.
 
+`-log-level` sets log verbosity: `debug`, `info` (the default), `warn` or `error`. At `debug` the sequencer logs every MIDI message it writes, every change to the Fire's display, and the steps its editors act on, which is what to capture when a note or a light is not behaving:
+
+```sh
+/tmp/fireloop -kit cmd/fireloop/kits/gm_drums.json -port 'FL STUDIO FIRE Jack 1' -log-level debug 2>/tmp/fireloop.log
+```
+
+`-log-format` chooses `text` (the default) or `json`. Both carry the same fields; text is easier to read by eye and JSON is easier to feed to a tool. An unrecognised value falls back to text with a warning rather than leaving the sequencer silent:
+
+```sh
+/tmp/fireloop -kit cmd/fireloop/kits/gm_drums.json -log-level debug -log-format json 2>/tmp/fireloop.log
+```
+
 ## Kit format
 
 A kit file is a top-level array of device objects, so each device can use a different MIDI port. A single device object is still accepted for compatibility. Omitting a voice's `Note` selects a chromatic instrument; an explicit `Note`, including `0`, selects a percussive instrument. A voice `Channel` overrides its device's channel:
@@ -61,17 +73,18 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 - Overview: enter or leave length-edit mode.
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
 - Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid then selects pitches starting at MIDI 21 (A0), with four rows of sixteen semitones. Toggling Mode does not stop playback.
-- Volume knob with a selected chromatic voice: each detent increments or decrements the current step's velocity by one, clamped to 0..127. The status line shows `S<STEP> <NOTE>@<VELOCITY>`.
-- Pad in note-edit mode: assign and audition the selected pitch. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
-- Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. Cross-row and three-or-more-pad gestures are ignored.
-- `Shift` plus a pad, then release `Shift`: enter a tempo. Entering one clears the whole display until the next redraw, and a value from 21 to 299 is applied on release; anything else is discarded.
-- Tap: tap out a tempo. It takes at least two taps, ignores taps more than three seconds apart, averages the last five, and prints `Tempo: NNN` over the second track's name.
+- Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step. The knob is not re-read from the step you select, so its value carries over to the next step.
+- Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
+- Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
+- `Shift` plus a pad, then release `Shift`: enter a tempo. The entry shows on the bottom row only, so the rest of the display keeps showing the pattern, and a value from 21 to 299 is applied on release; anything else is discarded.
+- Tap: tap out a tempo. It takes at least two taps, ignores taps more than three seconds apart, averages the last five, and shows `Tempo: NNN` on the bottom row.
 - `Alt` plus a mute button: clear that track row. `Alt` stays engaged, so several rows can be cleared in a row.
 - `Alt` plus stop: clear the current pattern. `Alt` stays engaged.
 - Record: copy the current pattern, including pitches and ties. Record lights green while a copy is armed, and pressing Record again discards it. There is one copy slot; a new copy replaces the old one.
 - Play while copied: paste the pattern.
 - Stop: stop playback and release active chromatic notes.
 - Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
+- Channel, Mixer, User 1 and User 2 (top left): not bound to anything yet. Their lights are cleared whenever the indicators are cleared, so they stay dark.
 
 #### Choosing voices
 
@@ -88,7 +101,7 @@ A track is a voice from the kit, and any voice can go on any track.
 - Row 0: `Pattern 003  2/6`, the pattern number and the track window.
 - Row 1: a separator.
 - Rows 2 to 5: the voice on each visible track row, inverted for the selected row.
-- Row 6: `Length NN steps` in length mode, otherwise `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, otherwise blank.
+- Row 6 is the readout row and carries one of: `Length NN steps` in length mode, `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, `S<STEP> --` for a selected chromatic track on a step with no note, or `Tempo: NNN` while a tempo is being entered. It is blank otherwise.
 
 The pad grid shows the notes of the four visible tracks, the editing step is lit slightly brighter, and during playback the playing column is inverted while the others are redrawn dimmer.
 
@@ -111,8 +124,18 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 2. In pattern/step mode, press a pad on the selected chromatic track to move the editing step cursor. This does not create or remove a note; two held pads still create a tie.
 3. Move the cursor with Grid left/right or by pressing another step pad. Steps beyond the current pattern length are ignored.
 4. Press Mode to enter note-edit mode. The pad grid becomes the pitch palette; press a palette pad to create or update the note at the cursor and audition it.
-5. Use the Volume encoder to change that step's velocity by one detent at a time. The status line shows `S<STEP> <NOTE>@<VELOCITY>`; an empty step shows `--`.
-6. Press Mode again to return to step mode. In note-edit mode, Alt plus a palette pad clears the current step, and Alt stays engaged.
+5. How hard the palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed. The status line reports the same value, so what is heard and what is shown agree.
+6. The Volume encoder carries its own value rather than re-reading the selected step, so a step picked after you set the encoder takes the encoder's value on the next detent. Each detent moves it by one, clamped to 0..127. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, and a step with no note shows `S<STEP> --` with no velocity.
+7. Press Mode again to return to step mode. In note-edit mode, Alt plus a palette pad clears the current step, and Alt stays engaged.
+
+#### Chromatic note length
+
+A chromatic note lasts one sixteenth-note step. It stops as soon as the playhead moves to the next step, so a lone note is a short hit rather than a sound that rings for the rest of the pattern.
+
+- To hold a note longer, tie it. A tie keeps the note sounding past its step until the tied event arrives, and a chain of ties holds it further still.
+- A tie between two notes of the same pitch reuses the sounding note, so there is no retrigger. A tie to a different pitch is legato: the new pitch starts before the old one stops.
+- Untied notes retrigger, so a note followed by another on the same voice stops exactly where the next one begins.
+- Stopping playback, switching pattern, or reaching the end of a pattern releases anything still sounding.
 
 #### Blackout
 
@@ -122,6 +145,8 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 - `Alt` is not released by the blackout. Its light goes dark with everything else and comes back to the state it was left in.
 - The next press wakes the display and then does what it says, so the screen comes back showing the result of that press.
 - While `Shift` is held, `Alt` is always the blackout, so release `Shift` before using `Alt` to release it.
+
+The unit also blanks its own display after a stretch with no display traffic from Fireloop. That is not a blackout: it can happen minutes after startup with nothing pressed, and any control that redraws brings the screen back. Pressing Shift plus Alt is the deliberate way to blank the display.
 
 ### Song mode
 
@@ -197,3 +222,21 @@ go test ./cmd/fireloop
 go test -race ./cmd/fireloop
 go vet ./cmd/fireloop
 ```
+
+The tracer replays a scripted button sequence through the real handler and reports what the
+Fire would be showing after each step, so a UI problem can be reproduced without hardware:
+
+```sh
+go test -run Trace -v ./cmd/fireloop
+```
+
+Each line is one input and what the display held afterwards, for example:
+
+```
+alt: blackout              pads  0 lit (rows [0 0 0 0])  LEDs: none
+stop                       pads  4 lit (rows [1 1 1 1])  LEDs: Mute1=2 Shift=1
+```
+
+Display assertions go through a text-only stand-in for the Fire rather than decoding
+pixels, so a test reads the string a row shows. The note lifecycle tests read back the MIDI
+that would reach a device, which is how the note-on and note-off order stays pinned.

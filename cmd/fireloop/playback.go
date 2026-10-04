@@ -25,6 +25,8 @@ type activeChromaticNote struct {
 	note        int
 	destination alsa.SeqAddr
 	tie         bool
+	// step is where the note started, so a note can be stopped after one step.
+	step int
 }
 
 type chromaticOutbound struct {
@@ -150,6 +152,10 @@ func (p *Playback) playBeat(aseq midiWriter, pat *Pattern) (float32, error) {
 		}
 	}
 	currentStep := eventStep(Event{Beat: patBeat})
+	// A note from an earlier step stops before this one starts, unless a tie held it.
+	if err := p.releaseExpired(aseq, currentStep); err != nil {
+		return 0, err
+	}
 	evs := pat.FindBeat(patBeat)
 	nextBeat := float32(0)
 	for _, ev := range evs {
@@ -250,6 +256,7 @@ func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
 		note:        event.NoteNumber(),
 		destination: midiDestination(eventDestination(event)),
 		tie:         event.Tie,
+		step:        eventStep(event),
 	}
 	p.activeMu.Lock()
 	defer p.activeMu.Unlock()
@@ -260,7 +267,22 @@ func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
 	}
 	messages := chromaticOutboundMessages(previousNote, current, event.Velocity)
 	writerActive := !isNilMidiWriter(aseq)
+	// The sounding note is recorded before anything is written. A write that fails part
+	// way through would otherwise leave a note on with nothing tracking it to release.
+	if p.active == nil {
+		p.active = make(map[*Voice]activeChromaticNote)
+	}
+	p.active[event.Voice] = current
+	logger.Debug("chromatic transition",
+		"voice", voiceLabel(event.Voice),
+		"note", current.note,
+		"velocity", event.Velocity,
+		"tie", current.tie,
+		"previous", previousNoteLabel(previousNote),
+		"messages", len(messages),
+	)
 	for _, message := range messages {
+		logOutbound(voiceLabel(event.Voice), message.destination, message.data)
 		if !writerActive {
 			continue
 		}
@@ -268,11 +290,48 @@ func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
 			return err
 		}
 	}
-	if p.active == nil {
-		p.active = make(map[*Voice]activeChromaticNote)
-	}
-	p.active[event.Voice] = current
 	return nil
+}
+
+// previousNoteLabel names the note that was sounding, so a transition reads as a pair.
+func previousNoteLabel(previous *activeChromaticNote) any {
+	if previous == nil {
+		return "none"
+	}
+	return previous.note
+}
+
+// releaseExpired stops notes whose step has passed. A chromatic note is one step long
+// unless a tie holds it into the next event, so a lone note stops where it started
+// instead of ringing until the pattern ends.
+func (p *Playback) releaseExpired(aseq midiWriter, step int) error {
+	type expiredNote struct {
+		voice *Voice
+		note  activeChromaticNote
+	}
+	var expired []expiredNote
+	p.activeMu.Lock()
+	for voice, note := range p.active {
+		if note.tie || step <= note.step {
+			continue
+		}
+		expired = append(expired, expiredNote{voice: voice, note: note})
+		delete(p.active, voice)
+	}
+	p.activeMu.Unlock()
+	var firstErr error
+	for _, item := range expired {
+		message := chromaticMidiOff(item.note.channel, item.note.note)
+		logOutbound(voiceLabel(item.voice), item.note.destination, message)
+		logger.Debug("release", "voice", voiceLabel(item.voice), "note", item.note.note, "reason", "step passed")
+		if isNilMidiWriter(aseq) {
+			continue
+		}
+		if err := aseq.Write(alsa.SeqEvent{SeqAddr: item.note.destination, Data: message}); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // releaseAll drains the map before writing, preventing duplicate releases during cancellation.
@@ -286,11 +345,13 @@ func (p *Playback) releaseAll(aseq midiWriter) error {
 	p.active = make(map[*Voice]activeChromaticNote)
 	p.activeMu.Unlock()
 	var firstErr error
-	for _, note := range active {
+	for voice, note := range active {
+		message := chromaticMidiOff(note.channel, note.note)
+		logOutbound(voiceLabel(voice), note.destination, message)
+		logger.Debug("release", "voice", voiceLabel(voice), "note", note.note, "reason", "release all")
 		if isNilMidiWriter(aseq) {
 			continue
 		}
-		message := chromaticMidiOff(note.channel, note.note)
 		if err := aseq.Write(alsa.SeqEvent{SeqAddr: note.destination, Data: message}); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -316,6 +377,7 @@ func writeSequencerPort(aseq sequencerWriter, data []byte) error {
 
 func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error) {
 	started := false
+	logger.Info("playback start", "bpm", currentBPM())
 	defer func() {
 		if err := p.releaseAll(aseq); runErr == nil {
 			runErr = err
@@ -325,6 +387,7 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 				runErr = err
 			}
 		}
+		logger.Info("playback end", "error", runErr)
 	}()
 	curBpm := currentBPM()
 	var curPattern *Pattern
@@ -390,6 +453,7 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 				songBeat, _, _ = p.position()
 				songBeat += curPattern.Beats() - patBeat
 			}
+			logger.Debug("pattern boundary", "songBeat", songBeat, "beats", curPattern.Beats(), "bpm", curBpm)
 			_ = p.releaseAll(aseq)
 			if p.nextPattern != nil {
 				curPattern = p.nextPattern(songBeat)

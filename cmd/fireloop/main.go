@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/chzchzchz/midispa/alsa"
 )
@@ -94,6 +96,7 @@ func writeMidiMsgs(aseq midiWriter, sa alsa.SeqAddr, msgs [][]byte) error {
 	}
 	sa = midiDestination(sa)
 	for _, msg := range msgs {
+		logOutbound("", sa, msg)
 		if err := aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: msg}); err != nil {
 			return err
 		}
@@ -176,8 +179,22 @@ func must(err error) {
 func main() {
 	kitFlag := flag.String("kit", "kit.json", "kit of devices to load")
 	midiPort := flag.String("port", "FL STUDIO FIRE Jack 1", "midi port for akai fire")
+	logLevel := flag.String("log-level", "info", "log verbosity: debug, info, warn or error")
+	logFormat := flag.String("log-format", "text", "log format: text or json")
 	flag.BoolVar(&sharedMIDIDestination, "shared-midi-destination", false, "broadcast MIDI output to all connected destinations")
 	flag.Parse()
+
+	level := slog.LevelInfo
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		log.Printf("unknown log level %q, using info", *logLevel)
+	}
+	if !strings.EqualFold(*logFormat, logFormatJSON) && !strings.EqualFold(*logFormat, "text") {
+		log.Printf("unknown log format %q, using text", *logFormat)
+	}
+	setLogger(newLogger(level, *logFormat))
+	logger.Info("fireloop starting",
+		"kit", *kitFlag, "port", *midiPort, "shared", sharedMIDIDestination,
+		"level", level.String(), "format", strings.ToLower(*logFormat))
 
 	log.Println("loading kit", *kitFlag)
 	devs, err := loadDevices(*kitFlag)
