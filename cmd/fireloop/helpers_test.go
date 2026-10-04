@@ -52,7 +52,7 @@ func recordedBank(t *testing.T, kit *VoiceBank) (*PatternBank, *VoiceBank, *fire
 func screenBank(t *testing.T, kit *VoiceBank) (*PatternBank, *VoiceBank, *screenRecorder) {
 	t.Helper()
 	bank, kit := quietBank(t, kit)
-	return bank, kit, useScreenRecorder(t, bank)
+	return bank, kit, useScreenRecorder(t, &bank.screen)
 }
 
 // newTestBank is the part every bank in a test shares.

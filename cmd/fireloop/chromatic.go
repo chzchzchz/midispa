@@ -706,10 +706,14 @@ func (p *PatternBank) printChromaticStatus() error {
 	return p.printText(lengthDisplayRow, 0, fitOLEDText(chromaticStatusText(p.stepCursor, eventPtr, velocity, tieStep)), false)
 }
 
+// oledTextWidth is how many characters a readout row holds. Text meant for a row is built
+// to fit rather than trimmed after the fact, because fitOLEDText cuts at the width, and a
+// sentence cut mid-number ends in a figure that reads true and is not.
+const oledTextWidth = 20
+
 func fitOLEDText(text string) string {
-	const maxTextLength = 20
-	if len(text) > maxTextLength {
-		return strings.TrimSpace(text[:maxTextLength])
+	if len(text) > oledTextWidth {
+		return strings.TrimSpace(text[:oledTextWidth])
 	}
 	return text
 }

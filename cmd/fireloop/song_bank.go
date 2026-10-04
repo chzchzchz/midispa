@@ -15,6 +15,10 @@ type SongBank struct {
 	pb           *PatternBank
 	f            *Fire
 	playback     *Playback
+	// screen is where the arrangement text goes, for the same reason as PatternBank.screen:
+	// the Fire by default and a recorder in a test, so a test reads what a row says instead
+	// of decoding pixels.
+	screen textScreen
 }
 
 func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
@@ -23,6 +27,7 @@ func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
 		selSongIdx: 1,
 		pb:         pb,
 		f:          f,
+		screen:     f,
 	}
 	sb.Songs[sb.selSongIdx] = &Song{}
 	sb.resetArrangementView()
@@ -40,6 +45,24 @@ func (sb *SongBank) kit() *VoiceBank {
 
 func (sb *SongBank) CurrentSong() *Song {
 	return sb.Songs[sb.selSongIdx]
+}
+
+// installSongs moves in songs that were already built against the restored patterns, so
+// the measures and the pattern bank keep pointing at one object each. The song slots and
+// the arrangement window are left where they were: where the user was scrolling is the
+// display's business, not part of a set.
+//
+// The selected song is the one slot a load has to supply, because a song holding no
+// measures is not written to a file. Restoring the bank onto a song the file does not
+// carry would leave CurrentSong nil, and the arrangement view reads it on every pad press.
+func (s *SongBank) installSongs(songs map[int]*Song) {
+	if s == nil {
+		return
+	}
+	if _, ok := songs[s.selSongIdx]; !ok {
+		songs[s.selSongIdx] = &Song{}
+	}
+	s.Songs = songs
 }
 
 func (s *SongBank) Jump(n int) error {
@@ -237,9 +260,20 @@ func (s *SongBank) patternsToColors() map[*Pattern][3]int {
 	return ret
 }
 
-func (sb *SongBank) printRow(row int, s string) error {
-	if err := sb.f.ClearOLEDRows(row, 1); err != nil {
+// printText writes to the song bank's text layer.
+func (s *SongBank) printText(row, col int, text string, inverted bool) error {
+	return displayPrint(s.screen, s.f, row, col, text, inverted)
+}
+
+// clearTextRows blanks rows on the song bank's text layer.
+func (s *SongBank) clearTextRows(row, n int) error {
+	return displayClear(s.screen, s.f, row, n)
+}
+
+// printRow replaces one row of the arrangement with text.
+func (s *SongBank) printRow(row int, text string) error {
+	if err := s.clearTextRows(row, 1); err != nil {
 		return err
 	}
-	return sb.f.Print(0, row, s)
+	return s.printText(row, 0, text, false)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -161,13 +162,15 @@ func (r *screenRecorder) row(n int) string {
 	return r.rows[n]
 }
 
-// useScreenRecorder points a bank's text at a recorder for the duration of a test.
-func useScreenRecorder(t *testing.T, bank *PatternBank) *screenRecorder {
+// useScreenRecorder points a bank's text at a recorder for the duration of a test. Both
+// banks draw through a layer of the same kind, so the caller names which one it is
+// redirecting, and the layer it had comes back when the test ends.
+func useScreenRecorder(t *testing.T, screen *textScreen) *screenRecorder {
 	t.Helper()
 	recorder := &screenRecorder{}
-	previous := bank.screen
-	bank.screen = recorder
-	t.Cleanup(func() { bank.screen = previous })
+	previous := *screen
+	*screen = recorder
+	t.Cleanup(func() { *screen = previous })
 	return recorder
 }
 
@@ -461,4 +464,48 @@ func TestTracePressVelocityBecomesTheNotesVelocity(t *testing.T) {
 	if !midi.IsNoteOff(last[1].Data[0]) || last[1].Data[2] != 0 {
 		t.Fatalf("audition note off = %v, want velocity 0", last[1].Data)
 	}
+}
+
+// The two unclaimed buttons reach the state file, and what they did has to be readable on
+// the display rather than only in the log: during a set there is nowhere else to look.
+func TestTraceStateGesturesReportOnTheReadoutRow(t *testing.T) {
+	kit := trackWindowKit(6, 2)
+	fire := NewFire(func([]byte) error { return nil })
+	bank := NewPatternBank(fire, kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	songs := NewSongBank(fire, bank)
+	path := filepath.Join(t.TempDir(), "set.json")
+	useStateGlobals(t, path, bank, songs, []string{"kits/gm_drums.json"})
+	recorder := useScreenRecorder(t, &bank.screen)
+	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 60, 100)
+
+	rows := make([]string, 0, 5)
+	for _, step := range []uiStep{
+		press("select row 1", NoteMute1),
+		press("browser alone", NoteBrowser),
+		press("shift", NoteShift),
+		press("shift+browser: save", NoteBrowser),
+		press("shift+accent: load", NoteAccent),
+	} {
+		if err := processPatternEvent(nil, padMessage(step.note, step.vel)); err != nil {
+			t.Fatal(err)
+		}
+		readout := recorder.row(lengthDisplayRow)
+		t.Logf("%-20s readout %q", step.label, readout)
+		rows = append(rows, readout)
+	}
+	// A press of Browser on its own says nothing and writes nothing.
+	if rows[1] != "" {
+		t.Fatalf("Browser on its own reported %q, want nothing", rows[1])
+	}
+	if !strings.HasPrefix(rows[3], "Saved") {
+		t.Fatalf("shift+browser reported %q, want the save", rows[3])
+	}
+	if !strings.HasPrefix(rows[4], "Loaded") {
+		t.Fatalf("shift+accent reported %q, want the load", rows[4])
+	}
+	// Shift is left engaged by the trace, so the test hands the next one a clean unit.
+	pressPatternButton(t, NoteShift)
 }

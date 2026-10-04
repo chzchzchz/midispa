@@ -39,6 +39,26 @@ A file and a directory can be mixed in one command line. A path that fails to lo
 /tmp/fireloop -kit cmd/fireloop/kits/gm_drums.json -log-level debug -log-format json 2>/tmp/fireloop.log
 ```
 
+`-state <path>` makes the session live in a file instead of in memory. With it, fireloop loads the file at startup when it exists, saves on exit, and saves and loads from the panel:
+
+```sh
+/tmp/fireloop -kit cmd/fireloop/kits/gm_drums.json -port 'FL STUDIO FIRE Jack 1' -state ~/fireloop-session.json
+```
+
+A missing file at startup is not an error, because that is what a first run looks like. A file that exists and cannot be read stops startup, because starting empty looks exactly like the set having been deleted.
+
+## Session file
+
+`-state` names one file holding what the controls make: the patterns, the songs that arrange them, the kit's voices assigned to the tracks, and the tempo.
+
+- The write is atomic. A save either lands whole or leaves the previous file untouched, so an interrupted save never costs a set.
+- Voice references are positions in the kit as this run loaded it, so the file records the kit paths and the voice count. A file loaded against a different kit is reported rather than trusted: everything that still resolves is kept, and what did not is counted and shown on the display.
+- Values outside their range are clamped, not refused. A set with one bad number in it is still mostly a set.
+- Where you were looking is not saved. The selected pattern and row, the scroll windows, the step cursor and the palette octave are the display's business, so a load lands on whatever pattern was showing. Notes, arrangement, tempo and kit layout are what come back.
+- Editing modes, held pads, the playhead and the clipboard are not saved either. They mean nothing across a restart, and a loaded clipboard would paste on the next accidental Play press.
+- Patterns are written in index order, so the file can be diffed and read by eye after a show.
+- Each save is written over the same path. There is one file per run, and no slots.
+
 ## Kit format
 
 A kit file is a top-level array of device objects, so each device can use a different MIDI port. A single device object is still accepted for compatibility. Omitting a voice's `Note` selects a chromatic instrument; an explicit `Note`, including `0`, selects a percussive instrument. A voice `Channel` overrides its device's channel:
@@ -123,6 +143,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - `Alt` plus a mute button: clear that track row. `Alt` stays engaged, so several rows can be cleared in a row. Clearing changes what is being played, so it stops playback, unlike selecting a row.
 - `Alt` plus stop: clear the current pattern. `Alt` stays engaged.
 - Record: copy the current pattern, including pitches and ties. Record lights green while a copy is armed, and pressing Record again discards it. There is one copy slot; a new copy replaces the old one.
+- `Shift` plus Browser: save the session. `Shift` plus Accent: load it. Both buttons mean nothing on their own, so a stray press cannot write over a set or replace one. Either gesture reports on the readout row, for example `Saved 12.4 KB` or `Loaded 8, dropped 2`, and works the same way in song mode. They need `-state` to be set; without it the readout says so.
 - Play while copied: paste the pattern.
 - Stop: stop playback and release active chromatic notes.
 - Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
@@ -250,6 +271,7 @@ A song holds up to 1000 measures, so the 48 measure pads only ever show part of 
 - Play: play the song from the top and loop it. The playing measure lights up and rows 4 and 5 follow it.
 - Stop: stop playback and release active chromatic notes.
 - `Alt` is a pattern-mode modifier and does nothing here, so there is no blackout in song mode.
+- `Shift` plus Browser saves the session and `Shift` plus Accent loads it, the same as in pattern mode. A song is usually saved from here, since that is where the arrangement is.
 
 Only song slot 1 is reachable from the controls today; the display names the slot and there is no button bound to changing it.
 
@@ -262,7 +284,7 @@ Only song slot 1 is reachable from the controls today; the display names the slo
 5. Press Play to hear the arrangement, and `Shift` plus a measure pad to move around while it runs.
 6. Press Pattern/Song to go back and edit any pattern in the song; every measure holding that pattern changes with it, including its length.
 
-Measures reference the pattern itself rather than a copy, so edits are shared. Percussive and chromatic patterns can be mixed freely in one song. Patterns and songs are held in memory for the lifetime of the process, so nothing is written to disk.
+Measures reference the pattern itself rather than a copy, so edits are shared. Percussive and chromatic patterns can be mixed freely in one song. With `-state` the arrangement is written to the session file described above; without it, patterns and songs are held in memory for the lifetime of the process and are lost when the process ends.
 
 ## Development
 

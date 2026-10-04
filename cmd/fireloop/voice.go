@@ -102,3 +102,29 @@ func NewVoiceBank(devs []Device) *VoiceBank {
 	}
 	return vb
 }
+
+// voiceAt resolves a position in the flattened bank, which is the only identity a voice
+// has. An index outside the bank is reported rather than clamped: clamping would put the
+// note on whichever voice happens to sit at the end, and a wrong drum is worse than a
+// missing one.
+func (v *VoiceBank) voiceAt(index int) (*Voice, bool) {
+	if v == nil || index < 0 || index >= len(v.voices) {
+		return nil, false
+	}
+	return v.voices[index], true
+}
+
+// voiceIndex is the same identity read the other way. A save walks every event in a
+// pattern and needs the position of each voice, so the mapping is built once and reused
+// rather than searched per event. Only the flattened order distinguishes two voices that
+// share a name, so that is what the map is keyed by.
+func (v *VoiceBank) voiceIndex() map[*Voice]int {
+	if v == nil {
+		return nil
+	}
+	indices := make(map[*Voice]int, len(v.voices))
+	for index, voice := range v.voices {
+		indices[voice] = index
+	}
+	return indices
+}

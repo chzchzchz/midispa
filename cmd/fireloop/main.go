@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -372,6 +373,54 @@ func openSequencer(firePort string, devs []Device) (*alsa.Seq, alsa.SeqAddr, err
 	return aseq, sa, nil
 }
 
+// processIncomingEvents applies the Fire's events one at a time, which is the only place the
+// banks are changed, and saves the session when it is asked to leave.
+//
+// The save is here rather than wherever the request came from because this goroutine is the
+// only reader of the banks. Saving from a signal handler would walk the pattern map while
+// this one could be adding to it, and concurrent map iteration is a fatal error rather than
+// a lost note.
+//
+// A panic anywhere below ends the process, so the session is written before the panic is
+// passed on. That is the whole point of the save on the way out: a set should survive the
+// run that made it whether the run was ended or fell over, and re-panicking keeps the
+// failure loud instead of leaving the unit playing on with a half-applied edit.
+func processIncomingEvents(events *alsa.Seq, inc <-chan alsa.SeqEvent) {
+	defer func() {
+		if problem := recover(); problem != nil {
+			saveSessionOnExit()
+			panic(problem)
+		}
+	}()
+	for ev := range inc {
+		// An event carrying no data is the leave request rather than MIDI. Both handlers
+		// already ignore anything that is not three bytes, so an empty event cannot
+		// collide with real traffic.
+		if len(ev.Data) == 0 {
+			saveSessionOnExit()
+			return
+		}
+		handleIncomingEvent(events, ev)
+	}
+}
+
+// waitForLeave returns once the program has been asked to stop, either by a signal or by the
+// Fire ceasing to answer. Reading blocks inside the ALSA library and cannot be interrupted,
+// so the read gets its own goroutine and this one waits for whichever comes first.
+func waitForLeave(aseq eventReader, inc chan<- alsa.SeqEvent) error {
+	readErr := make(chan error, 1)
+	go func() { readErr <- readFire(aseq, inc) }()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	select {
+	case received := <-signals:
+		logger.Info("shutting down", "signal", received)
+		return nil
+	case err := <-readErr:
+		return err
+	}
+}
+
 func main() {
 	if err := run(); err != nil {
 		log.Println(err)
@@ -386,6 +435,7 @@ func run() error {
 	logLevel := flag.String("log-level", "info", "log verbosity: debug, info, warn or error")
 	logFormat := flag.String("log-format", "text", "log format: text or json")
 	flag.BoolVar(&sharedMIDIDestination, "shared-midi-destination", false, "broadcast MIDI output to all connected destinations")
+	flag.StringVar(&statePath, "state", "", "session file: loaded at startup when it exists, saved on exit, saved and loaded from the panel")
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -433,25 +483,34 @@ func run() error {
 	}
 	songbank = NewSongBank(f, patbank)
 
-	// A signal cannot interrupt the blocking read that ends this function, so it is handled
-	// where it can be: release everything sounding, close the client, and leave.
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-signals
-		logger.Info("shutting down", "signal", sig)
-		if err := shutdown(aseq); err != nil {
-			logger.Error("shutdown", "error", err)
-		}
-		os.Exit(0)
-	}()
-
 	inc := make(chan alsa.SeqEvent, 4)
 	processEvent = processPatternEvent
-	go func() {
-		for ev := range inc {
-			handleIncomingEvent(aseq, ev)
+
+	if statePath != "" {
+		stateKitPaths = kits.all()
+		if err := loadStateFile(statePath); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				// Starting empty when a set was on disk looks exactly like the set having
+				// been deleted, so an unreadable state file stops startup instead.
+				return fmt.Errorf("state %q: %w", statePath, err)
+			}
+			logger.Info("no state file to load, starting empty", "path", statePath)
 		}
+	}
+
+	handled := make(chan struct{})
+	go func() {
+		defer close(handled)
+		processIncomingEvents(aseq, inc)
 	}()
-	return readFire(aseq, inc)
+
+	// Leaving is the only thing this function does from here: wait to be asked, hand the
+	// request to the goroutine that owns the banks, and come back once it has saved. The
+	// deferred shutdown then runs on the way out as it does for every other exit, so the
+	// session is saved, everything sounding is released, the unit is blanked and the client
+	// is closed by one path whichever way the program ended.
+	leaveErr := waitForLeave(aseq, inc)
+	inc <- alsa.SeqEvent{}
+	<-handled
+	return leaveErr
 }

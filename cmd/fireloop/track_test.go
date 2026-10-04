@@ -29,16 +29,33 @@ func usePatternGlobals(t *testing.T, bank *PatternBank) {
 	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
 	previousProcess, previousClipboard := processEvent, patternClipboard
 	previousTapTimes := tapTempoTimes
+	previousStatePath, previousStateKit, previousBPM := statePath, stateKitPaths, bpm.Load()
 	t.Cleanup(func() {
 		patbank, songbank = previousPatbank, previousSongbank
 		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
 		processEvent, patternClipboard = previousProcess, previousClipboard
 		tapTempoTimes = previousTapTimes
+		statePath, stateKitPaths = previousStatePath, previousStateKit
+		bpm.Store(previousBPM)
 	})
 	patbank, songbank = bank, nil
 	shiftOn, altOn, playbackStop = false, false, nil
 	processEvent, patternClipboard = processPatternEvent, nil
 	tapTempoTimes = nil
+	statePath, stateKitPaths = "", nil
+	setBPM(defaultBPM)
+}
+
+// useStateGlobals gives a test a session path and a song bank, which is what the save and
+// load gestures read.
+func useStateGlobals(t *testing.T, path string, bank *PatternBank, songs *SongBank, kit []string) {
+	t.Helper()
+	usePatternGlobals(t, bank)
+	previousSongs := songbank
+	t.Cleanup(func() { songbank = previousSongs })
+	songbank = songs
+	statePath = path
+	stateKitPaths = kit
 }
 
 func pressPatternButton(t *testing.T, note int) {

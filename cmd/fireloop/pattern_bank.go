@@ -176,6 +176,71 @@ func (p *PatternBank) maxTrackOffsetLocked() int {
 	return len(p.trackVoices) - padRows
 }
 
+// snapshotSession copies the track window and hands back the pattern map under the lock
+// the playback worker reads the window through, so a save taken while a pattern plays
+// cannot race the redraw, and cannot see the bank half-way through a load.
+//
+// The map itself comes back by reference rather than copied. The patterns in it carry their
+// own locks and a save reads each one through them, so what needs protecting is the map,
+// and copying it would be a shallow copy that costs the walk twice.
+func (p *PatternBank) snapshotSession() ([]int, map[int]*Pattern) {
+	if p == nil {
+		return nil, nil
+	}
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	return append([]int(nil), p.trackVoices...), p.Patterns
+}
+
+// restoreState installs a loaded session. The pattern map is replaced whole rather than
+// merged, so a pattern that is gone from the file is gone from the session. The selection
+// is left where it was: where the user was looking is the display's business, not part of
+// a set, so a load only needs to make sure that pattern exists.
+func (p *PatternBank) restoreState(state stateFile, patterns map[int]*Pattern) {
+	if p == nil {
+		return
+	}
+	p.restoreTracks(state.TrackVoices)
+	p.trackMu.Lock()
+	if _, ok := patterns[p.selPatIdx]; !ok {
+		patterns[p.selPatIdx] = &Pattern{}
+	}
+	p.Patterns = patterns
+	p.trackMu.Unlock()
+}
+
+// restoreTracks clamps the loaded voices into what the kit can supply. A track holding a
+// voice that no longer exists takes the last one rather than being dropped, because a row
+// with no voice behind it cannot be edited at all.
+func (p *PatternBank) restoreTracks(voices []int) {
+	if p == nil || len(p.vb.voices) == 0 {
+		return
+	}
+	last := len(p.vb.voices) - 1
+	restored := make([]int, 0, len(voices))
+	for _, voice := range voices {
+		if voice < 0 {
+			voice = 0
+		}
+		if voice > last {
+			voice = last
+		}
+		restored = append(restored, voice)
+	}
+	p.trackMu.Lock()
+	p.trackVoices = restored
+	if len(p.trackVoices) < padRows {
+		p.growTracksToLocked(padRows)
+	}
+	if limit := maxTrackCount(len(p.vb.voices)); len(p.trackVoices) > limit {
+		p.trackVoices = p.trackVoices[:limit]
+	}
+	// A window scrolled by a longer track list would park the pads on rows with no track
+	// behind them, so it comes back to where this list can show.
+	p.trackOffset = clampIndex(p.trackOffset, 0, p.maxTrackOffsetLocked())
+	p.trackMu.Unlock()
+}
+
 // ScrollTracks moves the visible track window. Scrolling past the last track adds
 // tracks instead of stopping, so a pattern only takes on the tracks the user reaches
 // and a large kit does not open on a track list too long to work with. Navigation
@@ -214,9 +279,16 @@ func (p *PatternBank) CurrentPattern() *Pattern {
 	return p.Patterns[p.selPatIdx]
 }
 
+// PatternIdxMap maps each pattern back to the bank index it sits at.
 func (pb *PatternBank) PatternIdxMap() map[*Pattern]int {
+	return patternIndexMap(pb.Patterns)
+}
+
+// patternIndexMap does the mapping for a bank the caller has already snapshotted, so a save
+// reads the map it took once rather than walking the live one a second time.
+func patternIndexMap(patterns map[int]*Pattern) map[*Pattern]int {
 	ret := make(map[*Pattern]int)
-	for i, p := range pb.Patterns {
+	for i, p := range patterns {
 		ret[p] = i
 	}
 	return ret
@@ -235,13 +307,7 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 		oldPat = &Pattern{}
 		p.Patterns[p.selPatIdx] = oldPat
 	}
-	pat.mu.RLock()
-	events := append([]Event(nil), pat.Events...)
-	lengthSteps := pat.lengthSteps
-	pat.mu.RUnlock()
-	if lengthSteps == 0 {
-		lengthSteps = defaultPatternSteps
-	}
+	events, lengthSteps := pat.snapshot()
 	oldPat.mu.Lock()
 	oldPat.Events = events
 	oldPat.lengthSteps = lengthSteps
@@ -420,33 +486,46 @@ type textScreen interface {
 	ClearOLEDRows(y, n int) error
 }
 
-// printText writes to the text layer, falling back to the Fire when none was set.
-func (p *PatternBank) printText(row, col int, text string, inverted bool) error {
-	screen := p.textLayer()
-	if screen == nil {
+// textLayer is where text goes: the recorder in a test, the Fire otherwise. Both banks
+// draw through one, so each of them reaches the display the same way and a test can put a
+// recorder in front of either.
+func textLayer(screen textScreen, f *Fire) textScreen {
+	if screen != nil {
+		return screen
+	}
+	return f
+}
+
+// displayPrint writes text at a row and column, inverted when asked. No surface at all
+// means the bank was built without a display, which is how a test drives the handlers.
+func displayPrint(screen textScreen, f *Fire, row, col int, text string, inverted bool) error {
+	surface := textLayer(screen, f)
+	if surface == nil {
 		return nil
 	}
 	if inverted {
-		return screen.PrintInvert(col, row, text)
+		return surface.PrintInvert(col, row, text)
 	}
-	return screen.Print(col, row, text)
+	return surface.Print(col, row, text)
 }
 
-// clearTextRows blanks rows on the text layer.
-func (p *PatternBank) clearTextRows(row, n int) error {
-	screen := p.textLayer()
-	if screen == nil {
+// displayClear blanks rows on the text layer.
+func displayClear(screen textScreen, f *Fire, row, n int) error {
+	surface := textLayer(screen, f)
+	if surface == nil {
 		return nil
 	}
-	return screen.ClearOLEDRows(row, n)
+	return surface.ClearOLEDRows(row, n)
 }
 
-// textLayer is where text goes: the recorder in a test, the Fire otherwise.
-func (p *PatternBank) textLayer() textScreen {
-	if p.screen != nil {
-		return p.screen
-	}
-	return p.f
+// printText writes to the pattern bank's text layer.
+func (p *PatternBank) printText(row, col int, text string, inverted bool) error {
+	return displayPrint(p.screen, p.f, row, col, text, inverted)
+}
+
+// clearTextRows blanks rows on the pattern bank's text layer.
+func (p *PatternBank) clearTextRows(row, n int) error {
+	return displayClear(p.screen, p.f, row, n)
 }
 
 func (p *PatternBank) JogSelect(n int) error {

@@ -71,3 +71,19 @@ func (s *Song) IndexToBeat(idx int) (ret float32) {
 	s.mu.RUnlock()
 	return ret
 }
+
+// length is how many measures the song holds. The trailing empties are already trimmed,
+// so this is the last measure a save has to write.
+func (s *Song) length() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.Patterns)
+}
+
+// measurePatterns copies the measure slice, so a save reads the arrangement without
+// holding a pointer into a song that is still being edited.
+func (s *Song) measurePatterns() []*Pattern {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]*Pattern(nil), s.Patterns...)
+}

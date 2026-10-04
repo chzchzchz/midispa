@@ -41,6 +41,15 @@ func (p *Pattern) Copy() *Pattern {
 	return copyPattern
 }
 
+// snapshot returns the events and the resolved length under one read lock, so a save
+// cannot pair the events of one edit with the length of another. The length is resolved
+// because a stored zero means the legacy default rather than an empty pattern.
+func (p *Pattern) snapshot() ([]Event, int) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return append([]Event(nil), p.Events...), p.lengthStepsLocked()
+}
+
 // ToggleEvent returns true if event is added, false if deleted.
 func (p *Pattern) ToggleEvent(ev Event) bool {
 	p.mu.Lock()
@@ -298,10 +307,19 @@ func (p *Pattern) clearTieBeforeEventLocked(event Event) {
 }
 
 func (p *Pattern) lengthStepsLocked() int {
-	if p.lengthSteps == 0 {
+	return storedLengthSteps(p.lengthSteps)
+}
+
+// storedLengthSteps resolves a length that has not been through SetLengthSteps. A stored
+// zero is the legacy four-beat default rather than an empty pattern, and that is true of a
+// live pattern and of a length read back from a session file alike, so both resolve it
+// here: a rule written out twice would let the file and the pattern in memory disagree
+// about what a zero means.
+func storedLengthSteps(stored int) int {
+	if stored == 0 {
 		return defaultPatternSteps
 	}
-	return p.lengthSteps
+	return stored
 }
 
 // normalizeLocked keeps event order stable and makes every stored tie point to a valid successor.
@@ -338,12 +356,8 @@ func (p *Pattern) Beats() float32 {
 
 func (p *Pattern) LengthSteps() int {
 	p.mu.RLock()
-	steps := p.lengthSteps
-	p.mu.RUnlock()
-	if steps == 0 {
-		return defaultPatternSteps
-	}
-	return steps
+	defer p.mu.RUnlock()
+	return p.lengthStepsLocked()
 }
 
 func (p *Pattern) SetLengthSteps(steps int) int {

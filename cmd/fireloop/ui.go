@@ -102,27 +102,35 @@ func releaseModifiers() error {
 }
 
 // restoreIndicators re-applies the button lights, which a blackout turned off, so each
-// light again reports the state behind it.
-func restoreIndicators() error {
+// light again reports the state behind it. The caller knows which view is showing, so the
+// mode is passed in rather than looked up: the handler that runs is the record of the mode,
+// and a second record of it could disagree with this one.
+func restoreIndicators(song bool) error {
 	if patbank == nil || patbank.f == nil {
 		return nil
 	}
 	lights := map[int]int{
-		NoteAlt:      LEDOff,
-		NoteShift:    LEDOff,
-		NoteRecord:   LEDOff,
-		NoteMode:     LEDOff,
-		NoteOverview: LEDOff,
-		CCMuteLED1:   LEDOff,
-		CCMuteLED2:   LEDOff,
-		CCMuteLED3:   LEDOff,
-		CCMuteLED4:   LEDOff,
+		NoteAlt:         LEDOff,
+		NoteShift:       LEDOff,
+		NoteRecord:      LEDOff,
+		NoteMode:        LEDOff,
+		NoteOverview:    LEDOff,
+		NotePatternSong: LEDOff,
+		CCMuteLED1:      LEDOff,
+		CCMuteLED2:      LEDOff,
+		CCMuteLED3:      LEDOff,
+		CCMuteLED4:      LEDOff,
 	}
 	if altOn {
 		lights[NoteAlt] = LEDYellow
 	}
 	if shiftOn {
 		lights[NoteShift] = LEDRed
+	}
+	if song {
+		// The mode light reports which view is showing, so a wake from blackout has to
+		// put it back as well, or the display claims to be in a mode it is not in.
+		lights[NotePatternSong] = LEDGreen
 	}
 	if patternClipboard != nil {
 		lights[NoteRecord] = LEDGreen
@@ -149,7 +157,7 @@ func restoreIndicators() error {
 // the pattern view can be blacked out, so only that one is redrawn. The redraw is used
 // rather than Jump because the playback worker reads the selected pattern index, and a
 // blackout can happen while a pattern is playing.
-func wakeBlackout() error {
+func wakeBlackout(song bool) error {
 	if patbank == nil || patbank.f == nil {
 		return nil
 	}
@@ -157,7 +165,7 @@ func wakeBlackout() error {
 		return nil
 	}
 	logger.Info("wake from blackout")
-	if err := restoreIndicators(); err != nil {
+	if err := restoreIndicators(song); err != nil {
 		return err
 	}
 	return patbank.redraw()
@@ -236,7 +244,7 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		return nil
 	}
 	// A release must not end a blackout, so the wake waits for a real press.
-	if err := wakeBlackout(); err != nil {
+	if err := wakeBlackout(true); err != nil {
 		return err
 	}
 	if onGrid {
@@ -292,6 +300,8 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 			return err
 		}
 		return patbank.Jump(0)
+	case NoteBrowser, NoteAccent:
+		return handleStateButton(int(ev.Data[1]), true)
 	}
 	return nil
 }
@@ -307,6 +317,81 @@ func handlePatternMute(n int) error {
 		return patbank.ClearTrackRow(n)
 	}
 	return patbank.SelectTrackRow(n)
+}
+
+// handleStateButton binds the two unclaimed buttons to the state file. Both gestures take
+// Shift: Browser and Accent mean nothing on their own, and the modifier keeps a plain
+// press from writing over a set or replacing one mid-performance. Alt is not a candidate
+// because Shift plus Alt is the blackout. song is the view the caller is running, which a
+// load needs in order to repaint the right one.
+func handleStateButton(note int, song bool) error {
+	if !shiftOn {
+		return nil
+	}
+	switch note {
+	case NoteBrowser:
+		return saveSession()
+	case NoteAccent:
+		return loadSession(song)
+	}
+	return nil
+}
+
+// saveSession writes the session and reports on the readout row. It only reads the banks,
+// so it is safe while a pattern is playing, which is when it is most wanted.
+func saveSession() error {
+	if statePath == "" {
+		return reportState("No -state path")
+	}
+	report, err := saveState(statePath, patbank, songbank, stateKitPaths)
+	if err != nil {
+		logger.Error("state save failed", "path", statePath, "error", err)
+		return reportState(stateFailureText("Save failed", err))
+	}
+	logger.Info("state saved", append([]any{"path", statePath}, report.logAttrs()...)...)
+	return reportState(report.saveText())
+}
+
+// loadSession replaces the running session with the one on disk. A load stops playback
+// and repaints the view it was asked from, so what the unit shows afterwards is the set
+// that was loaded rather than the one that was there.
+func loadSession(song bool) error {
+	if statePath == "" {
+		return reportState("No -state path")
+	}
+	report, err := loadState(statePath, patbank, songbank, stateKitPaths)
+	if err != nil {
+		logger.Error("state load failed", "path", statePath, "error", err)
+		return reportState(stateFailureText("Load failed", err))
+	}
+	logger.Info("state loaded", append([]any{"path", statePath}, report.logAttrs()...)...)
+	// The repaint belongs here rather than in loadState, which is where the mode is
+	// known: this is only ever reached from the handler for the view in question.
+	if err := restoreIndicators(song); err != nil {
+		return err
+	}
+	if song {
+		err = songbank.Jump(0)
+	} else {
+		err = patbank.Jump(0)
+	}
+	if err != nil {
+		return err
+	}
+	return reportState(report.loadText())
+}
+
+// reportState writes a transient result on the readout row, the row the length and
+// chromatic readouts use. Anything already there is a readout too, so a message is
+// replaced by the next redraw rather than left to go stale.
+func reportState(text string) error {
+	if patbank == nil || patbank.f == nil {
+		return nil
+	}
+	if err := patbank.clearTextRows(lengthDisplayRow, 1); err != nil {
+		return err
+	}
+	return patbank.printText(lengthDisplayRow, 0, fitOLEDText(text), false)
 }
 
 func handlePatternGrid(aseq *alsa.Seq, x, y, vel int) error {
@@ -371,7 +456,7 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		return nil
 	}
 	// A release must not end a blackout, so the wake waits for a real press.
-	if err := wakeBlackout(); err != nil {
+	if err := wakeBlackout(false); err != nil {
 		return err
 	}
 	if onGrid {
@@ -503,6 +588,8 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 			return err
 		}
 		return songbank.Jump(0)
+	case NoteBrowser, NoteAccent:
+		return handleStateButton(int(ev.Data[1]), false)
 	}
 	return nil
 }
