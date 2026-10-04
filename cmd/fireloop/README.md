@@ -72,7 +72,7 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 - Grid left/right: move the current step cursor.
 - Overview: enter or leave length-edit mode.
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
-- Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid then selects pitches starting at MIDI 21 (A0), with four rows of sixteen semitones. Toggling Mode does not stop playback.
+- Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback.
 - Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step. The knob is not re-read from the step you select, so its value carries over to the next step.
 - Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
@@ -123,10 +123,13 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 1. Select a chromatic voice with Mute 1 through 4 and the Encoder if needed.
 2. In pattern/step mode, press a pad on the selected chromatic track to move the editing step cursor. This does not create or remove a note; two held pads still create a tie.
 3. Move the cursor with Grid left/right or by pressing another step pad. Steps beyond the current pattern length are ignored.
-4. Press Mode to enter note-edit mode. The pad grid becomes the pitch palette; press a palette pad to create or update the note at the cursor and audition it.
-5. How hard the palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed. The status line reports the same value, so what is heard and what is shown agree.
-6. The Volume encoder carries its own value rather than re-reading the selected step, so a step picked after you set the encoder takes the encoder's value on the next detent. Each detent moves it by one, clamped to 0..127. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, and a step with no note shows `S<STEP> --` with no velocity.
-7. Press Mode again to return to step mode. In note-edit mode, Alt plus a palette pad clears the current step, and Alt stays engaged.
+4. Press Mode to enter note-edit mode. The pad grid splits in two: the left twelve columns are the pitch palette and the rightmost four show the sixteen steps.
+5. The palette runs four rows from A1, each starting on A and spanning the twelve semitones to the G# above it, so the rows cover A1–G#2, A2–G#3, A3–G#4 and A4–G#5. Press a palette pad to create or update the note at the current step and audition it.
+6. The step strip reads four steps per row, in the same order as the step grid. Each cell is dark when the step holds no note and otherwise shows that note's colour, with the step being edited brightened. Press a cell to move the edit there.
+7. `A1`, the palette's first pad, means "no note", so pressing it clears the current step. `Alt` plus any palette pad does the same.
+8. How hard a palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it by one detent at a time, clamped to 0..127. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
+9. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note.
+10. Press Mode again to return to step mode.
 
 #### Chromatic note length
 

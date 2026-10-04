@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -253,11 +254,12 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	if !bank.NoteEditActive() {
 		t.Fatal("Mode did not enter note-edit mode")
 	}
-	if err := handlePatternGrid(nil, 0, 0, 100); err != nil {
+	if err := handlePatternGrid(nil, 1, 0, 100); err != nil {
 		t.Fatal(err)
 	}
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
-	if !ok || event.ChromaticNote != chromaticPaletteNote(0, 0) {
+	firstNote, _ := chromaticPaletteNote(0, 1)
+	if !ok || event.ChromaticNote != firstNote {
 		t.Fatalf("palette assignment = %+v/%v", event, ok)
 	}
 	preview := &captureMidiWriter{}
@@ -268,8 +270,8 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 		t.Fatalf("audition wrote %d messages, want 2", len(preview.events))
 	}
 	// The palette pad was pressed at pressVelocity, so that is the note's velocity.
-	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(chromaticPaletteNote(0, 0)), pressVelocity})
-	assertMidiData(t, preview.events[1], []byte{midi.MakeNoteOff(0), byte(chromaticPaletteNote(0, 0)), 0})
+	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(firstNote), pressVelocity})
+	assertMidiData(t, preview.events[1], []byte{midi.MakeNoteOff(0), byte(firstNote), 0})
 	if err := processPatternEvent(nil, padMessage(NoteGridRight, 100)); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +280,7 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	}
 	altOn = true
 	writeCount = 0
-	if err := handlePatternGrid(nil, 0, 0, 100); err != nil {
+	if err := handlePatternGrid(nil, 1, 0, 100); err != nil {
 		t.Fatal(err)
 	}
 	if writeCount != 3 {
@@ -317,7 +319,7 @@ func TestChromaticVelocityControl(t *testing.T) {
 	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
 		t.Fatal(err)
 	}
-	if err := handlePatternGrid(nil, 0, 0, 100); err != nil {
+	if err := handlePatternGrid(nil, 1, 0, 100); err != nil {
 		t.Fatal(err)
 	}
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
@@ -662,4 +664,199 @@ func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 		t.Fatalf("stop wrote %d messages, want note-on and note-off", len(writer.events))
 	}
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOff(0), 72, 0})
+}
+
+// The pitch palette is four octaves from A1, twelve semitones to the row, so every row
+// starts on A and the four columns past G# carry no pitch.
+func TestChromaticPaletteLayout(t *testing.T) {
+	if got, _ := chromaticPaletteNote(0, 0); got != 33 {
+		t.Fatalf("first palette note = %d (%s), want A1 at 33", got, midiNoteName(got))
+	}
+	if name := midiNoteName(33); name != "A1" {
+		t.Fatalf("MIDI 33 names as %q, want A1", name)
+	}
+	if chromaticPaletteColumns != 12 || chromaticStepColumns != 4 {
+		t.Fatalf("palette is %d columns with %d for steps, want 12 and 4", chromaticPaletteColumns, chromaticStepColumns)
+	}
+	if chromaticPaletteColumns+chromaticStepColumns != padColumns {
+		t.Fatalf("palette %d plus steps %d does not fill a %d column row",
+			chromaticPaletteColumns, chromaticStepColumns, padColumns)
+	}
+	if chromaticStepCells != maxPatternSteps {
+		t.Fatalf("step block has %d cells, want one per step", chromaticStepCells)
+	}
+	for row := 0; row < chromaticPaletteRows; row++ {
+		first, ok := chromaticPaletteNote(row, 0)
+		if !ok {
+			t.Fatalf("row %d has no first note", row)
+		}
+		if name := midiNoteName(first); name != fmt.Sprintf("A%d", row+1) {
+			t.Fatalf("row %d starts on %s, want A%d", row, name, row+1)
+		}
+		last, ok := chromaticPaletteNote(row, chromaticPaletteColumns-1)
+		if !ok {
+			t.Fatalf("row %d has no last note", row)
+		}
+		// Twelve semitones from A is a major seventh, so the row ends on the G# above
+		// its starting A: row 0 runs A1 up to G#2.
+		if name := midiNoteName(last); name != fmt.Sprintf("G#%d", row+2) {
+			t.Fatalf("row %d ends on %s, want G#%d", row, name, row+2)
+		}
+		if last-first != 11 {
+			t.Fatalf("row %d spans %d semitones, want the 11 from A to G#", row, last-first)
+		}
+		// The columns past the palette have no pitch at all.
+		for _, col := range []int{12, 13, 14, 15} {
+			if note, ok := chromaticPaletteNote(row, col); ok {
+				t.Fatalf("row %d column %d has pitch %d, want none", row, col, note)
+			}
+		}
+	}
+	if _, ok := chromaticPaletteNote(-1, 0); ok {
+		t.Fatal("a row above the palette reported a pitch")
+	}
+	if _, ok := chromaticPaletteNote(0, -1); ok {
+		t.Fatal("a column left of the palette reported a pitch")
+	}
+}
+
+// The right-hand block stands for the steps themselves: it reads in the same order as the
+// step grid, four per row, and covers every step exactly once.
+func TestChromaticStepBlockCoversEveryStep(t *testing.T) {
+	seen := make(map[int]bool, chromaticStepCells)
+	for row := 0; row < chromaticPaletteRows; row++ {
+		for offset := 0; offset < chromaticStepColumns; offset++ {
+			col := chromaticPaletteColumns + offset
+			step := chromaticStepAt(row, col)
+			if step != row*chromaticStepColumns+offset {
+				t.Fatalf("cell row %d offset %d = step %d", row, offset, step)
+			}
+			if step < 0 || step >= maxPatternSteps {
+				t.Fatalf("cell row %d offset %d maps outside the pattern: %d", row, offset, step)
+			}
+			if seen[step] {
+				t.Fatalf("step %d is shown by more than one cell", step)
+			}
+			seen[step] = true
+		}
+	}
+	if len(seen) != maxPatternSteps {
+		t.Fatalf("the block covers %d steps, want %d", len(seen), maxPatternSteps)
+	}
+	// The palette side of the grid is not a step.
+	for col := 0; col < chromaticPaletteColumns; col++ {
+		if step := chromaticStepAt(0, col); step >= 0 {
+			t.Fatalf("palette column %d reports step %d", col, step)
+		}
+	}
+	for _, pad := range [][2]int{{-1, 12}, {0, -1}, {chromaticPaletteRows, 12}, {0, padColumns}} {
+		if step := chromaticStepAt(pad[0], pad[1]); step >= 0 {
+			t.Fatalf("pad %v reports step %d", pad, step)
+		}
+	}
+}
+
+// Pressing a cell in the step block moves the edit there, and A1 clears the step's note.
+func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
+	bank := NewPatternBank(fire, voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	previousPatbank, previousSongbank := patbank, songbank
+	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
+	t.Cleanup(func() {
+		patbank, songbank = previousPatbank, previousSongbank
+		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
+	})
+	patbank, songbank = bank, nil
+	shiftOn, altOn, playbackStop = false, false, nil
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	voice := voiceBank.voices[0]
+
+	// Put a note on step 5, then select step 5 from the block rather than the grid.
+	if err := bank.setStepCursor(5); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.handleNoteEditPad(nil, 2, 3, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.setStepCursor(0); err != nil {
+		t.Fatal(err)
+	}
+	row, col := 1, chromaticPaletteColumns+1 // step 5
+	if err := bank.handleNoteEditPad(nil, row, col, 100); err != nil {
+		t.Fatal(err)
+	}
+	if bank.StepCursor() != 5 {
+		t.Fatalf("cursor = %d after pressing the step block, want 5", bank.StepCursor())
+	}
+	if _, ok := bank.CurrentPattern().EventAtStep(5, voice); !ok {
+		t.Fatal("the note on step 5 disappeared")
+	}
+	// A palette pad now edits step 5.
+	if err := bank.handleNoteEditPad(nil, 0, 5, 100); err != nil {
+		t.Fatal(err)
+	}
+	event, ok := bank.CurrentPattern().EventAtStep(5, voice)
+	if !ok {
+		t.Fatal("a palette pad stopped editing the selected step")
+	}
+	want, _ := chromaticPaletteNote(0, 5)
+	if event.ChromaticNote != want {
+		t.Fatalf("step 5 pitch = %d, want %d", event.ChromaticNote, want)
+	}
+
+	// A1 is the palette's first pad and means no note.
+	if err := bank.handleNoteEditPad(nil, 0, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bank.CurrentPattern().EventAtStep(5, voice); ok {
+		t.Fatal("A1 did not remove the note")
+	}
+	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); ok {
+		t.Fatal("A1 removed a note from the wrong step")
+	}
+}
+
+// A step cell shows that step's note colour, dark when the step is empty.
+func TestChromaticStepCellsShowNoteColours(t *testing.T) {
+	sim := newFireSim()
+	voiceBank := trackWindowKit(8, 0)
+	bank := NewPatternBank(NewFire(sim.write), voiceBank)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	voice := voiceBank.voices[0]
+	note, _ := chromaticPaletteNote(1, 4)
+	bank.CurrentPattern().SetChromaticNote(6, voice, note, 100)
+	if err := bank.SelectTrackRow(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.setStepCursor(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.ToggleNoteMode(); err != nil {
+		t.Fatal(err)
+	}
+	if err := bank.drawNotePalette(); err != nil {
+		t.Fatal(err)
+	}
+	row, col := 1, chromaticPaletteColumns+2 // step 6
+	index := row*padColumns + col
+	if sim.pads[index] != chromaticPaletteColor(note) {
+		t.Fatalf("step 6 cell = %v, want the note colour %v", sim.pads[index], chromaticPaletteColor(note))
+	}
+	// An empty step is dark.
+	emptyRow, emptyCol := 0, chromaticPaletteColumns // step 0
+	if sim.pads[emptyRow*padColumns+emptyCol] != [3]int{} {
+		t.Fatalf("empty step cell = %v, want dark", sim.pads[emptyRow*padColumns+emptyCol])
+	}
 }

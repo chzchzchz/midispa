@@ -441,7 +441,7 @@ func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
 	if event.Velocity != 60 {
 		t.Fatalf("velocity after a pitch change = %d, want the new press 60", event.Velocity)
 	}
-	if event.ChromaticNote != chromaticPaletteNote(1, 2) {
+	if want, _ := chromaticPaletteNote(1, 2); event.ChromaticNote != want {
 		t.Fatalf("pitch = %d, want the palette note", event.ChromaticNote)
 	}
 }
@@ -469,7 +469,7 @@ func TestTracePressVelocityBecomesTheNotesVelocity(t *testing.T) {
 		if err := bank.setStepCursor(0); err != nil {
 			t.Fatal(err)
 		}
-		if err := bank.handleNoteEditPad(preview, 0, 0, pressed); err != nil {
+		if err := bank.handleNoteEditPad(preview, 0, 1, pressed); err != nil {
 			t.Fatal(err)
 		}
 		event, ok := bank.CurrentPattern().EventAtStep(0, voice)

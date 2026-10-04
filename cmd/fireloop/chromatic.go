@@ -10,11 +10,18 @@ import (
 	"github.com/chzchzchz/midispa/sysex/akai"
 )
 
-// The palette is laid out as four consecutive sixteen-semitone bands.
+// The palette runs from A1 upwards, laid out so every row starts on A and spans the twelve
+// semitones to the G# above it, which is what "A to G#" means once octave numbering turns
+// over at A. It uses the first twelve columns of each sixteen-column pad row; the last four
+// are left dark, because a row that wrapped past G# would put the next row's A somewhere
+// unexpected. Rows therefore cover A1 to G#2, A2 to G#3, A3 to G#4 and A4 to G#5.
 const (
-	chromaticBaseNote        = 21
-	chromaticPaletteRows     = 4
-	chromaticPaletteColumns  = 16
+	chromaticBaseNote       = 33
+	chromaticPaletteRows    = 4
+	chromaticPaletteColumns = 12
+	// The columns past the palette are a strip of step indicators, one cell per step.
+	chromaticStepColumns     = padColumns - chromaticPaletteColumns
+	chromaticStepCells       = chromaticPaletteRows * chromaticStepColumns
 	defaultChromaticVelocity = midi.DataMax
 	chromaticVelocityStep    = 1
 )
@@ -46,14 +53,17 @@ func (p *PatternBank) NoteEditActive() bool {
 	return p != nil && p.editingNote
 }
 
-func chromaticPaletteNote(row, col int) int {
+// chromaticPaletteNote is the pitch at a palette position. A row or column outside the
+// palette has no pitch, which is reported rather than clamped, so pressing an unused
+// column cannot assign the first note of the first row by accident.
+func chromaticPaletteNote(row, col int) (int, bool) {
 	if row < 0 || row >= chromaticPaletteRows {
-		row = 0
+		return 0, false
 	}
 	if col < 0 || col >= chromaticPaletteColumns {
-		col = 0
+		return 0, false
 	}
-	return clampMidiDataValue(chromaticBaseNote + row*chromaticPaletteColumns + col)
+	return clampMidiDataValue(chromaticBaseNote + row*chromaticPaletteColumns + col), true
 }
 
 func midiNoteName(note int) string {
@@ -267,10 +277,11 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 	return true, p.printChromaticStatus()
 }
 
-// In note-edit mode the grid chooses a pitch, while Alt plus a pad removes the event.
-// handleNoteEditPad assigns the pressed palette pad's pitch to the step. How hard the pad
-// was hit sets the note's velocity, so a new step lands with the dynamics that were played
-// and the display reports that same value.
+// In note-edit mode the left block chooses a pitch for the current step and the right-hand
+// block chooses which step is being edited. Alt plus a pad removes the event, and so does
+// A1, the palette's first pad, which stands for "no note here". How hard a pad was hit sets
+// the note's velocity, so a new step lands with the dynamics that were played and the
+// display reports that same value.
 func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) error {
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() || !p.editingNote {
@@ -280,15 +291,29 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 	if pattern == nil {
 		return nil
 	}
+	if step := chromaticStepAt(row, col); step >= 0 {
+		// The right-hand block edits a step rather than assigning a pitch to one.
+		return p.setStepCursor(step)
+	}
 	step := p.stepCursor
-	if altOn {
+	note, onPalette := chromaticPaletteNote(row, col)
+	if !onPalette {
+		// Neither a pitch nor a step, so there is nothing here to edit.
+		return nil
+	}
+	if altOn || note == chromaticBaseNote {
+		// A1 is where the palette starts, which makes it the natural key for "no note".
+		reason := "palette"
+		if altOn {
+			reason = "alt"
+		}
 		pattern.RemoveEventAtStep(step, voice)
+		logger.Debug("pitch removed", "step", step, "via", reason)
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
 		return p.printChromaticStatus()
 	}
-	note := chromaticPaletteNote(row, col)
 	// How hard the pad was pressed is the step's dynamics, whether the note is new or its
 	// pitch is being changed. The Volume encoder still adjusts the value afterwards.
 	velocity := clampMidiDataValue(pressed)
@@ -357,6 +382,23 @@ func (p *PatternBank) ToggleNoteMode() error {
 	return p.setNoteEdit(!p.editingNote)
 }
 
+// stepCellColor is how one cell of the step strip reads: the step's note colour, dark when
+// the step holds no note, and brightened while it is the step being edited.
+func (p *PatternBank) stepCellColor(pattern *Pattern, voice *Voice, step int) [3]int {
+	if pattern == nil {
+		return [3]int{}
+	}
+	event, ok := pattern.EventAtStep(step, voice)
+	if !ok {
+		return [3]int{}
+	}
+	color := chromaticPaletteColor(event.NoteNumber())
+	if step == p.stepCursor {
+		color = markCursorColor(color)
+	}
+	return color
+}
+
 // The palette uses a stable color per pitch and highlights the current event's pitch.
 func (p *PatternBank) drawNotePalette() error {
 	if p == nil || p.f == nil {
@@ -366,24 +408,42 @@ func (p *PatternBank) drawNotePalette() error {
 	if voice == nil || !voice.IsChromatic() {
 		return nil
 	}
-	pads := make([]akai.Pad, 0, chromaticPaletteRows*chromaticPaletteColumns)
+	pads := make([]akai.Pad, 0, chromaticPaletteRows*padColumns)
+	pattern := p.CurrentPattern()
 	selectedNote := -1
-	if pattern := p.CurrentPattern(); pattern != nil {
+	if pattern != nil {
 		if event, ok := pattern.EventAtStep(p.stepCursor, voice); ok {
 			selectedNote = event.ChromaticNote
 		}
 	}
 	for row := 0; row < chromaticPaletteRows; row++ {
-		for col := 0; col < chromaticPaletteColumns; col++ {
-			note := chromaticPaletteNote(row, col)
-			color := chromaticPaletteColor(note)
-			if note == selectedNote {
-				color = oledWhite
+		for col := 0; col < padColumns; col++ {
+			color := [3]int{}
+			if step := chromaticStepAt(row, col); step >= 0 {
+				color = p.stepCellColor(pattern, voice, step)
+			} else if note, onPalette := chromaticPaletteNote(row, col); onPalette {
+				color = chromaticPaletteColor(note)
+				if note == selectedNote {
+					color = oledWhite
+				}
 			}
 			pads = append(pads, makePad(col, row, color))
 		}
 	}
 	return p.f.LightPadSlice(pads)
+}
+
+// chromaticStepAt maps a pad in the right-hand block to the step it stands for, or -1 when
+// the pad belongs to the pitch palette instead. The block reads in the same order as the
+// step grid, four steps per row.
+func chromaticStepAt(row, col int) int {
+	if row < 0 || row >= chromaticPaletteRows {
+		return -1
+	}
+	if col < chromaticPaletteColumns || col >= padColumns {
+		return -1
+	}
+	return row*chromaticStepColumns + (col - chromaticPaletteColumns)
 }
 
 func chromaticPaletteColor(note int) [3]int {
