@@ -2,6 +2,21 @@ package main
 
 import "testing"
 
+func TestFitOLEDTextCountsGlyphsNotBytes(t *testing.T) {
+	// A multi-byte rune sitting on the clip boundary is the case that matters: clipping by
+	// raw bytes there would cut the name inside it and leave half a character on the row.
+	if got := fitOLEDText("1234567890123456789é"); got != "1234567890123456789?" {
+		t.Fatalf("clipped name = %q, want %q", got, "1234567890123456789?")
+	}
+	if got := fitOLEDText("Körg und nochmal bitte"); got != "K?rg und nochmal bit" {
+		t.Fatalf("clipped name = %q, want %q", got, "K?rg und nochmal bit")
+	}
+	// A name that already fits is only replaced, not clipped.
+	if got := fitOLEDText("Snare [CHR]"); got != "Snare [CHR]" {
+		t.Fatalf("short name = %q, want it unchanged", got)
+	}
+}
+
 func TestStepStatusText(t *testing.T) {
 	chromatic, _ := chromaticTestVoice(t, nil)
 	drum := 36

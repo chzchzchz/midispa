@@ -1,6 +1,33 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
+
+// The font holds 256 byte glyphs and nothing else, so a rune outside printable ASCII has
+// none to draw. The device must receive exactly what a question mark produces: one glyph,
+// and column arithmetic that matches the bitmap sent.
+func TestPrintReplacesRunesTheFontCannotDraw(t *testing.T) {
+	var written [][]byte
+	f := NewFire(func(msg []byte) error {
+		written = append(written, msg)
+		return nil
+	})
+	if err := f.Print(0, 0, "Körg"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Print(0, 0, "K?rg"); err != nil {
+		t.Fatal(err)
+	}
+	if len(written) != 2 {
+		t.Fatalf("screen writes = %d, want 2", len(written))
+	}
+	if !bytes.Equal(written[0], written[1]) {
+		t.Fatalf("bytes for an undrawable name = %x, want the same as a question mark = %x",
+			written[0], written[1])
+	}
+}
 
 func TestClearOLEDRowsRejectsInvalidRange(t *testing.T) {
 	f := NewFire(func([]byte) error { return nil })

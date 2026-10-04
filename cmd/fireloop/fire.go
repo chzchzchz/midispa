@@ -262,6 +262,27 @@ func hexByte(b byte) string {
 	return string([]byte{digits[b>>4], digits[b&0xf]})
 }
 
+// fontPlaceholder stands in for a rune the 6x8 font has no glyph for, so a kit voice name
+// carrying an accent shows a question mark instead of whatever sits at that index of the
+// table. Replacing them also leaves one byte per glyph, which is what the width check and
+// the column arithmetic in printFont assume when they count with len.
+const fontPlaceholder = '?'
+
+// asciiFontText replaces every rune outside printable ASCII with fontPlaceholder, because
+// the font is a table of 256 byte glyphs and holds nothing else. Running it a second time
+// changes nothing, so a caller may sanitize before clipping to a fixed width.
+func asciiFontText(s string) string {
+	out := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r < ' ' || r > '~' {
+			out = append(out, fontPlaceholder)
+			continue
+		}
+		out = append(out, byte(r))
+	}
+	return string(out)
+}
+
 // Print rasterizes a string using character coordinates.
 func (f *Fire) Print(x, y int, s string) error {
 	return f.printFont(x, y, s, byte2glyph)
@@ -279,6 +300,7 @@ func (f *Fire) PrintInvert(x, y int, s string) error {
 }
 
 func (f *Fire) printFont(x, y int, s string, font func(byte) []byte) error {
+	s = asciiFontText(s)
 	if len(s)+x >= 128/6 || x < 0 || y < 0 || y >= 8 {
 		return errOutOfRange
 	}

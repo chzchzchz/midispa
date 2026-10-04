@@ -221,6 +221,9 @@ func (p *PatternBank) printStepStatus() error {
 }
 
 func fitOLEDText(text string) string {
+	// Replacing what the font cannot draw comes first so that the clip counts glyphs: every
+	// rune is one byte afterwards, so a cut can no longer land inside one.
+	text = asciiFontText(text)
 	if len(text) > oledTextWidth {
 		return strings.TrimSpace(text[:oledTextWidth])
 	}
