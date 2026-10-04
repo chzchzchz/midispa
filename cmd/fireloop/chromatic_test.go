@@ -190,26 +190,10 @@ func TestChromaticPatternEditingAndTieInvariants(t *testing.T) {
 }
 
 func TestModeDoesNotStopPlayback(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{
-		Channel: 1,
-		Voices:  []Voice{{Name: "lead", Channel: 1}},
-	}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
+	bank, _ := chromaBank(t)
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
-	previousPatbank, previousSongbank := patbank, songbank
-	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
-	t.Cleanup(func() {
-		patbank, songbank = previousPatbank, previousSongbank
-		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
-	})
-	patbank, songbank = bank, nil
-	shiftOn, altOn = false, false
 	stopCalled := false
 	playbackStop = func() error {
 		stopCalled = true
@@ -225,30 +209,13 @@ func TestModeDoesNotStopPlayback(t *testing.T) {
 
 func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	writeCount := 0
-	fire := NewFire(func([]byte) error {
+	bank, voice := chromaBankOn(t, func([]byte) error {
 		writeCount++
 		return nil
 	})
-	voiceBank := NewVoiceBank([]Device{{
-		Channel: 1,
-		Voices:  []Voice{{Name: "lead", Channel: 1}},
-	}})
-	voice := voiceBank.voices[0]
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
-	previousPatbank, previousSongbank := patbank, songbank
-	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
-	t.Cleanup(func() {
-		patbank, songbank = previousPatbank, previousSongbank
-		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
-	})
-	patbank, songbank = bank, nil
-	shiftOn, altOn, playbackStop = false, false, nil
 	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
 		t.Fatal(err)
 	}
@@ -296,27 +263,10 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 }
 
 func TestChromaticVelocityControl(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{
-		Channel: 1,
-		Voices:  []Voice{{Name: "lead", Channel: 1}},
-	}})
-	voice := voiceBank.voices[0]
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
+	bank, voice := chromaBank(t)
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
-	previousPatbank, previousSongbank := patbank, songbank
-	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
-	t.Cleanup(func() {
-		patbank, songbank = previousPatbank, previousSongbank
-		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
-	})
-	patbank, songbank = bank, nil
-	shiftOn, altOn, playbackStop = false, false, nil
 	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
 		t.Fatal(err)
 	}
@@ -356,27 +306,10 @@ func TestChromaticVelocityControl(t *testing.T) {
 // The encoder keeps its value across steps, so a step picked after the encoder was set
 // takes that value on the next detent instead of its own.
 func TestVelocityEncoderValueIsInheritedByTheNextStep(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{
-		Channel: 1,
-		Voices:  []Voice{{Name: "lead", Channel: 1}},
-	}})
-	voice := voiceBank.voices[0]
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
+	bank, voice := chromaBank(t)
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
-	previousPatbank, previousSongbank := patbank, songbank
-	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
-	t.Cleanup(func() {
-		patbank, songbank = previousPatbank, previousSongbank
-		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
-	})
-	patbank, songbank = bank, nil
-	shiftOn, altOn, playbackStop = false, false, nil
 
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 100)
@@ -428,26 +361,10 @@ func TestChromaticStatusText(t *testing.T) {
 }
 
 func TestChromaticPadSetsEditingStep(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{
-		Channel: 1,
-		Voices:  []Voice{{Name: "lead", Channel: 1}},
-	}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
+	bank, _ := chromaBank(t)
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
-	previousPatbank, previousSongbank := patbank, songbank
-	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
-	t.Cleanup(func() {
-		patbank, songbank = previousPatbank, previousSongbank
-		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
-	})
-	patbank, songbank = bank, nil
-	shiftOn, altOn, playbackStop = false, false, nil
 	if err := processPatternEvent(nil, padMessage(54+3, 100)); err != nil {
 		t.Fatal(err)
 	}
@@ -465,19 +382,10 @@ func TestChromaticPadSetsEditingStep(t *testing.T) {
 
 func TestChromaticPadGesturesAndReleases(t *testing.T) {
 	writeCount := 0
-	fire := NewFire(func([]byte) error {
+	bank, voice := chromaBankOn(t, func([]byte) error {
 		writeCount++
 		return nil
 	})
-	voiceBank := NewVoiceBank([]Device{{
-		Channel: 1,
-		Voices:  []Voice{{Name: "lead", Channel: 1}},
-	}})
-	voice := voiceBank.voices[0]
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
@@ -725,13 +633,7 @@ func TestChromaticPaletteLayout(t *testing.T) {
 // only state the palette octave is used from.
 func paletteTestBank(t *testing.T) (*PatternBank, *Voice, *fireSim) {
 	t.Helper()
-	sim := newFireSim()
-	kit := trackWindowKit(8, 0)
-	bank := NewPatternBank(NewFire(sim.write), kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
@@ -939,13 +841,7 @@ func TestPaletteFirstPadErasesAfterShift(t *testing.T) {
 // Outside note-edit mode the knob is still what chooses the track's voice, and the palette
 // is left where the user put it.
 func TestSelectKnobJogsVoiceOutsideNoteEdit(t *testing.T) {
-	sim := newFireSim()
-	kit := trackWindowKit(8, 0)
-	bank := NewPatternBank(NewFire(sim.write), kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, _ := quietBank(t, trackWindowKit(8, 0))
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
@@ -1011,14 +907,6 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
-	previousPatbank, previousSongbank := patbank, songbank
-	previousShift, previousAlt, previousCancel := shiftOn, altOn, playbackStop
-	t.Cleanup(func() {
-		patbank, songbank = previousPatbank, previousSongbank
-		shiftOn, altOn, playbackStop = previousShift, previousAlt, previousCancel
-	})
-	patbank, songbank = bank, nil
-	shiftOn, altOn, playbackStop = false, false, nil
 	if err := bank.ToggleNoteMode(); err != nil {
 		t.Fatal(err)
 	}
@@ -1087,14 +975,8 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 
 // A step cell shows that step's note colour, dark when the step is empty.
 func TestChromaticStepCellsShowNoteColours(t *testing.T) {
-	sim := newFireSim()
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(NewFire(sim.write), voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
+	voice := kit.voices[0]
 	note, _ := chromaticPaletteNote(1, 4, 0)
 	bank.CurrentPattern().SetChromaticNote(6, voice, note, 100)
 	if err := bank.SelectTrackRow(1); err != nil {
@@ -1125,14 +1007,7 @@ func TestChromaticStepCellsShowNoteColours(t *testing.T) {
 // the same pad again in note-edit mode must not rewrite the note the user navigated to,
 // until a note has been chosen at that step.
 func TestPalettePadThatSelectedTheStepIsRefused(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, voice := chromaBank(t)
 	pattern := bank.CurrentPattern()
 	original := 40 // E2, which the palette pad below would not choose
 	pattern.SetChromaticNote(6, voice, original, 100)
@@ -1183,14 +1058,7 @@ func TestPalettePadThatSelectedTheStepIsRefused(t *testing.T) {
 
 // The guard belongs to the step it was armed on: moving the cursor lifts it.
 func TestPaletteGuardLiftsWhenTheCursorMoves(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, voice := chromaBank(t)
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(6, voice, 40, 100)
 	if err := bank.SelectTrackRow(1); err != nil {
@@ -1231,14 +1099,7 @@ func TestPaletteGuardLiftsWhenTheCursorMoves(t *testing.T) {
 // The pad standing for step 1 is also A1, the erase key, so the guard has to run before
 // the removal or it deletes the note it is meant to protect. Alt still clears.
 func TestStepOnePadDoesNotEraseTheNote(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, voice := chromaBank(t)
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 43, 100) // G2 on step 1
 	if err := bank.SelectTrackRow(1); err != nil {
@@ -1287,14 +1148,8 @@ func stripCell(sim *fireSim, step int) [3]int {
 // Playing a pattern while choosing notes must not disturb the palette. The column
 // playhead repaints every pad row, which in note-edit mode is the palette.
 func TestNoteEditPlayheadLeavesThePaletteAlone(t *testing.T) {
-	sim := newFireSim()
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(NewFire(sim.write), voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
+	voice := kit.voices[0]
 	for _, step := range []int{1, 3, 7} {
 		bank.CurrentPattern().SetChromaticNote(step, voice, 36+step, 100)
 	}
@@ -1324,14 +1179,8 @@ func TestNoteEditPlayheadLeavesThePaletteAlone(t *testing.T) {
 // In note-edit mode the playhead moves along the step strip, one cell per step, and the
 // cell it leaves goes back to that step's note colour.
 func TestNoteEditPlayheadLightsTheStepStrip(t *testing.T) {
-	sim := newFireSim()
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(NewFire(sim.write), voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
+	voice := kit.voices[0]
 	bank.CurrentPattern().SetChromaticNote(5, voice, 40, 100)
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
@@ -1369,14 +1218,8 @@ func TestNoteEditPlayheadLightsTheStepStrip(t *testing.T) {
 
 // Stopping must put the strip back, or a lit cell outlives the playback that put it there.
 func TestNoteEditPlayheadClearsOnStop(t *testing.T) {
-	sim := newFireSim()
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(NewFire(sim.write), voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
+	voice := kit.voices[0]
 	bank.CurrentPattern().SetChromaticNote(5, voice, 40, 100)
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
@@ -1417,13 +1260,7 @@ func playheadTestKit() *VoiceBank {
 // The playhead must not flatten a chromatic step to green. It keeps the pitch colour, and
 // the column behind it restores that exact colour rather than a flat one.
 func TestPlayheadKeepsChromaticPitchColour(t *testing.T) {
-	sim := newFireSim()
-	kit := playheadTestKit()
-	bank := NewPatternBank(NewFire(sim.write), kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, kit, sim := recordedBank(t, playheadTestKit())
 	chromatic, percussive := kit.voices[0], kit.voices[1]
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(3, chromatic, 40, 100) // E2, untied
@@ -1457,13 +1294,7 @@ func TestPlayheadKeepsChromaticPitchColour(t *testing.T) {
 // A tie is marked by pushing the colour away from the playhead, which means lifting it
 // normally and lowering it when inverted, where lifting would be invisible.
 func TestPlayheadMarksTiesBothWays(t *testing.T) {
-	sim := newFireSim()
-	kit := playheadTestKit()
-	bank := NewPatternBank(NewFire(sim.write), kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, kit, sim := recordedBank(t, playheadTestKit())
 	voice := kit.voices[0]
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(3, voice, 40, 100)
@@ -1504,14 +1335,7 @@ func stepCellPad(step int) int {
 // playback honouring it: two step cells held together tie the two steps, the same gesture
 // step mode uses on the step grid. This drives the pads through the real handler.
 func TestNoteEditStepCellsTieSteps(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, voice := chromaBank(t)
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 100)
 	pattern.SetChromaticNote(3, voice, 64, 100)
@@ -1583,14 +1407,7 @@ func TestNoteEditStepCellsTieSteps(t *testing.T) {
 // refused whole: the edit does not jump to a step whose note has nothing to hold, and the
 // pattern is left as it was.
 func TestNoteEditTieGestureRefusesWhenItCannotTie(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	voice := voiceBank.voices[0]
+	bank, voice := chromaBank(t)
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 100)
 	pattern.SetChromaticNote(4, voice, 64, 100)

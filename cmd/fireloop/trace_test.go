@@ -295,12 +295,7 @@ func contains(values []string, want string) bool {
 // Tempo entry writes its number on one row. Wiping the whole display made it look like a
 // blackout: the screen went dark while the pads stayed lit.
 func TestTraceTempoEntryOnlyClearsItsRow(t *testing.T) {
-	sim := newFireSim()
-	bank := NewPatternBank(NewFire(sim.write), trackWindowKit(8, -1))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	_, _, sim := recordedBank(t, trackWindowKit(8, -1))
 	// Light the grid first, so a later blank could be told from never having been lit.
 	for _, step := range []uiStep{press("select row 1", NoteMute1), press("toggle a step", 54)} {
 		if err := processPatternEvent(nil, padMessage(step.note, step.vel)); err != nil {
@@ -333,14 +328,7 @@ func TestTraceTempoEntryOnlyClearsItsRow(t *testing.T) {
 // The status line has to show each step's own velocity. Two steps holding different
 // velocities that read back the same means the display is showing the wrong one.
 func TestTraceStatusShowsEachStepItsOwnVelocity(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	recorder := useScreenRecorder(t, bank)
+	bank, voiceBank, recorder := screenBank(t, trackWindowKit(8, 0))
 	voice := voiceBank.voices[0]
 	bank.CurrentPattern().SetChromaticNote(0, voice, 60, 83)
 	bank.CurrentPattern().SetChromaticNote(4, voice, 62, 99)
@@ -371,14 +359,7 @@ func TestTraceStatusShowsEachStepItsOwnVelocity(t *testing.T) {
 // A step with no note must not display a velocity. The value a new note would inherit is
 // not that step's velocity, and showing it there made two steps look equal.
 func TestTraceEmptyStepShowsNoVelocity(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	recorder := useScreenRecorder(t, bank)
+	bank, voiceBank, recorder := screenBank(t, trackWindowKit(8, 0))
 	voice := voiceBank.voices[0]
 	bank.CurrentPattern().SetChromaticNote(0, voice, 60, 83)
 	if err := bank.SelectTrackRow(1); err != nil {
@@ -406,14 +387,7 @@ func TestTraceEmptyStepShowsNoVelocity(t *testing.T) {
 
 // Moving onto a step with a pad shows that step's velocity without disturbing the encoder.
 func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	recorder := useScreenRecorder(t, bank)
+	bank, voiceBank, recorder := screenBank(t, trackWindowKit(8, 0))
 	voice := voiceBank.voices[0]
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 83)
@@ -451,14 +425,7 @@ func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
 // How hard the palette pad was pressed becomes the note's velocity, and the display
 // reports that same number rather than a fixed one.
 func TestTracePressVelocityBecomesTheNotesVelocity(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := trackWindowKit(8, 0)
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	recorder := useScreenRecorder(t, bank)
+	bank, voiceBank, recorder := screenBank(t, trackWindowKit(8, 0))
 	voice := voiceBank.voices[0]
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)

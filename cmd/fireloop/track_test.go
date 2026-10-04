@@ -64,11 +64,7 @@ func assertVisibleTracks(t *testing.T, bank *PatternBank, first int) {
 
 func TestAltPatternButtonsScrollTracks(t *testing.T) {
 	recorder := &ledRecorder{}
-	bank := NewPatternBank(NewFire(recorder.write), trackWindowKit(8, -1))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank := quietBankOn(t, trackWindowKit(8, -1), recorder.write)
 	if got := bank.headerText(); got != "Pattern 001  1/4" {
 		t.Fatalf("initial header = %q", got)
 	}
@@ -114,11 +110,7 @@ func TestAltPatternButtonsScrollTracks(t *testing.T) {
 // A pattern only takes on tracks the user scrolls to, so the count follows the window
 // instead of the size of the kit.
 func TestTrackWindowGrowsOnDemand(t *testing.T) {
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), trackWindowKit(8, -1))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, _ := quietBank(t, trackWindowKit(8, -1))
 	if bank.TrackCount() != padRows {
 		t.Fatalf("starting track count = %d, want the %d pad rows", bank.TrackCount(), padRows)
 	}
@@ -154,11 +146,7 @@ func TestTrackWindowGrowsOnDemand(t *testing.T) {
 }
 
 func TestLargeKitStartsWithPadRows(t *testing.T) {
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), trackWindowKit(100, -1))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, _ := quietBank(t, trackWindowKit(100, -1))
 	if bank.TrackCount() != padRows {
 		t.Fatalf("large kit opened %d tracks, want %d", bank.TrackCount(), padRows)
 	}
@@ -180,11 +168,7 @@ func TestLargeKitStartsWithPadRows(t *testing.T) {
 }
 
 func TestTrackWindowStopsOnRealTracks(t *testing.T) {
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), trackWindowKit(10, -1))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, _ := quietBank(t, trackWindowKit(10, -1))
 	if err := bank.ScrollTracks(50); err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +194,7 @@ func TestTrackWindowStopsOnRealTracks(t *testing.T) {
 
 // A wide kit must still fit the header, and every character in it needs a font glyph.
 func TestTrackWindowHeaderStaysReadable(t *testing.T) {
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), trackWindowKit(100, -1))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, _ := quietBank(t, trackWindowKit(100, -1))
 	if err := bank.ScrollTracks(96); err != nil {
 		t.Fatal(err)
 	}
@@ -296,12 +276,7 @@ func TestTrackWindowIsSafeDuringPlaybackDraws(t *testing.T) {
 // Every writer wraps or clamps the voice index, so a track never points outside the
 // kit. The track lookup relies on that rather than re-checking each time.
 func TestTrackVoicesStayInsideTheKit(t *testing.T) {
-	voiceBank := trackWindowKit(6, -1)
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, voiceBank := quietBank(t, trackWindowKit(6, -1))
 	assertTrackVoicesInKit(t, bank)
 	for row := 1; row <= padRows; row++ {
 		if err := bank.SelectTrackRow(row); err != nil {
@@ -340,11 +315,7 @@ func assertTrackVoicesInKit(t *testing.T, bank *PatternBank) {
 }
 
 func TestSmallKitFillsEveryRow(t *testing.T) {
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), trackWindowKit(2, -1))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, _ := quietBank(t, trackWindowKit(2, -1))
 	if bank.TrackCount() != padRows {
 		t.Fatalf("track count = %d, want %d", bank.TrackCount(), padRows)
 	}
@@ -358,12 +329,7 @@ func TestSmallKitFillsEveryRow(t *testing.T) {
 }
 
 func TestTrackWindowEditsVisibleTracks(t *testing.T) {
-	voiceBank := trackWindowKit(8, 6)
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, voiceBank := quietBank(t, trackWindowKit(8, 6))
 	if err := bank.ScrollTracks(2); err != nil {
 		t.Fatal(err)
 	}
@@ -400,12 +366,7 @@ func TestTrackWindowEditsVisibleTracks(t *testing.T) {
 }
 
 func TestTrackWindowChromaticEditingFollowsRow(t *testing.T) {
-	voiceBank := trackWindowKit(8, 5)
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, voiceBank := quietBank(t, trackWindowKit(8, 5))
 	voice := voiceBank.voices[5]
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 90)
@@ -438,11 +399,7 @@ func TestTrackWindowChromaticEditingFollowsRow(t *testing.T) {
 }
 
 func TestScrollTracksClosesNoteEditOnScrolledRow(t *testing.T) {
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), trackWindowKit(8, 0))
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, _ := quietBank(t, trackWindowKit(8, 0))
 	if err := bank.SelectTrackRow(1); err != nil {
 		t.Fatal(err)
 	}
@@ -531,12 +488,7 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 // Alt plus a solo button clears the row's notes, which changes what is being played, so
 // that one does stop playback. It must not drag the plain selection path down with it.
 func TestAltSoloStillStopsPlayback(t *testing.T) {
-	kit := trackWindowKit(8, 0)
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	bank, kit := quietBank(t, trackWindowKit(8, 0))
 	voice := kit.voices[0]
 	bank.CurrentPattern().ToggleEvent(Event{Voice: voice, Beat: stepBeat(0), Velocity: 100})
 	stopped := 0
