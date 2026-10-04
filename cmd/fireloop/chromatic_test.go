@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -1643,5 +1644,121 @@ func TestNoteEditTieGestureRefusesWhenItCannotTie(t *testing.T) {
 	press(0, 0)
 	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
 		t.Fatal("a released cell still took part in the gesture")
+	}
+}
+
+// A tie between two notes of the same pitch reuses the sounding note, so the tied step sends
+// nothing at all: one note-on for the whole chain, however long it runs. Releasing and
+// retriggering instead would sound as two notes with a gap in them, which is what the step
+// expiry would do if it did not know about the tie.
+func TestSamePitchTieSendsOneNoteOnAcrossTheChain(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	pattern := &Pattern{}
+	for _, step := range []int{0, 3, 6} {
+		pattern.SetChromaticNote(step, voice, 60, 100)
+	}
+	if !pattern.TieEventsAtSteps(0, 3, voice) {
+		t.Fatal("tie 1-4 refused")
+	}
+	if !pattern.TieEventsAtSteps(3, 6, voice) {
+		t.Fatal("tie 4-7 refused")
+	}
+	// Each tied step extends the note by one more step, so the chain covers steps 1 to 7 and
+	// the note stops at step 8.
+	want := map[int][]string{
+		0: {"on 60"},
+		1: nil,
+		2: nil,
+		3: nil,
+		4: nil,
+		5: nil,
+		6: nil,
+		7: {"off 60"},
+	}
+	assertChromaticSteps(t, voice, pattern, want)
+}
+
+// The same pitch without a tie is a fresh note, so the old one stops before the new one
+// starts. The contrast is what makes the tied case above meaningful: both look alike on the
+// grid until the tie is there or not.
+func TestSamePitchWithoutATieRetriggers(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	pattern := &Pattern{}
+	pattern.SetChromaticNote(0, voice, 60, 100)
+	pattern.SetChromaticNote(3, voice, 60, 100)
+	want := map[int][]string{
+		0: {"on 60"},
+		1: {"off 60"},
+		2: nil,
+		3: {"on 60"},
+		4: {"off 60"},
+	}
+	assertChromaticSteps(t, voice, pattern, want)
+}
+
+// assertChromaticSteps plays a pattern one step at a time and compares the MIDI each step
+// wrote against what it was given, spelled as "on 60" or "off 60".
+func assertChromaticSteps(t *testing.T, voice *Voice, pattern *Pattern, want map[int][]string) {
+	t.Helper()
+	writer := &captureMidiWriter{}
+	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
+	for step := 0; step < len(want); step++ {
+		playback.setPosition(stepBeat(step), stepBeat(step))
+		if _, err := playback.playBeat(writer, pattern); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, event := range writer.events {
+			kind := "on"
+			if midi.IsNoteOff(event.Data[0]) {
+				kind = "off"
+			}
+			got = append(got, fmt.Sprintf("%s %d", kind, event.Data[1]))
+		}
+		if strings.Join(got, ", ") != strings.Join(want[step], ", ") {
+			t.Fatalf("step %d wrote [%s], want [%s]", step+1,
+				strings.Join(got, ", "), strings.Join(want[step], ", "))
+		}
+		writer.events = nil
+	}
+}
+
+// The velocity of a tied step is never heard, because a same-pitch tie writes nothing at all:
+// no new note starts, so no new dynamics can. The note sounds with the velocity it was given
+// at its own step, all the way to where it stops.
+func TestSamePitchTieKeepsTheFirstVelocity(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	pattern := &Pattern{}
+	pattern.SetChromaticNote(0, voice, 60, 40)
+	pattern.SetChromaticNote(3, voice, 60, midi.DataMax)
+	if !pattern.TieEventsAtSteps(0, 3, voice) {
+		t.Fatal("tie 1-4 refused")
+	}
+	writer := &captureMidiWriter{}
+	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
+	for step := 0; step <= 4; step++ {
+		playback.setPosition(stepBeat(step), stepBeat(step))
+		if _, err := playback.playBeat(writer, pattern); err != nil {
+			t.Fatal(err)
+		}
+		switch step {
+		case 0:
+			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 60, 40})
+			if len(writer.events) != 1 {
+				t.Fatalf("step 1 wrote %d messages, want only the note-on", len(writer.events))
+			}
+		case 3:
+			// The tied step is silent on the wire, so its velocity cannot be applied.
+			if len(writer.events) != 0 {
+				t.Fatalf("step 4 wrote %d messages, want none from a same-pitch tie", len(writer.events))
+			}
+		case 4:
+			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), 60, 0})
+		default:
+			if len(writer.events) != 0 {
+				t.Fatalf("step %d wrote %d messages, want none while the note is held", step+1, len(writer.events))
+			}
+		}
+		writer.events = nil
 	}
 }

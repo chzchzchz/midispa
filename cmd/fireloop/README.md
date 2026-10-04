@@ -152,7 +152,7 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 A chromatic note lasts one sixteenth-note step. It stops as soon as the playhead moves to the next step, so a lone note is a short hit rather than a sound that rings for the rest of the pattern.
 
 - To hold a note longer, tie it. A tie keeps the note sounding past its step until the tied event arrives, and a chain of ties holds it further still.
-- A tie between two notes of the same pitch reuses the sounding note, so there is no retrigger. A tie to a different pitch is legato: the new pitch starts before the old one stops.
+- A tie between two notes of the same pitch reuses the sounding note, so there is no retrigger: the tied step writes nothing to the wire and the note is simply held for another step. The tied step's own velocity is not heard either, since no new note starts. A tie to a different pitch is legato: the new pitch starts before the old one stops.
 - Untied notes retrigger, so a note followed by another on the same voice stops exactly where the next one begins.
 - Stopping playback, switching pattern, or reaching the end of a pattern releases anything still sounding.
 
