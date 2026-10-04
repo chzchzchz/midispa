@@ -14,7 +14,28 @@ var errOutOfRange = errors.New("out of range")
 // padColumns is the width of the hardware pad grid, which is four rows of sixteen.
 const padColumns = 16
 
+// oledTextWidth is how many characters a readout row holds. The screen is 128 columns wide
+// and a character is six, so a row could carry 21; readout text is built to 20 so a figure
+// at the end is never left half cut, because fitOLEDText trims at this width and a number
+// cut in half still reads as a number that is true.
+const oledTextWidth = 20
+
 type writeFunc func([]byte) error
+
+// encoderDirection is which way a knob was turned, and whether it was turned at all. A
+// knob sends 127 for one way and 1 for the other and nothing else, so a value that is
+// neither is not a turn. Reading it as a turn anyway would move whatever the knob drives
+// whenever the hardware sent anything else.
+func encoderDirection(value int) (direction int, turning bool) {
+	switch value {
+	case EncoderRight:
+		return 1, true
+	case EncoderLeft:
+		return -1, true
+	default:
+		return 0, false
+	}
+}
 
 // Fire hardware definitions. Do not remove entries just because they are
 // currently unused; their values map directly to Fire notes and controls.

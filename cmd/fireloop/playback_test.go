@@ -101,3 +101,140 @@ func TestPatternDuration(t *testing.T) {
 		t.Fatalf("two-beat pattern duration = %s, want 1s", got)
 	}
 }
+
+// A percussive step plays back with the dynamics it holds, which is the whole point of
+// letting the knob set them: a soft hit and a hard hit must not sound the same.
+func TestPercussionPlaybackHonoursTheStoredVelocity(t *testing.T) {
+	note := 36
+	voice, _ := chromaticTestVoice(t, &note)
+	pattern := &Pattern{}
+	pattern.ToggleEvent(Event{Voice: voice, Beat: stepBeat(0), Velocity: 40})
+	pattern.ToggleEvent(Event{Voice: voice, Beat: stepBeat(4), Velocity: 100})
+	writer := &captureMidiWriter{}
+	playback := &Playback{}
+	playback.setPosition(0, 0)
+	if _, err := playback.playBeat(writer, pattern); err != nil {
+		t.Fatal(err)
+	}
+	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), byte(note), 40})
+	writer.events = nil
+	playback.setPosition(stepBeat(4), stepBeat(4))
+	if _, err := playback.playBeat(writer, pattern); err != nil {
+		t.Fatal(err)
+	}
+	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), byte(note), 100})
+}
+
+func TestChromaticMIDIOrderingAndCleanup(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	writer := &captureMidiWriter{}
+	playback := &Playback{}
+	first := Event{Voice: voice, ChromaticNote: 60, Velocity: 77, Tie: true}
+	if err := playback.playChromaticEvent(writer, first); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("first event wrote %d messages, want 1", len(writer.events))
+	}
+	assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 60, 77})
+	second := Event{Voice: voice, ChromaticNote: 60, Velocity: 78, Tie: true}
+	if err := playback.playChromaticEvent(writer, second); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("same-pitch tie wrote %d messages, want 1", len(writer.events))
+	}
+	third := Event{Voice: voice, ChromaticNote: 62, Velocity: 79, Tie: true}
+	if err := playback.playChromaticEvent(writer, third); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 3 {
+		t.Fatalf("different-pitch tie wrote %d messages, want 3", len(writer.events))
+	}
+	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), 62, 79})
+	assertMidiData(t, writer.events[2], []byte{midi.MakeNoteOff(0), 60, 0})
+	if err := playback.releaseAll(writer); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 4 {
+		t.Fatalf("cleanup wrote %d messages, want 4", len(writer.events))
+	}
+	assertMidiData(t, writer.events[3], []byte{midi.MakeNoteOff(0), 62, 0})
+
+	percussionNote := 60
+	percussion, _ := chromaticTestVoice(t, &percussionNote)
+	percussionEvent := Event{Voice: percussion, Velocity: 55}
+	messages := percussionEvent.ToMidi()
+	if len(messages) != 2 {
+		t.Fatalf("percussion ToMidi returned %d messages, want 2", len(messages))
+	}
+	assertMidiData(t, alsa.SeqEvent{Data: messages[0]}, []byte{midi.MakeNoteOff(0), 60, 55})
+	assertMidiData(t, alsa.SeqEvent{Data: messages[1]}, []byte{midi.MakeNoteOn(0), 60, 55})
+}
+
+func TestMixedPercussiveAndChromaticPlayback(t *testing.T) {
+	percussionNote := 36
+	device := Device{
+		Name:     "mixed",
+		MidiPort: "out",
+		Channel:  1,
+		Voices: []Voice{
+			{Name: "lead"},
+			{Name: "kick", Note: &percussionNote},
+		},
+		SeqAddr: alsa.SeqAddr{Client: 10, Port: 20},
+	}
+	voiceBank := NewVoiceBank([]Device{device})
+	pattern := &Pattern{}
+	pattern.SetChromaticNote(0, voiceBank.voices[0], 60, 91)
+	pattern.ToggleEvent(Event{Voice: voiceBank.voices[1], Beat: 0, Velocity: 100})
+	writer := &captureMidiWriter{}
+	playback := &Playback{}
+	playback.setPosition(0, 0)
+	if _, err := playback.playBeat(writer, pattern); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 3 {
+		t.Fatalf("mixed pattern wrote %d messages, want 3", len(writer.events))
+	}
+	var chromaticOn, percussionOff, percussionOn bool
+	for _, event := range writer.events {
+		switch midi.Message(event.Data[0]) {
+		case midi.NoteOn:
+			if event.Data[1] == 60 {
+				chromaticOn = true
+			} else {
+				percussionOn = true
+			}
+		case midi.NoteOff:
+			percussionOff = true
+		}
+	}
+	if !chromaticOn || !percussionOff || !percussionOn {
+		t.Fatalf("mixed MIDI types missing: chromatic=%v off=%v on=%v", chromaticOn, percussionOff, percussionOn)
+	}
+}
+
+func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	writer := &captureMidiWriter{}
+	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
+	if err := playback.playChromaticEvent(writer, Event{Voice: voice, ChromaticNote: 72, Velocity: 88}); err != nil {
+		t.Fatal(err)
+	}
+	previousPatbank, previousSongbank, previousCancel := patbank, songbank, playbackStop
+	t.Cleanup(func() {
+		patbank, songbank, playbackStop = previousPatbank, previousSongbank, previousCancel
+	})
+	patbank = &PatternBank{playback: playback}
+	songbank = nil
+	playbackStop = nil
+	stopPlayback()
+	if playback.activeNoteCount() != 0 {
+		t.Fatal("stop left an active chromatic note")
+	}
+	if len(writer.events) != 2 {
+		t.Fatalf("stop wrote %d messages, want note-on and note-off", len(writer.events))
+	}
+	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOff(0), 72, 0})
+}

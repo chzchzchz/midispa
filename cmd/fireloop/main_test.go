@@ -445,3 +445,28 @@ func (f *fakeReader) Read() (alsa.SeqEvent, error) {
 	f.index++
 	return ev, nil
 }
+
+func TestSharedMIDIDestination(t *testing.T) {
+	previous := sharedMIDIDestination
+	t.Cleanup(func() { sharedMIDIDestination = previous })
+	destination := alsa.SeqAddr{Client: 28, Port: 0}
+	message := []byte{midi.MakeNoteOn(0), 60, 100}
+
+	sharedMIDIDestination = false
+	writer := &captureMidiWriter{}
+	if err := writeMidiMsgs(writer, destination, [][]byte{message}); err != nil {
+		t.Fatal(err)
+	}
+	if writer.events[0].SeqAddr != destination {
+		t.Fatalf("per-device destination = %v, want %v", writer.events[0].SeqAddr, destination)
+	}
+
+	sharedMIDIDestination = true
+	writer = &captureMidiWriter{}
+	if err := writeMidiMsgs(writer, destination, [][]byte{message}); err != nil {
+		t.Fatal(err)
+	}
+	if writer.events[0].SeqAddr != alsa.SubsSeqAddr {
+		t.Fatalf("shared destination = %v, want %v", writer.events[0].SeqAddr, alsa.SubsSeqAddr)
+	}
+}

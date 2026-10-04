@@ -114,3 +114,45 @@ func TestSetPatternCopiesEvents(t *testing.T) {
 		t.Fatalf("pasted pattern length = %d, want 8", got)
 	}
 }
+
+func TestChromaticPatternEditingAndTieInvariants(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	pattern := &Pattern{}
+	first, ok := pattern.SetChromaticNote(0, voice, 60, 90)
+	if !ok || first.ChromaticNote != 60 || first.Velocity != 90 {
+		t.Fatalf("first chromatic edit = %+v/%v", first, ok)
+	}
+	pattern.SetChromaticNote(1, voice, 62, 91)
+	pattern.SetChromaticNote(2, voice, 64, 92)
+	if pattern.TieEventsAtSteps(0, 2, voice) {
+		t.Fatal("tie crossed an intervening event")
+	}
+	if !pattern.TieEventsAtSteps(1, 0, voice) {
+		t.Fatal("reversed two-pad arrival did not create a tie")
+	}
+	firstEvent, _ := pattern.EventAtStep(0, voice)
+	if !firstEvent.Tie {
+		t.Fatal("tie was not stored on the earlier event")
+	}
+	pattern.SetChromaticNote(0, voice, 67, 90)
+	firstEvent, _ = pattern.EventAtStep(0, voice)
+	if !firstEvent.Tie || firstEvent.ChromaticNote != 67 {
+		t.Fatalf("pitch edit lost tie: %+v", firstEvent)
+	}
+	copyPattern := pattern.Copy()
+	copyPattern.SetChromaticNote(0, voice, 69, 90)
+	if firstEvent, _ := pattern.EventAtStep(0, voice); firstEvent.ChromaticNote != 67 || !firstEvent.Tie {
+		t.Fatalf("copy shared chromatic state: %+v", firstEvent)
+	}
+	pattern.RemoveEventAtStep(1, voice)
+	firstEvent, _ = pattern.EventAtStep(0, voice)
+	if firstEvent.Tie {
+		t.Fatal("removing the target left a dangling tie")
+	}
+	pattern.SetChromaticNote(1, voice, 62, 91)
+	pattern.TieEventsAtSteps(0, 1, voice)
+	pattern.SetLengthSteps(1)
+	if firstEvent, _ := pattern.EventAtStep(0, voice); firstEvent.Tie {
+		t.Fatal("shortening left a tie crossing the new end")
+	}
+}

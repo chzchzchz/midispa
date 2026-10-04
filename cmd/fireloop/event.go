@@ -4,6 +4,10 @@ import (
 	"github.com/chzchzchz/midispa/midi"
 )
 
+// midiNoteMax is the highest MIDI note and data value. It is the data range rather than a
+// separate number, so a pitch and a velocity cannot drift onto different scales.
+const midiNoteMax = midi.DataMax
+
 type Event struct {
 	*Voice
 	Beat          float32
@@ -42,14 +46,9 @@ func (ev *Event) midiChannel() int {
 	return channel
 }
 
+// clampMidiDataValue keeps a value inside the MIDI data range.
 func clampMidiDataValue(value int) int {
-	if value < 0 {
-		return 0
-	}
-	if value > midi.DataMax {
-		return midi.DataMax
-	}
-	return value
+	return min(max(value, 0), midi.DataMax)
 }
 
 // minPercussionVelocity is how quiet a percussive step may be turned down. Velocity zero is
@@ -62,8 +61,8 @@ const minPercussionVelocity = 1
 // range for every voice, and never zero for a percussive one.
 func clampStepVelocity(voice *Voice, velocity int) int {
 	velocity = clampMidiDataValue(velocity)
-	if voice != nil && !voice.IsChromatic() && velocity < minPercussionVelocity {
-		return minPercussionVelocity
+	if voice != nil && !voice.IsChromatic() {
+		return max(velocity, minPercussionVelocity)
 	}
 	return velocity
 }

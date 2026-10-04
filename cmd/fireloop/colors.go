@@ -39,6 +39,17 @@ func Dim(c [3]int, n int) [3]int {
 	return [3]int{c[0] / n, c[1] / n, c[2] / n}
 }
 
+// eachChannel applies a rule to one channel at a time, which is how every step colour in
+// this package is stated. The three channels are independent, so a rule that needs to see
+// them together is a different kind of rule and does not belong here.
+func eachChannel(color [3]int, rule func(int) int) [3]int {
+	var out [3]int
+	for i, value := range color {
+		out[i] = rule(value)
+	}
+	return out
+}
+
 func makePad(x, y int, c [3]int) akai.Pad {
 	return akai.Pad{Idx: y*16 + x, Red: c[0], Green: c[1], Blue: c[2]}
 }

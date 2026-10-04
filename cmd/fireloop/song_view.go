@@ -12,20 +12,13 @@ const (
 	measureFinePageSize = 4
 )
 
+// clampIndex keeps a viewport position inside the range the view can show.
 func clampIndex(value, low, high int) int {
-	if value < low {
-		return low
-	}
-	if value > high {
-		return high
-	}
-	return value
+	return min(max(value, low), high)
 }
 
 func patternPageStart(index int) int {
-	if index < 1 {
-		index = 1
-	}
+	index = max(index, 1)
 	return ((index-1)/patternViewSize)*patternViewSize + 1
 }
 

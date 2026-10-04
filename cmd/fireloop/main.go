@@ -24,7 +24,6 @@ var sharedMIDIDestination bool
 
 const (
 	midiChannelMax = 16
-	midiNoteMax    = 127
 	// defaultKitPath is the kit loaded when -kit is not given.
 	defaultKitPath = "kit.json"
 )

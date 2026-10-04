@@ -241,6 +241,42 @@ func (p *PatternBank) restoreTracks(voices []int) {
 	p.trackMu.Unlock()
 }
 
+// forEachRowWithVoice calls fn with each zero-based pad row the voice stands on. One voice
+// can sit on several rows, and a change to the voice applies to the notes on every one of
+// them, so the walk over those rows is the same wherever a voice is being changed.
+func (p *PatternBank) forEachRowWithVoice(voice *Voice, fn func(row int) error) error {
+	for row, rowVoice := range p.visibleTrackVoices() {
+		if rowVoice != voice {
+			continue
+		}
+		if err := fn(row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// leaveNoteEdit closes note editing and puts the Mode light out again. It draws nothing:
+// every caller is about to redraw what note editing owned, so a redraw here would only be
+// thrown away by the one that follows.
+func (p *PatternBank) leaveNoteEdit() error {
+	p.editingNote = false
+	p.clearPadState()
+	if p.f == nil {
+		return nil
+	}
+	return p.f.SetLed(NoteMode, LEDOff)
+}
+
+// resetEditState returns the view to where a pattern starts being worked on: nothing being
+// edited, no step chosen, and no guard held on a step. The cursor belongs to the pattern
+// being left rather than the one arriving, which is why choosing a pattern clears it.
+func (p *PatternBank) resetEditState() error {
+	p.stepCursor = 0
+	p.noteChosen = false
+	return p.leaveNoteEdit()
+}
+
 // ScrollTracks moves the visible track window. Scrolling past the last track adds
 // tracks instead of stopping, so a pattern only takes on the tracks the user reaches
 // and a large kit does not open on a track list too long to work with. Navigation
@@ -265,12 +301,8 @@ func (p *PatternBank) ScrollTracks(delta int) error {
 	p.trackOffset = offset
 	// Released before the redraw, which reads the window again through trackVoice.
 	p.trackMu.Unlock()
-	p.editingNote = false
-	p.clearPadState()
-	if p.f != nil {
-		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
-			return err
-		}
+	if err := p.leaveNoteEdit(); err != nil {
+		return err
 	}
 	return p.redraw()
 }
@@ -313,14 +345,8 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 	oldPat.lengthSteps = lengthSteps
 	oldPat.normalizeLocked()
 	oldPat.mu.Unlock()
-	p.editingNote = false
-	p.stepCursor = 0
-	p.noteChosen = false
-	p.clearPadState()
-	if p.f != nil {
-		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
-			return err
-		}
+	if err := p.resetEditState(); err != nil {
+		return err
 	}
 	return p.Jump(0)
 }
@@ -341,14 +367,8 @@ func (p *PatternBank) Jump(n int) error {
 		p.Patterns[p.selPatIdx] = &Pattern{}
 	}
 	if changed {
-		p.editingNote = false
-		p.stepCursor = 0
-		p.noteChosen = false
-		p.clearPadState()
-		if p.f != nil {
-			if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
-				return err
-			}
+		if err := p.resetEditState(); err != nil {
+			return err
 		}
 	}
 	p.clampStepCursor()
@@ -402,20 +422,13 @@ func (p *PatternBank) ClearTrackRow(row int) error {
 		return nil
 	}
 	pattern.ClearVoice(voice)
-	p.editingNote = false
-	p.clearPadState()
-	if p.f != nil {
-		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
-			return err
-		}
+	if err := p.leaveNoteEdit(); err != nil {
+		return err
 	}
-	for row, rowVoice := range p.visibleTrackVoices() {
-		if rowVoice != voice {
-			continue
-		}
-		if err := p.redrawTrackPads(row + 1); err != nil {
-			return err
-		}
+	if err := p.forEachRowWithVoice(voice, func(row int) error {
+		return p.redrawTrackPads(row + 1)
+	}); err != nil {
+		return err
 	}
 	return p.printStepStatus()
 }
@@ -539,12 +552,8 @@ func (p *PatternBank) JogSelect(n int) error {
 	if err := stopPlayback(); err != nil {
 		return err
 	}
-	p.editingNote = false
-	p.clearPadState()
-	if p.f != nil {
-		if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
-			return err
-		}
+	if err := p.leaveNoteEdit(); err != nil {
+		return err
 	}
 	p.trackMu.Lock()
 	voice := p.trackVoices[track-1] + n
@@ -622,11 +631,9 @@ func playheadEventColor(event Event, invert bool) [3]int {
 
 // invertColor is per channel, so an inverted step reads as its own colour played hot.
 func invertColor(color [3]int) [3]int {
-	var out [3]int
-	for i, value := range color {
-		out[i] = midiNoteMax - clampMidiDataValue(value)
-	}
-	return out
+	return eachChannel(color, func(value int) int {
+		return midiNoteMax - clampMidiDataValue(value)
+	})
 }
 
 // emptyStepColor is how a column with no note reads: black behind the playhead, grey under
@@ -702,16 +709,16 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 		ev.Velocity = 0
 	}
 	if p.f != nil {
-		g := 50
+		// The press lights the step it placed and puts out the one it removed, so the pad
+		// says what the press did without waiting for a redraw of the whole row.
+		color := percussionStepColor
 		if !added {
-			g = 0
+			color = [3]int{}
 		}
-		for row, rowVoice := range p.visibleTrackVoices() {
-			if rowVoice == voice {
-				if err := p.f.LightPad(col, row, 0, g, 0); err != nil {
-					return ev, err
-				}
-			}
+		if err := p.forEachRowWithVoice(voice, func(row int) error {
+			return p.f.LightPad(col, row, color[0], color[1], color[2])
+		}); err != nil {
+			return ev, err
 		}
 	}
 	return ev, nil

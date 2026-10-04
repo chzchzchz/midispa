@@ -111,11 +111,15 @@ func (p *Pattern) EventsForVoice(v *Voice) []Event {
 }
 
 func (p *Pattern) EventAtStep(step int, v *Voice) (Event, bool) {
-	if step < 0 || step >= p.LengthSteps() {
+	if !p.validStep(step) {
 		return Event{}, false
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	// This scan is written out here rather than shared with the setters. The palette redraw
+	// asks for one step at a time for every cell it paints, so it runs this more often
+	// than anything else that looks a step up, and behind a call it measured about twice
+	// the cost of the loop it replaced.
 	for _, event := range p.Events {
 		if eventStep(event) == step && event.Voice == v {
 			return event, true
@@ -124,43 +128,37 @@ func (p *Pattern) EventAtStep(step int, v *Voice) (Event, bool) {
 	return Event{}, false
 }
 
+// RemoveEventAtStep deletes the event a step holds for a voice. Like every other change to
+// the notes, removing one ends the tie that ran into it, so the note after it stops
+// sounding on its own.
 func (p *Pattern) RemoveEventAtStep(step int, v *Voice) (Event, bool) {
-	if step < 0 || step >= p.LengthSteps() {
+	if !p.validStep(step) {
 		return Event{}, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for i, event := range p.Events {
-		if eventStep(event) == step && event.Voice == v {
-			return p.removeEventLocked(i), true
-		}
+	if index := p.eventIndexAtStepLocked(step, v); index >= 0 {
+		return p.removeEventLocked(index), true
 	}
 	return Event{}, false
 }
 
 // SetChromaticNote creates or updates a pitched event while preserving its tie state.
 func (p *Pattern) SetChromaticNote(step int, v *Voice, note, velocity int) (Event, bool) {
-	if v == nil || !v.IsChromatic() || step < 0 || step >= p.LengthSteps() {
+	if v == nil || !v.IsChromatic() || !p.validStep(step) {
 		return Event{}, false
 	}
 	if note < 0 || note > midiNoteMax {
 		return Event{}, false
 	}
-	if velocity < 0 {
-		velocity = 0
-	}
-	if velocity > midiNoteMax {
-		velocity = midiNoteMax
-	}
+	velocity = clampStepVelocity(v, velocity)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for i, event := range p.Events {
-		if eventStep(event) == step && event.Voice == v {
-			p.Events[i].ChromaticNote = note
-			p.Events[i].Velocity = velocity
-			p.normalizeLocked()
-			return p.Events[i], true
-		}
+	if index := p.eventIndexAtStepLocked(step, v); index >= 0 {
+		p.Events[index].ChromaticNote = note
+		p.Events[index].Velocity = velocity
+		p.normalizeLocked()
+		return p.Events[index], true
 	}
 	event := Event{
 		Voice:         v,
@@ -175,19 +173,19 @@ func (p *Pattern) SetChromaticNote(step int, v *Voice, note, velocity int) (Even
 // SetVelocity writes the dynamics of an existing step, whichever kind of voice it stands
 // on. A velocity change is not a new note, so the tie the step may carry is left alone.
 func (p *Pattern) SetVelocity(step int, v *Voice, velocity int) (Event, bool) {
-	if v == nil || step < 0 || step >= p.LengthSteps() {
+	if v == nil || !p.validStep(step) {
 		return Event{}, false
 	}
-	velocity = clampStepVelocity(v, velocity)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for i, event := range p.Events {
-		if eventStep(event) == step && event.Voice == v {
-			p.Events[i].Velocity = velocity
-			return p.Events[i], true
-		}
+	// Only an existing step is written: a velocity is the dynamics of a note that is
+	// already there, and turning the knob over an empty step must not place one.
+	index := p.eventIndexAtStepLocked(step, v)
+	if index < 0 {
+		return Event{}, false
 	}
-	return Event{}, false
+	p.Events[index].Velocity = clampStepVelocity(v, velocity)
+	return p.Events[index], true
 }
 
 // TieEventsAtSteps links two existing events only when the earlier event's next event is the later one.
@@ -240,6 +238,13 @@ func (p *Pattern) NextTiedEvent(step int, v *Voice) (Event, bool) {
 		}
 	}
 	return Event{}, false
+}
+
+// validStep reports whether a step is inside the pattern's length. It reads the length
+// under the lock of its own, so it belongs before a caller takes the lock rather than
+// inside one.
+func (p *Pattern) validStep(step int) bool {
+	return step >= 0 && step < p.LengthSteps()
 }
 
 func (p *Pattern) eventIndexAtStepLocked(step int, v *Voice) int {
@@ -363,12 +368,7 @@ func (p *Pattern) LengthSteps() int {
 }
 
 func (p *Pattern) SetLengthSteps(steps int) int {
-	if steps < 1 {
-		steps = 1
-	}
-	if steps > maxPatternSteps {
-		steps = maxPatternSteps
-	}
+	steps = min(max(steps, 1), maxPatternSteps)
 	p.mu.Lock()
 	p.lengthSteps = steps
 	for _, event := range p.Events {

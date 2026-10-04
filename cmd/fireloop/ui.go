@@ -70,6 +70,27 @@ func stopPlayback() error {
 	return firstErr
 }
 
+// switchMode moves between the pattern view and the arrangement. Playback stops because
+// the other view has no sequencer for it, the edit modes are closed because each belongs
+// to the view being left, and the modifiers are released because they act on whatever the
+// view under them is.
+func switchMode(next eventProcessFunc, songLight int) error {
+	if err := stopPlayback(); err != nil {
+		return err
+	}
+	if err := exitPatternEditModes(); err != nil {
+		return err
+	}
+	if err := releaseModifiers(); err != nil {
+		return err
+	}
+	processEvent = next
+	if err := patbank.f.SetLed(NotePatternSong, songLight); err != nil {
+		return err
+	}
+	return nil
+}
+
 func exitPatternEditModes() error {
 	if patbank == nil {
 		return nil
@@ -286,17 +307,7 @@ func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		}
 		return songbank.ScrollMeasures(measurePageSize)
 	case NotePatternSong:
-		if err := stopPlayback(); err != nil {
-			return err
-		}
-		if err := exitPatternEditModes(); err != nil {
-			return err
-		}
-		if err := releaseModifiers(); err != nil {
-			return err
-		}
-		processEvent = processPatternEvent
-		if err := patbank.f.SetLed(NotePatternSong, LEDOff); err != nil {
+		if err := switchMode(processPatternEvent, LEDOff); err != nil {
 			return err
 		}
 		return patbank.Jump(0)
@@ -527,9 +538,9 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 	case CCVolume:
 		return patbank.AdjustVelocity(aseq, velocity)
 	case CCSelect:
-		dir := 1
-		if int(ev.Data[2]) == EncoderLeft {
-			dir = -1
+		dir, turning := encoderDirection(int(ev.Data[2]))
+		if !turning {
+			return nil
 		}
 		if patbank.editingLength {
 			return patbank.AdjustLength(dir)
@@ -574,17 +585,7 @@ func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
 		patternClipboard = patbank.CurrentPattern().Copy()
 		return patbank.f.SetLed(NoteRecord, LEDGreen)
 	case NotePatternSong:
-		if err := stopPlayback(); err != nil {
-			return err
-		}
-		if err := exitPatternEditModes(); err != nil {
-			return err
-		}
-		if err := releaseModifiers(); err != nil {
-			return err
-		}
-		processEvent = processSongEvent
-		if err := patbank.f.SetLed(NotePatternSong, LEDGreen); err != nil {
+		if err := switchMode(processSongEvent, LEDGreen); err != nil {
 			return err
 		}
 		return songbank.Jump(0)
