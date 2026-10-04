@@ -9,9 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
-
-	j "github.com/xthexder/go-jack"
 
 	//"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/jack"
@@ -179,9 +176,8 @@ func main() {
 
 	chunk := NewChunk(*windowSamplesFlag, *minWindowSaveFlag, SampleRate, *savePathFlag)
 
-	recCallback := func(s []j.AudioSample) int {
-		x := *(*[]float32)(unsafe.Pointer(&s))
-		chunk.update(x)
+	recCallback := func(s []float32) int {
+		chunk.update(s)
 		return 0
 	}
 	pcIn := jack.PortConfig{

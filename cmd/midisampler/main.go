@@ -6,9 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unsafe"
-
-	j "github.com/xthexder/go-jack"
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/jack"
@@ -27,11 +24,10 @@ func main() {
 
 	// Create jack port for playback.
 	var vv *Voices
-	playCallback := func(s []j.AudioSample) int {
+	playCallback := func(s []float32) int {
 		// TODO: have a pipeline that copies buffers into this one
-		x := *(*[]float32)(unsafe.Pointer(&s))
 		if vv != nil {
-			vv.play(x)
+			vv.play(s)
 		}
 		return 0
 	}
@@ -49,10 +45,9 @@ func main() {
 
 	// Create jack port for recording.
 	var sampler *Sampler
-	recCallback := func(s []j.AudioSample) int {
-		x := *(*[]float32)(unsafe.Pointer(&s))
+	recCallback := func(s []float32) int {
 		if sampler != nil {
-			sampler.record(x)
+			sampler.record(s)
 		}
 		return 0
 	}
@@ -68,8 +63,8 @@ func main() {
 	}
 	defer rp.Close()
 
-	log.Printf("sampling at rate %d", rp.Client.GetSampleRate())
-	sampler = NewSampler(int(rp.Client.GetSampleRate()))
+	log.Printf("sampling at rate %d", rp.SampleRate())
+	sampler = NewSampler(int(rp.SampleRate()))
 	capturePath := filepath.Join(*spathFlag, "capture")
 	if err := os.MkdirAll(capturePath, 0755); err != nil {
 		panic("could not create \"" + capturePath + "\": " + err.Error())
@@ -97,13 +92,13 @@ func main() {
 	}
 
 	storage := NewStorage(*configPath, *spathFlag)
-	sampleHz := wp.Client.GetSampleRate()
+	sampleHz := wp.SampleRate()
 	log.Println("resampling to", sampleHz, "sample rate and normalizing")
 	for _, s := range storage.SampleBank().slice {
 		s.Resample(int(sampleHz))
 		s.Normalize()
 	}
-	bufferSize = int(wp.Client.GetBufferSize())
+	bufferSize = int(wp.BufferSize())
 	vv = newVoices(int(sampleHz))
 
 	s := NewSequencer(storage, vv, sampler)
