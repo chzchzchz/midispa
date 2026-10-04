@@ -1149,6 +1149,391 @@ type MicroKorg struct {
 	SyncCtrl Control `cc:"90"`
 }
 
+// Microkorg2 is the Korg microKORG2 synthesizer/vocoder: the parameters it
+// exposes over MIDI, bound to the control change and non-registered parameter
+// numbers the instrument answers to.
+//
+// Source: "microKORG2 Owner's Manual", KORG INC., document En 1a, carrying a
+// MIDI Implementation Chart dated 2024.5.15, Ver: 1.0.0 (microKORG2_OM_En1.pdf).
+// Every page number below is that manual's own printed number, which is also
+// how the chart on p. 133 is numbered.
+//
+// cc:  a direct control change; one message reaches the parameter. The
+// numbering is the "Control Change" row of the implementation chart (p. 133),
+// and each of the body sections repeats the same numbers against its own
+// parameters (OSC 1 on p. 56, MIXER on p. 61, FILTER on p. 63, the envelopes
+// on p. 64-66, the LFOs on p. 68-69, the effects on p. 98-110 and the EQ on
+// p. 112). The two agree throughout, so a chart transcription slip would
+// show up as a disagreement with the body.
+//
+// The manual documents no way to rebind these numbers on this instrument,
+// which is worth saying because it is not true of either sibling: the
+// microKORG moves any parameter under SHIFT > CONTROL CHANGE and the
+// microKORG XL under its CC MAP, so the numbers recorded for those two models
+// describe a factory default rather than the hardware. Nothing in the
+// microKORG2 manual suggests an equivalent, but the absence of a procedure is
+// weaker evidence than a statement that the map is fixed, so these are still
+// only what the instrument answers out of the box.
+//
+// Reception is gated. Every row of the chart's control change block carries the
+// *C flag, which its notes tie to GLOBAL > MIDI FILTER, and the manual's own
+// wording is that the "Control Change (CC)" setting must be Enable or the
+// instrument neither transmits nor receives any of them (p. 87).
+//
+// Timbre 1's parameters travel on the Global Ch channel and timbre 2's on the
+// channel set as Timbre 2 Ch (p. 84); the chart's note *1 says the same. A Dual
+// program therefore has two independent sets of these addresses and a message
+// sent on one channel does not reach the other.
+//
+// nrpn: a non-registered parameter, addressed as "<msb>.<lsb>" in decimal,
+// the form the manual itself writes them in ("NRPN 4, 0...5"). Reaching one
+// takes three messages: CC#99 with the MSB, CC#98 with the LSB, then CC#6
+// data entry MSB with the value. The chart lists those three as "98, 99" for
+// NRPN (LSB, MSB) and "6, 38" for data entry (MSB, LSB) (p. 133), which is the
+// MIDI standard order. The instrument also implements data entry LSB, but
+// nothing below needs more than the 0...127 a data entry MSB carries.
+//
+// The General MIDI plumbing the chart lists alongside them is deliberately
+// absent: bank select MSB and LSB (CC#0 and CC#32), data entry MSB and LSB
+// (CC#6 and CC#38) and the NRPN selectors themselves (CC#98 and CC#99). None
+// of them sets a parameter, and a model that claimed them would make the tail
+// of an NRPN's select-and-set look like an edit of the sound.
+//
+// Unlike the original microKORG, this manual documents no split between the
+// values the instrument transmits when a knob moves and the values it accepts
+// as a control change. The ranges in the field comments are therefore the
+// manual's own parameter ranges and nothing more, with one exception: the
+// filter's type anchors, which the manual does pin to specific values
+// (p. 62).
+//
+// Several parameters a reader might expect here have no address, and in every
+// case it is the manual that lists none rather than the chart claiming a
+// number it does not mean. Unison Number, which decides whether Unison Detune
+// and Unison Spread do anything at all (p. 52); OSC 3's OSC Mod Type, the
+// switch that turns ring, sync and VPM on in the first place (p. 58); each
+// oscillator's Ratio/Fixed keytrack (p. 60); each LFO's Mode and Key Sync
+// (p. 67, p. 69); the virtual patches' Connect on/off (p. 71); the effect
+// types, which are what give the effect control fields below their meaning
+// (p. 97, p. 105, p. 108); and the arpeggiator's ON button and tempo, the
+// latter set by tapping or by the incoming MIDI clock rather than by a
+// parameter message (p. 74).
+type Microkorg2 struct {
+	// The chart pairs CC#7 and CC#10 under the single name "Timbre Level"
+	// and describes neither parameter anywhere in its body text. They are
+	// kept apart here because these are the MIDI standard's own numbers for
+	// volume and pan, which is what makes the pairing readable: 7 is the
+	// timbre's level and 10 its stereo position.
+	TimbreLevel Control `cc:"7"`
+	TimbrePan   Control `cc:"10"`
+
+	// VOICE. The unison stack is up to eight voices of one note, and
+	// UnisonDetune and UnisonSpread are inert while it is off.
+	UnisonDetune Control `cc:"33"` // Parameter range 0...127 (manual p. 52)
+	UnisonSpread Control `cc:"34"` // Parameter range 0...127 (manual p. 52)
+
+	// PITCH. Transpose and Fine Tune are shared by all three oscillators
+	// (manual p. 53), which is what lets a patch set one detune for the
+	// whole voice rather than per oscillator.
+	//
+	// The manual's PITCH section calls these Transpose and Fine Tune, while
+	// its PATCH 1-6 destination list offers TIMBRE P.Time and TIMBRE Pitch
+	// as destinations (p. 129). It does not say how those four names pair
+	// up, so the two spellings are not reconciled here.
+	PortamentoTime Control `cc:"5"`  // Parameter range 0...127, 0 = no portamento (manual p. 53)
+	PortamentoMode Control `cc:"65"` // Fingered, Always (manual p. 53)
+	Transpose      Control `cc:"35"` // Parameter range -24...0...+24 semitones (manual p. 53)
+	FineTune       Control `cc:"36"` // Parameter range -50...0...+50 cents (manual p. 53)
+
+	// OSC 1. Shape is the parameter that gives the chosen waveform its
+	// character, and what it means depends entirely on the waveform: a
+	// morph within the Saw-to-Sine family for the four basic waves, but a
+	// sample selector once DWGS or OneShot is chosen (manual p. 56).
+	OSC1Wave      Control `cc:"8"`  // Saw, Square, Triangle, Sine, DWGS, OneShot (manual p. 55)
+	OSC1Shape     Control `cc:"9"`  // Saw-Sine 0...127; DWGS 1...64; OneShot 1...32 (manual p. 56)
+	OSC1ModAmount Control `cc:"15"` // Off, then 1...127 of oscillator 3's modulation (manual p. 56)
+	OSC1Semitones Control `cc:"16"` // Parameter range -24...0...+24 semitones (manual p. 56)
+	OSC1FineTune  Control `cc:"17"` // Parameter range -50...0...+50 cents (manual p. 56)
+
+	// OSC 2. Same parameters as oscillator 1, and the manual says so
+	// rather than repeating their descriptions (p. 57).
+	OSC2Wave      Control `cc:"18"` // See OSC1Wave
+	OSC2Shape     Control `cc:"19"` // See OSC1Shape
+	OSC2ModAmount Control `cc:"20"` // Off, then 1...127 (manual p. 57)
+	OSC2Semitones Control `cc:"21"` // Parameter range -24...0...+24 semitones (manual p. 57)
+	OSC2FineTune  Control `cc:"22"` // Parameter range -50...0...+50 cents (manual p. 57)
+
+	// OSC 3 is the modulator: oscillator 3 modulates oscillators 1 and 2
+	// and those two output the modulated result (manual p. 58). Turning
+	// that modulation on is OSC 3's Mod Type parameter, which is ring, sync,
+	// ring plus sync or VPM, and which has no address of its own, so
+	// OSC1ModAmount and OSC2ModAmount only do something once it is set.
+	OSC3Wave      Control `cc:"48"` // See OSC1Wave (manual p. 58)
+	OSC3Shape     Control `cc:"49"` // See OSC1Shape (manual p. 58)
+	OSC3Semitones Control `cc:"51"` // Parameter range -24...0...+24 semitones (manual p. 59)
+	OSC3FineTune  Control `cc:"52"` // Parameter range -50...0...+50 cents (manual p. 59)
+
+	// NOISE. NoiseColor is the noise generator's own filter rather than a
+	// timbre colour control, and which filter it adjusts is decided by
+	// NoiseType: a low pass or high pass cutoff, a band pass peak, or a
+	// sample rate under the decimator (manual p. 60).
+	NoiseType  Control `cc:"29"` // LPF, HPF, BPF, Deci (manual p. 60)
+	NoiseColor Control `cc:"30"` // Parameter range 0...127, meaning set by NoiseType (manual p. 60)
+
+	// MIXER. These are the input levels to the filter, so a level set here
+	// also sets how hard the filter and its drive stage work (manual p. 61).
+	OSC1Level  Control `cc:"23"` // Parameter range 0...127
+	OSC2Level  Control `cc:"24"` // Parameter range 0...127
+	OSC3Level  Control `cc:"25"` // Parameter range 0...127
+	NoiseLevel Control `cc:"26"` // Parameter range 0...127
+
+	// FILTER. Type is the one parameter here whose 7-bit values the manual
+	// pins down, and it is a morph rather than a selector: the four named
+	// types sit at 0, 32, 64, 96 and 127 and the values between them are
+	// mixtures of the types either side, so there is no way to have pure
+	// 24 dB/octave filtering without also having some of the next type in it
+	// (manual p. 62).
+	FilterType      Control `cc:"27"` // 0 LP4 (-24 dB/oct LPF), 32 LP2 (-12 dB/oct LPF), 64 BP2 (-12 dB/oct BPF), 96 HP2 (-12 dB/oct HPF), 127 HP4 (-24 dB/oct HPF)
+	Cutoff          Control `cc:"74"` // Parameter range 0...127 (manual p. 63)
+	Resonance       Control `cc:"71"` // Parameter range 0...127 (manual p. 63)
+	FilterDrive     Control `cc:"83"` // Parameter range 0...127 (manual p. 63)
+	FilterKeytrack Control `cc:"28"` // Parameter range -200.0...0.0...200.0 % of the pitch change, measured from C4 (manual p. 63)
+
+	// AMP EG. The velocity sensitivity is on this envelope rather than on
+	// the filter, so a patch can follow how hard a key is played in level
+	// while the timbre stays fixed.
+	AmpEgAttack   Control `cc:"73"` // Parameter range 0...127 (manual p. 64)
+	AmpEgDecay    Control `cc:"75"` // Parameter range 0...127 (manual p. 64)
+	AmpEgSustain  Control `cc:"70"` // Parameter range 0...127 (manual p. 64)
+	AmpEgRelease  Control `cc:"72"` // Parameter range 0...127 (manual p. 64)
+	AmpEgVelocity Control `cc:"79"` // Parameter range 0...127 (manual p. 64)
+
+	// FILTER EG. Sustain is the cutoff frequency held once the decay has
+	// run out, so it is a cutoff offset rather than a level (p. 65).
+	FilterEgAttack    Control `cc:"85"` // Parameter range 0...127 (manual p. 65)
+	FilterEgDecay     Control `cc:"86"` // Parameter range 0...127 (manual p. 65)
+	FilterEgSustain   Control `cc:"87"` // Cutoff frequency held after the decay (manual p. 65)
+	FilterEgRelease   Control `cc:"88"` // Parameter range 0...127 (manual p. 65)
+	FilterEgIntensity Control `cc:"84"` // Parameter range -63...0...63 (manual p. 66)
+
+	// LFO 1. Frequency does double duty as the sync division, because the
+	// LFO's Mode parameter has no address and is what decides which of the
+	// two the same control change means: in Tempo mode the manual lists ten
+	// note values from 1/1 down to 1/32, and in Free or One Shot mode it is
+	// a plain 0...127 rate (p. 68).
+	LFO1Wave      Control `cc:"89"` // Triangle, Saw Down, Saw Up, Square, Sample & Hold (manual p. 67)
+	LFO1Frequency Control `cc:"90"` // Tempo mode: 1/1 ... 1/32; Free or One Shot: 0...127 (manual p. 68)
+	LFO1Smooth    Control `cc:"91"` // Parameter range 0...127 (manual p. 68)
+
+	// LFO 2. Where LFO 1 has a Smooth control, LFO 2 has a Delay that holds
+	// the LFO off for a moment after its phase resets, which is how a patch
+	// gets an LFO that restarts on every note without the modulation
+	// jumping straight back to full depth (manual p. 69).
+	LFO2Wave      Control `cc:"102"` // See LFO1Wave (manual p. 69)
+	LFO2Frequency Control `cc:"76"`  // See LFO1Frequency for the two modes (manual p. 69)
+	LFO2Delay     Control `cc:"92"`  // Parameter range 0...127 (manual p. 69)
+
+	// PATCH 1-6. Each virtual patch is two modulation sources, a
+	// destination and an intensity, and the intensity is the only part of
+	// the route reachable over a control change; the sources and
+	// destination are over NRPN, below. The manual's parameter range is
+	// -63...0...+63, and the sign is what decides whether the source lifts
+	// or drops the destination, so two patches set to opposite intensities
+	// against one destination work against each other (manual p. 71).
+	Patch1Intensity Control `cc:"103"` // Parameter range -63...0...+63 (manual p. 71)
+	Patch2Intensity Control `cc:"104"` // Parameter range -63...0...+63
+	Patch3Intensity Control `cc:"105"` // Parameter range -63...0...+63
+	Patch4Intensity Control `cc:"106"` // Parameter range -63...0...+63
+	Patch5Intensity Control `cc:"107"` // Parameter range -63...0...+63
+	Patch6Intensity Control `cc:"108"` // Parameter range -63...0...+63
+
+	// MOD effect. The three controls below are the ones the effect's own
+	// page binds to a knob after the effect type and its sub type, so none
+	// of them has a fixed meaning: ModEffectControl1 is Speed for the four
+	// modulation types and for Tremolo, Wow Depth for LoFi, Time for the
+	// compressor and Tone for both distortion types and the amp simulator;
+	// ModEffectControl2 is Depth everywhere except LoFi, where it is the
+	// isolator's Intensity, and the compressor, where it is the threshold;
+	// ModEffectControl3 exists only for LoFi, Distortion, Comp and Amp
+	// Simulator, as Saturation or as the output level or mix. The four
+	// modulation types and Tremolo have no third control at all, their
+	// remaining parameters living on the MOD EXTRA page (manual p. 97-104).
+	ModEffectControl1 Control `cc:"12"`
+	ModEffectControl2 Control `cc:"111"`
+	ModEffectControl3 Control `cc:"112"`
+
+	// DELAY effect. The first control is the effect's type-specific
+	// parameter, which the manual lists only for four of the six delay
+	// types: Ping Pong's Width, Tape Echo's Instability, Pitch Shift's mix
+	// between the shifted and unshifted signal, and LoRes's sample rate
+	// reduction. Stereo and Reverse have none. Time then splits between an
+	// absolute 0...127 and, when the delay's BPM Sync is on, a set of
+	// fifteen tempo subdivisions from 1/64 to 1/1 (manual p. 106-107).
+	DelayEffectControl1 Control `cc:"115"` // Meaning set by the delay type
+	DelayEffectControl2 Control `cc:"13"`  // Time: 0...127, or 1/64...1/1 when BPM synced
+	DelayEffectControl3 Control `cc:"113"` // Input level, 0...127
+	DelayEffectControl4 Control `cc:"114"` // High pass cutoff, 0...127
+
+	// REVERB effect. As with the delay, the first control is the
+	// type-specific one, and again only some types have one: Rust's Age,
+	// Pitch Shift's shifted signal mix and LoRes's sample rate reduction.
+	// Hall, Room and Spring have none. The manual lists Pitch Shift's mix
+	// as -63...63 rather than the -63...0...+63 it uses elsewhere, which
+	// reads as the same bipolar control without the centre marked (p. 109).
+	ReverbEffectControl1 Control `cc:"118"` // Meaning set by the reverb type
+	ReverbEffectControl2 Control `cc:"14"`  // Time, 0...127
+	ReverbEffectControl3 Control `cc:"116"` // Input trim, 0...127
+	ReverbEffectControl4 Control `cc:"117"` // Damping filter cutoff, 0...127
+
+	// EQ. A two-band equalizer, and the last stage of the effect chain, so
+	// it colours the effects as well as the dry sound. The output feedback
+	// feeds the EQ's own output back into its input and is a bipolar
+	// control, which is how this instrument makes a resonant sound out of
+	// the equalizer alone (manual p. 112).
+	EQLowFrequency   Control `cc:"95"`  // Parameter range 40...1000 Hz
+	EQLowGain        Control `cc:"110"` // Parameter range -63...0...+63
+	EQHighFrequency  Control `cc:"94"`  // Parameter range 1.0...18.0 kHz
+	EQHighGain       Control `cc:"109"` // Parameter range -63...0...+63
+	EQOutputFeedback Control `cc:"93"`  // Parameter range -63...0...+63; negative inverts the phase fed back
+
+	// Performance controls. The mod wheel has no destination of its own:
+	// it is a virtual patch source in its own right, so a patch has to
+	// name Mod.W as a source for the wheel to do anything (manual p. 70).
+	//
+	// The damper pedal's job is set by a global setting rather than by the
+	// program, and one of that setting's four positions turns the pedal
+	// into the loop recorder's record control instead of a damper
+	// (manual p. 82). The instrument has no half damper.
+	ModulationWheel Control `cc:"1"`
+	DamperPedal     Control `cc:"64"`
+
+	// The arpeggiator, NRPN MSB 0. Its ON button and its tempo are not
+	// here: the manual gives them no address, and the tempo is set by
+	// tapping or by the incoming MIDI clock (p. 74). Everything else the
+	// arpeggiator page exposes is below, including the latch that keeps it
+	// running after the keyboard is released.
+	ArpSwing        Control `nrpn:"0.5"`  // Parameter range -100%...0...+100% (manual p. 76)
+	ArpResolution   Control `nrpn:"0.6"`  // 1/32, 1/24, 1/16, 1/12, 1/8, 1/6, 1/4 (manual p. 76)
+	ArpTargetTimbre Control `nrpn:"0.11"` // Both Timbre, Timbre 1, Timbre 2; only live in Dual mode (manual p. 77)
+	ArpLatch        Control `nrpn:"0.4"`  // Off, On (manual p. 77)
+	ArpType         Control `nrpn:"0.7"`  // Up, Down, UpDown, DownUp, Converge, Diverge, Manual, Random 1, Random 2, Trigger (manual p. 77-78)
+	ArpOctave       Control `nrpn:"0.8"`  // 1...4 octaves (manual p. 78)
+	ArpGate         Control `nrpn:"0.10"` // Parameter range 0%...100% (manual p. 79)
+	ArpLastStep     Control `nrpn:"0.9"`  // 1...8 steps (manual p. 79)
+	ArpKeySync      Control `nrpn:"0.12"` // Off, On (manual p. 79)
+
+	// The virtual patches' sources and destinations, NRPN MSB 4. Each of
+	// the six patches has three separate addresses, laid out as three runs
+	// of six: Source 1 at LSB 0...5, Source 2 at 16...21 and Destination at
+	// 32...37 (manual p. 70-71).
+	//
+	// Both sources and the destination share one 0-127 selection scale.
+	// The source scale runs 0 NoAssign, 1 Velocity, 2 KbdTrk, 3 Pitch Bend,
+	// 4 Mod.W, 5 Flt EG, 6 Amp EG, 7 LFO1, 8 LFO2, 9 Noise, 10 Analog, and
+	// the destination scale runs 0 NoAssign through 75 EQ Feedback
+	// (manual p. 129). The two sources are multiplied rather than summed,
+	// so assigning the same source to both gives an exponential curve, and
+	// leaving one of them as NoAssign is how a single source is used
+	// (p. 70).
+	Patch1Source  Control `nrpn:"4.0"`
+	Patch2Source  Control `nrpn:"4.1"`
+	Patch3Source  Control `nrpn:"4.2"`
+	Patch4Source  Control `nrpn:"4.3"`
+	Patch5Source  Control `nrpn:"4.4"`
+	Patch6Source  Control `nrpn:"4.5"`
+	Patch1Source2 Control `nrpn:"4.16"`
+	Patch2Source2 Control `nrpn:"4.17"`
+	Patch3Source2 Control `nrpn:"4.18"`
+	Patch4Source2 Control `nrpn:"4.19"`
+	Patch5Source2 Control `nrpn:"4.20"`
+	Patch6Source2 Control `nrpn:"4.21"`
+	Patch1Dest    Control `nrpn:"4.32"`
+	Patch2Dest    Control `nrpn:"4.33"`
+	Patch3Dest    Control `nrpn:"4.34"`
+	Patch4Dest    Control `nrpn:"4.35"`
+	Patch5Dest    Control `nrpn:"4.36"`
+	Patch6Dest    Control `nrpn:"4.37"`
+
+	// The vocoder, NRPN MSB 5. The instrument's own synthesis runs as the
+	// carrier while the mic input is analysed as the modulator, so these
+	// are mostly about how the sixteen band-pass filters sound once the
+	// detected spectrum has been mapped onto them.
+	VocoderMicDirect       Control `nrpn:"5.1"` // Mic input level bypassing the modulator, 0...127 (manual p. 90)
+	VocoderSynthDryWet     Control `nrpn:"5.2"` // 0...100% balance between the synth sound and the vocoder (manual p. 90)
+	VocoderFormant         Control `nrpn:"5.3"` // Parameter range -63...0...+63, shifting every carrier band at once (manual p. 90)
+	VocoderResonance       Control `nrpn:"5.4"` // Resonance of every carrier band, 0...127 (manual p. 90)
+	VocoderEnvFollowerSens Control `nrpn:"5.5"` // Parameter range 0...126, plus a topmost Hold that freezes the detected spectrum (manual p. 90)
+
+	// The sixteen carrier bands' levels and pans, one NRPN per band at each
+	// of two consecutive runs of sixteen (manual p. 91). Band Select, which
+	// picks which band the panel's knobs are editing, is explicitly not
+	// saved in the program and resets to band 1 at power on, so the address
+	// reaches a specific band directly rather than going through it.
+	VocoderBandLevel1  Control `nrpn:"5.16"` // 0...127
+	VocoderBandLevel2  Control `nrpn:"5.17"`
+	VocoderBandLevel3  Control `nrpn:"5.18"`
+	VocoderBandLevel4  Control `nrpn:"5.19"`
+	VocoderBandLevel5  Control `nrpn:"5.20"`
+	VocoderBandLevel6  Control `nrpn:"5.21"`
+	VocoderBandLevel7  Control `nrpn:"5.22"`
+	VocoderBandLevel8  Control `nrpn:"5.23"`
+	VocoderBandLevel9  Control `nrpn:"5.24"`
+	VocoderBandLevel10 Control `nrpn:"5.25"`
+	VocoderBandLevel11 Control `nrpn:"5.26"`
+	VocoderBandLevel12 Control `nrpn:"5.27"`
+	VocoderBandLevel13 Control `nrpn:"5.28"`
+	VocoderBandLevel14 Control `nrpn:"5.29"`
+	VocoderBandLevel15 Control `nrpn:"5.30"`
+	VocoderBandLevel16 Control `nrpn:"5.31"`
+
+	VocoderBandPan1  Control `nrpn:"5.32"` // L63...L1, Centre, R1...R63
+	VocoderBandPan2  Control `nrpn:"5.33"`
+	VocoderBandPan3  Control `nrpn:"5.34"`
+	VocoderBandPan4  Control `nrpn:"5.35"`
+	VocoderBandPan5  Control `nrpn:"5.36"`
+	VocoderBandPan6  Control `nrpn:"5.37"`
+	VocoderBandPan7  Control `nrpn:"5.38"`
+	VocoderBandPan8  Control `nrpn:"5.39"`
+	VocoderBandPan9  Control `nrpn:"5.40"`
+	VocoderBandPan10 Control `nrpn:"5.41"`
+	VocoderBandPan11 Control `nrpn:"5.42"`
+	VocoderBandPan12 Control `nrpn:"5.43"`
+	VocoderBandPan13 Control `nrpn:"5.44"`
+	VocoderBandPan14 Control `nrpn:"5.45"`
+	VocoderBandPan15 Control `nrpn:"5.46"`
+	VocoderBandPan16 Control `nrpn:"5.47"`
+
+	// HARD TUNE, NRPN MSB 6. A single part that snaps the vocal pitch to
+	// the nearest scale note or played key, so Intensity decides how much
+	// of the correction is heard and Speed decides how quickly it settles.
+	// The harmonizer and hard tune can be used together, but the vocoder
+	// cannot be used with either (manual p. 90).
+	HardTuneIntensity Control `nrpn:"6.1"` // 0...127 (manual p. 92)
+	HardTuneSpeed     Control `nrpn:"6.2"` // 0 corrects instantly, larger values slow it (manual p. 92)
+	HardTuneFormant   Control `nrpn:"6.3"` // Parameter range -63...0...+63 (manual p. 92)
+
+	// HARMONIZER, NRPN MSB 7. Up to two harmony voices are added to the
+	// vocal, and the level, spread, formant, detune and delay below apply to
+	// the harmonies as a group while the two pitches below are per voice.
+	HarmonizerLevel        Control `nrpn:"7.1"`  // Harmony output level, 0...127 (manual p. 93)
+	HarmonizerStereoSpread Control `nrpn:"7.2"`  // Parameter range -63...0...+63 (manual p. 93)
+	HarmonizerFormant      Control `nrpn:"7.3"`  // Parameter range -63...0...+63 (manual p. 93)
+	HarmonizerDetune       Control `nrpn:"7.4"`  // Parameter range -63...0...+63 (manual p. 93)
+	HarmonizerDelay        Control `nrpn:"7.5"`  // Parameter range 0...150 mSec behind the vocal (manual p. 93)
+	HarmonizerNumber       Control `nrpn:"7.16"` // 1 or 2 harmonies (manual p. 94)
+	HarmonizerPitch1       Control `nrpn:"7.32"` // -2 Oct...Unison...+2 Oct in scale steps (manual p. 94)
+	HarmonizerPitch2       Control `nrpn:"7.48"` // -2 Oct...Unison...+2 Oct in scale steps; live only with 2 harmonies (manual p. 94)
+
+	// LOOP RECORDER, NRPN MSB 8. The stutter settings are the recorder's
+	// own parameters, not the arpeggiator's, and the offset shifts the
+	// stutter's loop point by up to one measure. The manual's item
+	// numbering on this page skips from 3 to 5, because the Count Level it
+	// numbers 4 gives no address, so the last run here is play level only.
+	LoopStutter       Control `nrpn:"8.16"` // Off, On Forward, On Reverse (manual p. 116)
+	LoopStutterLength Control `nrpn:"8.17"` // 1/1, 1/2, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32, 1/64, 1/128 (manual p. 116)
+	LoopStutterOffset Control `nrpn:"8.18"` // Parameter range -63...0...+63; reset to zero while the stutter is off (manual p. 116)
+	LoopPlayLevel     Control `nrpn:"8.19"` // 0...127 (manual p. 116)
+}
+
 // PerformVE is the TC-Helicon Perform-VE vocal manipulator. The unit answers
 // Control Change, Program Change and MIDI Tempo (Appendix B, manual p. 27) but
 // never sends MIDI itself, so unlike the microKORG XL there is no separate
@@ -2377,6 +2762,7 @@ type Model struct {
 	*MeeblipTriode      `json:"MeeblipTriode,omitempty"`
 	*MidiMix            `json:"MidiMix,omitempty"`
 	*MicrokorgXL        `json:"MicrokorgXL,omitempty"`
+	*Microkorg2         `json:"Microkorg2,omitempty"`
 	*MiniNova           `json:"MiniNova,omitempty"`
 	*PerformVE          `json:"PerformVE,omitempty"`
 	*Skulpt             `json:"Skulpt,omitempty"`
@@ -2411,6 +2797,7 @@ var modelNames = []string{
 	"Pro VS Mini",
 	"microKORG XL",
 	"MicroKorg",
+	"microKORG2",
 	"Perform-VE",
 	"MiniNova",
 	"Pro 800",
@@ -2520,6 +2907,11 @@ func (m *Model) MidiParams() any {
 			m.MicroKorg = &MicroKorg{}
 		}
 		return m.MicroKorg
+	case "microKORG2":
+		if m.Microkorg2 == nil {
+			m.Microkorg2 = &Microkorg2{}
+		}
+		return m.Microkorg2
 	case "Perform-VE":
 		if m.PerformVE == nil {
 			m.PerformVE = &PerformVE{}

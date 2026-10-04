@@ -24,6 +24,7 @@ func TestModelNames(t *testing.T) {
 		"Pro VS Mini",
 		"microKORG XL",
 		"MicroKorg",
+		"microKORG2",
 		"Perform-VE",
 		"MiniNova",
 		"Pro 800",
@@ -144,6 +145,263 @@ func TestMicroKorgFactoryCCAssignment(t *testing.T) {
 			t.Errorf("CC#%d claimed by both %s and %s", field.Controller, other, field.Name)
 		}
 		seen[field.Controller] = field.Name
+	}
+}
+
+// TestMicrokorg2ImplementationChart pins the microKORG2's control change and
+// non-registered parameter bindings, transcribed from its owner's manual
+// (microKORG2_OM_En1.pdf): the Control Change row of the MIDI Implementation
+// Chart on p. 133, the NRPN addresses printed beside the parameters in the
+// body on p. 70-79, 90-94 and 116, and the parameter ranges and enumerations
+// those pages give.
+//
+// Both sets of numbers are unique in the manual, and that uniqueness is what
+// the rest of the package depends on: MidiControls maps an address to a single
+// field name. The General MIDI plumbing the chart also lists is not a patch
+// parameter, so the test checks that it stays unclaimed; otherwise an incoming
+// CC#6 or CC#99 would be reported as an edit of the sound rather than as the
+// protocol message it is.
+func TestMicrokorg2ImplementationChart(t *testing.T) {
+	params, err := NewModelParams("microKORG2")
+	if err != nil {
+		t.Fatalf("NewModelParams: %v", err)
+	}
+	ccFields, err := ControlFields(params)
+	if err != nil {
+		t.Fatalf("ControlFields: %v", err)
+	}
+	nrpnFields, err := NRPNFields(params)
+	if err != nil {
+		t.Fatalf("NRPNFields: %v", err)
+	}
+
+	wantCC := map[string]int{
+		"ModulationWheel":      1,
+		"TimbreLevel":          7,
+		"TimbrePan":            10,
+		"PortamentoTime":       5,
+		"PortamentoMode":       65,
+		"UnisonDetune":         33,
+		"UnisonSpread":         34,
+		"Transpose":            35,
+		"FineTune":             36,
+		"OSC1Wave":             8,
+		"OSC1Shape":            9,
+		"OSC1ModAmount":        15,
+		"OSC1Semitones":        16,
+		"OSC1FineTune":         17,
+		"OSC2Wave":             18,
+		"OSC2Shape":            19,
+		"OSC2ModAmount":        20,
+		"OSC2Semitones":        21,
+		"OSC2FineTune":         22,
+		"OSC3Wave":             48,
+		"OSC3Shape":            49,
+		"OSC3Semitones":        51,
+		"OSC3FineTune":         52,
+		"NoiseType":            29,
+		"NoiseColor":           30,
+		"OSC1Level":            23,
+		"OSC2Level":            24,
+		"OSC3Level":            25,
+		"NoiseLevel":           26,
+		"FilterType":           27,
+		"FilterKeytrack":       28,
+		"FilterDrive":          83,
+		"Resonance":            71,
+		"Cutoff":               74,
+		"AmpEgAttack":          73,
+		"AmpEgDecay":           75,
+		"AmpEgSustain":         70,
+		"AmpEgRelease":         72,
+		"AmpEgVelocity":        79,
+		"FilterEgAttack":       85,
+		"FilterEgDecay":        86,
+		"FilterEgSustain":      87,
+		"FilterEgRelease":      88,
+		"FilterEgIntensity":    84,
+		"LFO1Wave":             89,
+		"LFO1Frequency":        90,
+		"LFO1Smooth":           91,
+		"LFO2Wave":             102,
+		"LFO2Frequency":        76,
+		"LFO2Delay":            92,
+		"ModEffectControl1":    12,
+		"ModEffectControl2":    111,
+		"ModEffectControl3":    112,
+		"DelayEffectControl1":  115,
+		"DelayEffectControl2":  13,
+		"DelayEffectControl3":  113,
+		"DelayEffectControl4":  114,
+		"ReverbEffectControl1": 118,
+		"ReverbEffectControl2": 14,
+		"ReverbEffectControl3": 116,
+		"ReverbEffectControl4": 117,
+		"EQLowFrequency":       95,
+		"EQLowGain":            110,
+		"EQHighFrequency":      94,
+		"EQHighGain":           109,
+		"EQOutputFeedback":     93,
+		"DamperPedal":          64,
+		"Patch1Intensity":      103,
+		"Patch2Intensity":      104,
+		"Patch3Intensity":      105,
+		"Patch4Intensity":      106,
+		"Patch5Intensity":      107,
+		"Patch6Intensity":      108,
+	}
+	if len(ccFields) != len(wantCC) {
+		t.Fatalf("ControlFields returned %d fields, want %d", len(ccFields), len(wantCC))
+	}
+	seen := make(map[int]string, len(ccFields))
+	for _, field := range ccFields {
+		controller, ok := wantCC[field.Name]
+		if !ok {
+			t.Errorf("unexpected field %s", field.Name)
+			continue
+		}
+		if field.Controller != controller {
+			t.Errorf("%s is CC#%d, want CC#%d", field.Name, field.Controller, controller)
+		}
+		if other, dup := seen[field.Controller]; dup {
+			t.Errorf("CC#%d claimed by both %s and %s", field.Controller, other, field.Name)
+		}
+		seen[field.Controller] = field.Name
+	}
+	// Bank select, data entry and the NRPN selectors drive the protocol
+	// rather than the sound. The NRPN path does not need fields for them:
+	// it writes CC#99, CC#98 and CC#6 from its own controller constants.
+	for _, plumbing := range []int{0, 32, 6, 38, 98, 99} {
+		if name, ok := seen[plumbing]; ok {
+			t.Errorf("CC#%d is claimed by %s, want it left to the MIDI protocol", plumbing, name)
+		}
+	}
+
+	wantNRPN := map[string][2]int{
+		// Arpeggiator, MSB 0.
+		"ArpLatch":               {0, 4},
+		"ArpSwing":               {0, 5},
+		"ArpResolution":          {0, 6},
+		"ArpType":                {0, 7},
+		"ArpOctave":              {0, 8},
+		"ArpLastStep":            {0, 9},
+		"ArpGate":                {0, 10},
+		"ArpTargetTimbre":        {0, 11},
+		"ArpKeySync":             {0, 12},
+		// The six virtual patches, MSB 4, in three runs of six.
+		"Patch1Source":           {4, 0},
+		"Patch2Source":           {4, 1},
+		"Patch3Source":           {4, 2},
+		"Patch4Source":           {4, 3},
+		"Patch5Source":           {4, 4},
+		"Patch6Source":           {4, 5},
+		"Patch1Source2":          {4, 16},
+		"Patch2Source2":          {4, 17},
+		"Patch3Source2":          {4, 18},
+		"Patch4Source2":          {4, 19},
+		"Patch5Source2":          {4, 20},
+		"Patch6Source2":          {4, 21},
+		"Patch1Dest":             {4, 32},
+		"Patch2Dest":             {4, 33},
+		"Patch3Dest":             {4, 34},
+		"Patch4Dest":             {4, 35},
+		"Patch5Dest":             {4, 36},
+		"Patch6Dest":             {4, 37},
+		// Vocoder, MSB 5.
+		"VocoderMicDirect":       {5, 1},
+		"VocoderSynthDryWet":     {5, 2},
+		"VocoderFormant":         {5, 3},
+		"VocoderResonance":       {5, 4},
+		"VocoderEnvFollowerSens": {5, 5},
+		"VocoderBandLevel1":      {5, 16},
+		"VocoderBandLevel2":      {5, 17},
+		"VocoderBandLevel3":      {5, 18},
+		"VocoderBandLevel4":      {5, 19},
+		"VocoderBandLevel5":      {5, 20},
+		"VocoderBandLevel6":      {5, 21},
+		"VocoderBandLevel7":      {5, 22},
+		"VocoderBandLevel8":      {5, 23},
+		"VocoderBandLevel9":      {5, 24},
+		"VocoderBandLevel10":     {5, 25},
+		"VocoderBandLevel11":     {5, 26},
+		"VocoderBandLevel12":     {5, 27},
+		"VocoderBandLevel13":     {5, 28},
+		"VocoderBandLevel14":     {5, 29},
+		"VocoderBandLevel15":     {5, 30},
+		"VocoderBandLevel16":     {5, 31},
+		"VocoderBandPan1":        {5, 32},
+		"VocoderBandPan2":        {5, 33},
+		"VocoderBandPan3":        {5, 34},
+		"VocoderBandPan4":        {5, 35},
+		"VocoderBandPan5":        {5, 36},
+		"VocoderBandPan6":        {5, 37},
+		"VocoderBandPan7":        {5, 38},
+		"VocoderBandPan8":        {5, 39},
+		"VocoderBandPan9":        {5, 40},
+		"VocoderBandPan10":       {5, 41},
+		"VocoderBandPan11":       {5, 42},
+		"VocoderBandPan12":       {5, 43},
+		"VocoderBandPan13":       {5, 44},
+		"VocoderBandPan14":       {5, 45},
+		"VocoderBandPan15":       {5, 46},
+		"VocoderBandPan16":       {5, 47},
+		// Hard tune, MSB 6.
+		"HardTuneIntensity":      {6, 1},
+		"HardTuneSpeed":          {6, 2},
+		"HardTuneFormant":        {6, 3},
+		// Harmonizer, MSB 7.
+		"HarmonizerLevel":        {7, 1},
+		"HarmonizerStereoSpread": {7, 2},
+		"HarmonizerFormant":      {7, 3},
+		"HarmonizerDetune":       {7, 4},
+		"HarmonizerDelay":        {7, 5},
+		"HarmonizerNumber":       {7, 16},
+		"HarmonizerPitch1":       {7, 32},
+		"HarmonizerPitch2":       {7, 48},
+		// Loop recorder, MSB 8.
+		"LoopStutter":            {8, 16},
+		"LoopStutterLength":      {8, 17},
+		"LoopStutterOffset":      {8, 18},
+		"LoopPlayLevel":          {8, 19},
+	}
+	if len(nrpnFields) != len(wantNRPN) {
+		t.Fatalf("NRPNFields returned %d fields, want %d", len(nrpnFields), len(wantNRPN))
+	}
+	nrpnSeen := make(map[[2]int]string, len(nrpnFields))
+	for _, field := range nrpnFields {
+		address, ok := wantNRPN[field.Name]
+		if !ok {
+			t.Errorf("unexpected NRPN field %s", field.Name)
+			continue
+		}
+		if field.MSB != address[0] || field.LSB != address[1] {
+			t.Errorf("%s addresses %d.%d, want %d.%d", field.Name, field.MSB, field.LSB, address[0], address[1])
+		}
+		if other, dup := nrpnSeen[address]; dup {
+			t.Errorf("NRPN %d.%d claimed by both %s and %s", address[0], address[1], other, field.Name)
+		}
+		nrpnSeen[address] = field.Name
+	}
+
+	// The instrument reaches each of these as three messages, so a patch has
+	// to select the parameter before it can write it.
+	controls := NewMidiControlsNRPN(&Microkorg2{ArpType: new(int)})
+	if controls == nil {
+		t.Fatal("NewMidiControlsNRPN returned nil")
+	}
+	if !controls.Set(controls.CC("ArpType"), 100) {
+		t.Fatal("Set rejected a valid NRPN")
+	}
+	want := []ControlGroup{{
+		Name: "ArpType",
+		Messages: [][]byte{
+			{0xb0, 99, 0},  // NRPN MSB selects the arpeggiator block
+			{0xb0, 98, 7},  // NRPN LSB selects the arpeggio type
+			{0xb0, 6, 100}, // data entry MSB carries the value
+		},
+	}}
+	if got := controls.ControlCodes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ArpType sends %v, want %v", got, want)
 	}
 }
 
