@@ -497,10 +497,6 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 	waitFor(t, "the playhead to move", func() bool { return writes.Load() > stepPaints })
 
 	before := writes.Load()
-	time.Sleep(50 * time.Millisecond)
-	if writes.Load() <= before {
-		t.Fatal("the sequencer worker stopped painting")
-	}
 	// Keep switching for long enough that the worker is certainly running against it: one
 	// pass can finish between two of the worker's steps and prove nothing.
 	for i := 0; i < switchRounds; i++ {
@@ -518,6 +514,11 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 		if bank.selTrackRow != row {
 			t.Fatalf("selected row = %d, want %d", bank.selTrackRow, row)
 		}
+	}
+	// The worker must have painted while those switches were happening, or the race this
+	// test exists to catch was never exercised.
+	if writes.Load() <= before {
+		t.Fatal("the sequencer worker did not paint while the selection moved")
 	}
 	if err := stopPlayback(); err != nil {
 		t.Fatal(err)
