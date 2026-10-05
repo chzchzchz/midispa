@@ -157,6 +157,7 @@ The highest-ranked patch remains the champion. A later round cannot replace it u
 | `--seed` | for a SysEx format | | SMF file for `cc`, raw SysEx dump for `dx7-single` and `pro800`. |
 | `--playback` | no | | SMF file played after each candidate patch is applied. |
 | `--gene-semantics` | no | | JSON file containing exclusion and fixed-value rules. |
+| `--dump-excludes` | no | | Write every parameter of the model to this JSON file as an exclude rule, then exit without evolving anything. |
 | `--mutation-rate` | no | `1` | Probability that a candidate is mutated, from 0 to 1. |
 | `--mutation-sigma` | no | `16` | Standard deviation for bounded Gaussian descendant mutations. |
 | `--mutated-genes` | no | `0` | Exact number of mutable genes changed; 0 chooses 1 through 3. |
@@ -227,6 +228,28 @@ A fixed gene remains in the patch and is always part of the emitted patch or SMF
 - A fixed rule without a value or matching seed value is an error.
 
 Unknown gene names, duplicate rules, unsupported policies, excluded rules with values, and fixed values outside the gene's own range are rejected. For a CC model every value is a 0-127 MIDI data byte; for a SysEx program each field carries its own bounds, so a fixed value of 50 on a `0..31` field is rejected by name.
+
+### Starting From a Dump
+
+Gene names are not something to guess: a SysEx name is a reflected field path
+like `Patch.Lfo.Shape`, and a wrong spelling is rejected rather than ignored.
+`--dump-excludes` writes them out instead:
+
+```sh
+out/mutation --model "Volca Bass" --dump-excludes volca.json
+out/mutation --format dx7-single --dump-excludes dx7.json
+```
+
+Every parameter the model exposes gets one rule, all of them `exclude`, in the
+order the model declares them. Delete the entries worth evolving and pass the
+file to `--gene-semantics`; what is left is the search space.
+
+A dump is the whole run replaced by one question about the model, so it needs
+nothing else: no `--port`, no `--output`, and no `--seed`, because a SysEx
+catalog comes from the program type rather than from a particular dump. It also
+means the file must be edited before use — a file that excludes everything
+evolves nothing — and it cannot be combined with `--gene-semantics`, which it
+would have to ignore. Any existing file at the given path is overwritten.
 
 ## Output
 

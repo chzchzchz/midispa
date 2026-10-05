@@ -37,7 +37,7 @@ func newSysexPatch(format sysexFormat, root any, semantics map[string]geneSemant
 	known := make(map[string]bool, len(specs))
 	for _, spec := range specs {
 		known[spec.Name] = true
-		if semantics[spec.Name].Policy == "exclude" {
+		if semantics[spec.Name].Policy == excludePolicy {
 			continue
 		}
 		value, err := geneValue(root, spec)

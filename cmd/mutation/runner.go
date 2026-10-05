@@ -125,6 +125,12 @@ func runMutation(ctx context.Context, config configuration, input io.Reader, out
 // runMutationWithFactory keeps hardware construction injectable so orchestration
 // can be exercised without opening ALSA.
 func runMutationWithFactory(ctx context.Context, config configuration, input io.Reader, output io.Writer, factory midiOutputFactory) error {
+	// A dump answers a question about the model rather than evolving a
+	// patch, so it returns before the run's own requirements are checked and
+	// before any instrument is opened.
+	if config.dumpExcludes != "" {
+		return dumpExcludedGenes(config, output)
+	}
 	if err := validateConfiguration(config); err != nil {
 		return err
 	}

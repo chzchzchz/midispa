@@ -21,6 +21,7 @@ type configuration struct {
 	output        string
 	playback      string
 	geneSemantics string
+	dumpExcludes  string
 	midiChannel   int
 	sysexSettle   time.Duration
 	jsonOutput    bool
@@ -39,6 +40,7 @@ func parseConfiguration(arguments []string, output io.Writer) (configuration, er
 	outputPath := flags.String("output", "", "path for the latest and numbered best patches")
 	playbackPath := flags.String("playback", "", "optional SMF file to play while judging")
 	geneSemanticsPath := flags.String("gene-semantics", "", "optional JSON array of excluded and fixed-value gene rules")
+	dumpExcludesPath := flags.String("dump-excludes", "", "write every parameter of the selected model to this JSON file as an exclude rule, then exit")
 	mutationRate := flags.Float64("mutation-rate", defaultMutationRate, "probability that a candidate is changed (0-1)")
 	mutationSigma := flags.Float64("mutation-sigma", defaultMutationSigma, "standard deviation for Gaussian descendant mutations")
 	mutatedGenes := flags.Int("mutated-genes", defaultMutatedGenes, "distinct genes changed per mutation; 0 chooses 1-3 automatically")
@@ -63,6 +65,7 @@ func parseConfiguration(arguments []string, output io.Writer) (configuration, er
 		output:        *outputPath,
 		playback:      *playbackPath,
 		geneSemantics: *geneSemanticsPath,
+		dumpExcludes:  *dumpExcludesPath,
 		midiChannel:   *midiChannel,
 		sysexSettle:   *sysexSettle,
 		jsonOutput:    *jsonOutput,
@@ -105,11 +108,8 @@ func newPatchFactory(config configuration) (patchFactory, error) {
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case format.acceptsModelName() && config.modelName == "":
-		return nil, fmt.Errorf("--model is required for format %q", config.format)
-	case !format.acceptsModelName() && config.modelName != "":
-		return nil, fmt.Errorf("--model does not apply to format %q", config.format)
+	if err := validateModelName(format, config); err != nil {
+		return nil, err
 	}
 	if config.jsonOutput && !format.supportsJSONDump() {
 		// The JSON dump is a rebuilt CC model struct, so offering it for a
@@ -120,6 +120,23 @@ func newPatchFactory(config configuration) (patchFactory, error) {
 		return nil, fmt.Errorf("--output must end in %s for format %q", extension, config.format)
 	}
 	return format, nil
+}
+
+// validateModelName is the one rule that says which parameters can be named
+// at all. It is separate from newPatchFactory because a dump of the model's
+// parameters needs to name a model but none of the flags a run would need.
+//
+// A dump passes no semantics, so it builds the unfiltered catalog; applying a
+// caller's rules first would list only what a run can already reach, which is
+// the opposite of what a dump is for.
+func validateModelName(format patchFactory, config configuration) error {
+	switch {
+	case format.acceptsModelName() && config.modelName == "":
+		return fmt.Errorf("--model is required for format %q", config.format)
+	case !format.acceptsModelName() && config.modelName != "":
+		return fmt.Errorf("--model does not apply to format %q", config.format)
+	}
+	return nil
 }
 
 func selectPatchFormat(config configuration) (patchFactory, error) {

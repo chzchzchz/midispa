@@ -39,7 +39,7 @@ func newPatchWithSemantics(modelName string, semantics map[string]geneSemantic) 
 		knownNames[field.Name] = true
 		controllers[field.Name] = field.Controller
 		rule, hasRule := semantics[field.Name]
-		if hasRule && rule.Policy == "exclude" {
+		if hasRule && rule.Policy == excludePolicy {
 			continue
 		}
 		policy := genePolicyMutable

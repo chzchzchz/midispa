@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,32 @@ func TestRunMutationWithFactoryUsesInjectedOutput(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.True(t, factoryCalled, "MIDI output factory was not called")
 	assert.NotEmpty(t, writer.messages, "injected output received no cleanup messages")
+}
+
+func TestRunMutationWithDumpExcludesNeverStartsASession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "excludes.json")
+	// A dump is answered by the model alone, so a configuration that a run
+	// would reject -- no port, no output, no seed, no evolution settings --
+	// still has to produce its file, and must not reach the instrument.
+	config := configuration{
+		format:       ccFormatName,
+		modelName:    "Volca Bass",
+		dumpExcludes: path,
+	}
+	factory := func(string) (io.Writer, io.Closer, error) {
+		return nil, nil, fmt.Errorf("a dump opened a MIDI output")
+	}
+	var output strings.Builder
+	require.NoError(t, runMutationWithFactory(context.Background(), config, strings.NewReader(""), &output, factory), "runMutationWithFactory")
+	assert.FileExists(t, path, "the dump wrote no file")
+	assert.Contains(t, output.String(), "Volca Bass", "missing report")
+	assert.Contains(t, output.String(), "excluded parameters", "missing report")
+
+	semantics, err := loadGeneSemantics(path)
+	require.NoError(t, err, "the dumped file is not a gene semantics file")
+	catalog, err := newPatchWithSemantics("Volca Bass", nil)
+	require.NoError(t, err, "catalog")
+	assert.Len(t, semantics, len(catalog.genes), "one rule per parameter")
 }
 
 type recordingAuditioner struct {

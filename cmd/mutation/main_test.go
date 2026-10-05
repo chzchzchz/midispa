@@ -156,6 +156,15 @@ func TestParseConfigurationRejectsPositionalArguments(t *testing.T) {
 	assert.Error(t, err, "accepted positional arguments")
 }
 
+func TestParseConfigurationReadsDumpExcludes(t *testing.T) {
+	config, err := parseConfiguration([]string{"--model", "Volca Bass", "--dump-excludes", "excludes.json"}, io.Discard)
+	require.NoError(t, err, "parseConfiguration")
+	// Nothing else is asked for, because a dump needs nothing else.
+	assert.Equal(t, "excludes.json", config.dumpExcludes, "unexpected configuration: %+v", config)
+	assert.Empty(t, config.portName, "unexpected configuration: %+v", config)
+	assert.Empty(t, config.output, "unexpected configuration: %+v", config)
+}
+
 func TestValidateConfiguration(t *testing.T) {
 	valid := configuration{
 		format:      ccFormatName,
