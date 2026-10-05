@@ -307,6 +307,11 @@ func (p *PatternBank) ScrollTracks(delta int) error {
 	return p.redraw()
 }
 
+// CurrentPattern is the pattern the bank is showing. The map is guarded by trackMu for a
+// save, which reads it by reference; the read here does not take that lock, because the
+// playback worker reaches this on every drawn column. What makes that safe is that every
+// path which changes the map stops playback first, so the worker has been joined by the
+// time the map moves. A new path that writes the map has to do the same.
 func (p *PatternBank) CurrentPattern() *Pattern {
 	return p.Patterns[p.selPatIdx]
 }
@@ -575,14 +580,20 @@ func (p *PatternBank) JogSelect(n int) error {
 }
 
 func (p *PatternBank) redrawTrackPads(row int) error {
-	if p == nil || p.f == nil || p.trackForPadRow(row) == 0 {
+	if p == nil || p.f == nil {
+		return nil
+	}
+	// One read of the window answers both whether the row holds a track and which voice
+	// stands behind it. Asking twice took the window lock twice for a row, and a cursor
+	// move repaints all four.
+	tv := p.trackVoice(row)
+	if tv == nil {
 		return nil
 	}
 	pat := p.CurrentPattern()
 	if pat == nil {
 		return nil
 	}
-	tv := p.trackVoice(row)
 	evs := pat.FindBeat(0)
 	var rgb [16][3]int
 	for _, ev := range evs {
@@ -661,6 +672,10 @@ func (p *PatternBank) drawPadColumnColor(col int, invert bool) error {
 		rgb[row] = emptyStepColor(invert)
 	}
 	evs := pattern.FindBeat(stepBeat(col))
+	// The window is read once for the whole column. The loop below breaks at the first
+	// event past the column, so it runs at most padRows times, but every pass used to
+	// take the window lock again for a mapping that cannot change under it.
+	rowVoices := p.visibleTrackVoices()
 	for _, ev := range evs {
 		idx := eventStep(ev)
 		if idx < col {
@@ -669,7 +684,7 @@ func (p *PatternBank) drawPadColumnColor(col int, invert bool) error {
 		if idx >= col+1 {
 			break
 		}
-		for row, rowVoice := range p.visibleTrackVoices() {
+		for row, rowVoice := range rowVoices {
 			if ev.Voice == rowVoice {
 				rgb[row] = playheadEventColor(ev, invert)
 				if ev.Tie {

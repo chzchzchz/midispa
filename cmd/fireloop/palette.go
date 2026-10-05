@@ -118,10 +118,7 @@ func (p *PatternBank) ShiftPaletteOctave(detents int) error {
 		return nil
 	}
 	logger.Debug("palette octave", "from", previous, "to", p.paletteOctave, "base", p.paletteBase())
-	if err := p.drawNotePalette(); err != nil {
-		return err
-	}
-	return p.printStepStatus()
+	return p.repaintEditView()
 }
 
 // stepCellPaintColor is how a step cell reads right now: white while the playhead is on
@@ -232,17 +229,25 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		if altOn {
 			reason = "alt"
 		}
-		pattern.RemoveEventAtStep(step, voice)
-		logger.Debug("pitch removed", "step", step, "via", reason)
-		if err := p.drawNotePalette(); err != nil {
-			return err
-		}
-		return p.printStepStatus()
+		return p.removeNoteAtStep(pattern, voice, step, reason)
 	}
-	// How hard the pad was pressed is the step's dynamics, whether the note is new or its
-	// pitch is being changed. The Volume encoder still adjusts the value afterwards.
-	velocity := clampMidiDataValue(pressed)
-	event, ok := pattern.SetChromaticNote(step, voice, note, velocity)
+	return p.placeNoteOnStep(aseq, pattern, voice, step, note, pressed)
+}
+
+// removeNoteAtStep takes the note off a step and repaints, naming in the log which of the
+// two ways of asking for that the pad press was.
+func (p *PatternBank) removeNoteAtStep(pattern *Pattern, voice *Voice, step int, reason string) error {
+	pattern.RemoveEventAtStep(step, voice)
+	logger.Debug("pitch removed", "step", step, "via", reason)
+	return p.repaintEditView()
+}
+
+// placeNoteOnStep writes a pitch onto a step and repaints. How hard the pad was pressed is
+// the step's dynamics, whether the note is new or its pitch is being changed, and the step
+// is auditioned so the user hears the pitch they just picked. The Volume encoder still
+// adjusts the value afterwards.
+func (p *PatternBank) placeNoteOnStep(aseq midiWriter, pattern *Pattern, voice *Voice, step, note, pressed int) error {
+	event, ok := pattern.SetChromaticNote(step, voice, note, clampMidiDataValue(pressed))
 	if !ok {
 		return nil
 	}
@@ -252,10 +257,7 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 	if err := p.auditionEvent(aseq, event); err != nil {
 		return err
 	}
-	if err := p.drawNotePalette(); err != nil {
-		return err
-	}
-	return p.printStepStatus()
+	return p.repaintEditView()
 }
 
 // stepCellColor is how one cell of the step strip reads: the step's note colour, dark when

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"testing"
 )
 
@@ -38,6 +39,96 @@ func TestFindBeatReturnsSnapshot(t *testing.T) {
 	p.ToggleEvent(Event{Beat: 1})
 	if len(found) != 1 {
 		t.Fatalf("editing pattern changed result length: %d", len(found))
+	}
+}
+
+// FindBeat binary searches Events rather than sorting a copy of it, so keeping Events in
+// beat order is an invariant every path that changes the notes has to keep. This walks the
+// paths that can break it: the editing setters, a copy, a file listing its events out of
+// order, and a restore into the bank.
+func TestEventsStayInBeatOrder(t *testing.T) {
+	drum := 36
+	kit := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{
+		{Name: "lead", Channel: 1},
+		{Name: "snare", Channel: 1, Note: &drum},
+	}}})
+	lead := kit.voices[0]
+	snare := kit.voices[1]
+
+	pattern := &Pattern{}
+	// Edited in an order no player would type: a late step first, then earlier ones, one
+	// event toggled off again, and a length that drops the tail.
+	for _, step := range []int{12, 3, 7, 3, 9, 1} {
+		pattern.ToggleEvent(Event{Voice: lead, Beat: stepBeat(step), Velocity: 90})
+	}
+	pattern.ToggleEvent(Event{Voice: snare, Beat: stepBeat(5), Velocity: 90})
+	if _, ok := pattern.SetChromaticNote(7, lead, 60, 90); !ok {
+		t.Fatal("expected step 7 to take the note it just got")
+	}
+	pattern.SetVelocity(7, lead, 100)
+	pattern.RemoveEventAtStep(3, lead)
+	pattern.SetLengthSteps(8)
+	assertEventsInBeatOrder(t, "after editing", pattern)
+	assertEventsInBeatOrder(t, "after clearing a voice", pattern.Copy())
+
+	pattern.ClearVoice(snare)
+	assertEventsInBeatOrder(t, "after clearing a voice", pattern)
+
+	// A file is not obliged to list its events in step order, and the two paths that take a
+	// list from outside the pattern are the ones a sorted hand-off would hide a lapse in.
+	fromFile, dropped := patternFromState(statePattern{Index: 1, LengthSteps: 8, Events: []stateEvent{
+		{Voice: 0, Step: 12, Velocity: 90},
+		{Voice: 1, Step: 3, Velocity: 90},
+		{Voice: 0, Step: 7, Note: 60, Velocity: 90},
+		{Voice: 1, Step: 0, Velocity: 90},
+	}}, kit)
+	if dropped != 0 {
+		t.Fatalf("loading dropped %d events, want 0", dropped)
+	}
+	assertEventsInBeatOrder(t, "loaded from a file", fromFile)
+
+	bank, _ := quietBank(t, kit)
+	scrambled := &Pattern{Events: []Event{
+		{Voice: lead, Beat: stepBeat(9), Velocity: 90},
+		{Voice: snare, Beat: stepBeat(2), Velocity: 90},
+		{Voice: lead, Beat: stepBeat(4), Velocity: 90},
+	}}
+	if err := bank.SetPattern(scrambled); err != nil {
+		t.Fatal(err)
+	}
+	assertEventsInBeatOrder(t, "restored into the bank", bank.CurrentPattern())
+}
+
+// assertEventsInBeatOrder fails when a pattern's events are out of beat order, and then
+// checks FindBeat against what the same lookup would return from a copy that was sorted the
+// slow way, so a pattern that kept its order still cannot hand back the wrong window.
+func assertEventsInBeatOrder(t *testing.T, what string, p *Pattern) {
+	t.Helper()
+	events, _ := p.snapshot()
+	for i := 1; i < len(events); i++ {
+		if events[i].Beat < events[i-1].Beat {
+			t.Fatalf("%s: event %d is at beat %v, after the beat %v of the event before it", what, i, events[i].Beat, events[i-1].Beat)
+		}
+	}
+	sorted := append([]Event(nil), events...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Beat < sorted[j].Beat })
+	for _, beat := range []float32{0, 0.5, 1, 2, 3} {
+		var want []Event
+		for _, event := range sorted {
+			if event.Beat >= beat {
+				want = append(want, event)
+			}
+		}
+		got := p.FindBeat(beat)
+		if len(got) != len(want) {
+			t.Fatalf("%s: FindBeat(%v) returned %d events, want %d", what, beat, len(got), len(want))
+		}
+		for i := range got {
+			if got[i].Beat != want[i].Beat || got[i].Voice != want[i].Voice {
+				t.Fatalf("%s: FindBeat(%v) event %d is beat %v voice %v, want beat %v voice %v",
+					what, beat, i, got[i].Beat, got[i].Voice, want[i].Beat, want[i].Voice)
+			}
+		}
 	}
 }
 

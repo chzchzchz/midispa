@@ -14,6 +14,11 @@ const (
 )
 
 type Pattern struct {
+	// Events is held in beat order. FindBeat binary searches it instead of sorting a copy
+	// of it, so every path that assigns here has to normalise before the pattern is read
+	// again: the setters here do it themselves, and the load and restore paths do it
+	// through SetLengthSteps and normalizeLocked. TestEventsStayInBeatOrder is what holds
+	// this to account.
 	Events []Event
 	// lengthSteps is measured in sixteenth notes; zero keeps the legacy four-beat default.
 	lengthSteps int
@@ -67,19 +72,19 @@ func (p *Pattern) ToggleEvent(ev Event) bool {
 	return true
 }
 
-// FindBeat returns a slice of all events >= a given beat.
-func (p *Pattern) FindBeat(beat float32) (ret []Event) {
+// FindBeat returns a snapshot of every event at or after a given beat, in beat order.
+//
+// Only the tail the caller is handed is copied. The search reads the live list under the
+// same lock, so there is nothing to copy it for, and it relies on Events being in beat
+// order, which is what normalizeLocked is for. The copy itself is not optional: a caller
+// keeps what it gets, and the pattern is free to change underneath it afterwards.
+func (p *Pattern) FindBeat(beat float32) []Event {
 	p.mu.RLock()
-	evs := append([]Event(nil), p.Events...)
-	p.mu.RUnlock()
-	sort.SliceStable(evs, func(i, j int) bool {
-		return evs[i].Beat < evs[j].Beat
+	defer p.mu.RUnlock()
+	first := sort.Search(len(p.Events), func(i int) bool {
+		return p.Events[i].Beat >= beat
 	})
-	l := sort.Search(len(evs), func(i int) bool {
-		return evs[i].Beat >= beat
-	})
-	ret = evs[l:]
-	return ret
+	return append([]Event(nil), p.Events[first:]...)
 }
 
 func (p *Pattern) ClearVoice(v *Voice) {
@@ -95,18 +100,18 @@ func (p *Pattern) ClearVoice(v *Voice) {
 	p.mu.Unlock()
 }
 
+// EventsForVoice returns a snapshot of one voice's events in beat order. The list it is
+// filtered from is in beat order itself, so the filtered list is too and there is nothing
+// to sort.
 func (p *Pattern) EventsForVoice(v *Voice) []Event {
 	p.mu.RLock()
-	events := make([]Event, 0)
+	defer p.mu.RUnlock()
+	events := make([]Event, 0, len(p.Events))
 	for _, event := range p.Events {
 		if event.Voice == v {
 			events = append(events, event)
 		}
 	}
-	p.mu.RUnlock()
-	sort.SliceStable(events, func(i, j int) bool {
-		return events[i].Beat < events[j].Beat
-	})
 	return events
 }
 
@@ -331,9 +336,18 @@ func storedLengthSteps(stored int) int {
 
 // normalizeLocked keeps event order stable and makes every stored tie point to a valid successor.
 func (p *Pattern) normalizeLocked() {
-	sort.SliceStable(p.Events, func(i, j int) bool {
-		return p.Events[i].Beat < p.Events[j].Beat
-	})
+	if !eventsInBeatOrder(p.Events) {
+		sort.SliceStable(p.Events, func(i, j int) bool {
+			return p.Events[i].Beat < p.Events[j].Beat
+		})
+	}
+	// Nothing carries a tie, so there is nothing to point at anything: the repair below
+	// would clear flags that are already clear and set none of them. Skipping it keeps an
+	// ordinary note edit from walking every event twice and rounding every beat twice to
+	// find that out.
+	if !anyEventTied(p.Events) {
+		return
+	}
 	tieFlags := make([]bool, len(p.Events))
 	lengthSteps := p.lengthStepsLocked()
 	for i := range p.Events {
@@ -354,6 +368,30 @@ func (p *Pattern) normalizeLocked() {
 			}
 		}
 	}
+}
+
+// eventsInBeatOrder reports whether a list is already sorted by beat. Every path that
+// changes the notes ends in normalizeLocked, and by then it is: an insert lands by binary
+// search and a removal shifts a hole closed. Checking is one pass of plain comparisons,
+// where sorting an ordered list is a pass with a closure call per pair.
+func eventsInBeatOrder(events []Event) bool {
+	for i := 1; i < len(events); i++ {
+		if events[i].Beat < events[i-1].Beat {
+			return false
+		}
+	}
+	return true
+}
+
+// anyEventTied reports whether any event carries a tie, which is what the repair in
+// normalizeLocked has to have something to do about.
+func anyEventTied(events []Event) bool {
+	for i := range events {
+		if events[i].Tie {
+			return true
+		}
+	}
+	return false
 }
 
 // Beats returns the configured pattern duration, defaulting to four beats.

@@ -76,7 +76,8 @@ func (p *PatternBank) MoveStepCursor(delta int) error {
 		// A guard belongs to the step that was left behind.
 		p.noteChosen = false
 	}
-	return p.applyStepCursor()
+	logger.Debug("cursor", "step", p.stepCursor)
+	return p.repaintEditView()
 }
 
 func (p *PatternBank) setStepCursor(step int) error {
@@ -92,13 +93,15 @@ func (p *PatternBank) setStepCursor(step int) error {
 		p.noteChosen = false
 	}
 	p.stepCursor = step
-	return p.applyStepCursor()
+	logger.Debug("cursor", "step", p.stepCursor)
+	return p.repaintEditView()
 }
 
-// applyStepCursor redraws whatever an edit target change affects: the palette while note
-// editing owns the grid, and the step rows otherwise.
-func (p *PatternBank) applyStepCursor() error {
-	logger.Debug("cursor", "step", p.stepCursor)
+// repaintEditView puts the display back after an edit: the pitch palette while note
+// editing owns the grid, the step rows otherwise, and then the readout the edit is
+// reported on. Which of those two the redraw is depends on the mode rather than on the
+// edit, so it is written once here rather than repeated at every place an edit ends.
+func (p *PatternBank) repaintEditView() error {
 	if p.editingNote {
 		if err := p.drawNotePalette(); err != nil {
 			return err
@@ -151,18 +154,10 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 		if err := p.f.SetLed(NoteMode, LEDGreen); err != nil {
 			return err
 		}
-		if err := p.drawNotePalette(); err != nil {
-			return err
-		}
-		return p.printStepStatus()
-	}
-	if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+	} else if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
 		return err
 	}
-	if err := p.redrawPatternRows(); err != nil {
-		return err
-	}
-	return p.printStepStatus()
+	return p.repaintEditView()
 }
 
 func (p *PatternBank) ToggleNoteMode() error {
@@ -199,12 +194,12 @@ func (p *PatternBank) printStepStatus() error {
 	if p == nil || p.f == nil || p.editingLength {
 		return nil
 	}
-	voice := p.SelectedVoice()
-	if voice == nil {
-		return p.clearTextRows(lengthDisplayRow, 1)
-	}
 	if err := p.clearTextRows(lengthDisplayRow, 1); err != nil {
 		return err
+	}
+	voice := p.SelectedVoice()
+	if voice == nil {
+		return nil
 	}
 	pattern := p.CurrentPattern()
 	tieStep := -1

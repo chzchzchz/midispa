@@ -222,6 +222,24 @@ func TestPatternLengthControls(t *testing.T) {
 	}
 }
 
+// A bank the user has not chosen a pattern on yet has nothing to report a length from.
+// NewPatternBank leaves the map empty and every other path into length mode goes through
+// Jump, so this is the one shape of bank that can reach the readout without a pattern.
+func TestLengthModeWithoutAPatternReportsNothing(t *testing.T) {
+	kit := NewVoiceBank([]Device{{
+		Channel: 1,
+		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
+	}})
+	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), kit)
+	recorder := useScreenRecorder(t, &bank.screen)
+	if err := bank.ToggleLengthMode(); err != nil {
+		t.Fatal(err)
+	}
+	if got := recorder.row(lengthDisplayRow); got != "" {
+		t.Fatalf("length row reads %q, want it left blank", got)
+	}
+}
+
 func TestSongModePatternPadUsesViewport(t *testing.T) {
 	songBank, patternBank := newArrangementTest(t)
 	previousSongbank, previousShift := songbank, shiftOn

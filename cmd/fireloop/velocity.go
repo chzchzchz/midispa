@@ -52,6 +52,9 @@ func (p *PatternBank) AdjustVelocity(aseq midiWriter, encoderValue int) error {
 			return err
 		}
 	}
+	// Only the palette is repainted here, and only while note editing owns the grid: a
+	// velocity is not part of what a step row shows, so repainting the rows would send
+	// four pad messages for a change none of them would show.
 	if p.editingNote {
 		if err := p.drawNotePalette(); err != nil {
 			return err

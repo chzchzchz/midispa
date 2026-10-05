@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,13 @@ import (
 // playback lifecycle, and the UI transitions worth following. Tests replace it so a
 // scripted sequence can be read back as a log.
 var logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+// displayDebug reports whether the display trace would be written at all. Every pad row,
+// screen row and light passes through one, and assembling the attributes for a log line
+// the handler drops is work a redraw pays on every frame.
+func displayDebug() bool {
+	return logger != nil && logger.Enabled(context.Background(), slog.LevelDebug)
+}
 
 // setLogger installs the handler for the rest of the process. A nil logger is ignored so
 // a caller cannot silence the sequencer by accident.

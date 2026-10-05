@@ -219,7 +219,7 @@ func (f *Fire) LedsOff() error {
 // pads is emitted but ignored, which left the grid lit through a blackout.
 func (f *Fire) PadsOff() error {
 	for start := 0; start < padColumns*padRows; start += padColumns {
-		var pads []akai.Pad
+		pads := make([]akai.Pad, 0, padColumns)
 		for idx := start; idx < start+padColumns; idx++ {
 			pads = append(pads, akai.Pad{Idx: idx})
 		}
@@ -243,7 +243,7 @@ func (f *Fire) SetLed(n, v int) error {
 // drawn from one the hardware ignored. Pads and the screen are separate commands, and only
 // a capture of the wire can say which of them arrived.
 func logDisplayOut(kind, detail string, size int, msg []byte) {
-	if logger == nil {
+	if !displayDebug() {
 		return
 	}
 	attrs := []any{"kind", kind, "bytes", size}
@@ -308,7 +308,7 @@ func (f *Fire) printFont(x, y int, s string, font func(byte) []byte) error {
 	if !f.out() {
 		return nil
 	}
-	var bmp []byte
+	bmp := make([]byte, 0, len(s)*glyphWidth)
 	for _, v := range s {
 		bmp = append(bmp, font(byte(v))...)
 	}
@@ -323,7 +323,11 @@ func (f *Fire) printFont(x, y int, s string, font func(byte) []byte) error {
 	if err != nil {
 		return err
 	}
-	logDisplayOut("screen", fmt.Sprintf("row %d", y), len(b), b)
+	// The row is named here rather than at the call site above, because a redraw with the
+	// trace off should not build a string for a log line that would drop it.
+	if displayDebug() {
+		logDisplayOut("screen", fmt.Sprintf("row %d", y), len(b), b)
+	}
 	return f.write(b)
 }
 
@@ -379,7 +383,7 @@ func (f *Fire) LightPadRow(row int, vals [16][3]int) error {
 	if row < 0 || row >= 4 {
 		return errOutOfRange
 	}
-	var pads []akai.Pad
+	pads := make([]akai.Pad, 0, padColumns)
 	for i := 0; i < 16; i++ {
 		pads = append(pads, makePad(i, row, vals[i]))
 	}
@@ -390,7 +394,7 @@ func (f *Fire) LightPadColumn(col int, vals [4][3]int) error {
 	if col < 0 || col > 15 {
 		return errOutOfRange
 	}
-	var pads []akai.Pad
+	pads := make([]akai.Pad, 0, padRows)
 	for row := 0; row < 4; row++ {
 		pads = append(pads, makePad(col, row, vals[row]))
 	}

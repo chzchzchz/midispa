@@ -79,3 +79,19 @@ func BenchmarkPlayheadColumn(b *testing.B) {
 		}
 	}
 }
+
+// The beat lookup is what every redraw above and every playback tick asks for, so it is
+// measured on its own. Asking from the first beat is the worst case: a track row repaint
+// wants the whole pattern, and it asks once per row, so a cursor move pays this four times.
+// A tick or a column repaint asks from where the playhead is and copies only the tail.
+func BenchmarkFindBeat(b *testing.B) {
+	pattern := perfBank(b).CurrentPattern()
+	events, _ := pattern.snapshot()
+	want := len(events)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if got := len(pattern.FindBeat(0)); got != want {
+			b.Fatalf("FindBeat returned %d events, want %d", got, want)
+		}
+	}
+}

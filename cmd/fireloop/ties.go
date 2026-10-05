@@ -7,12 +7,19 @@ import "math/bits"
 // than as an unrelated press. They model held hardware state, not a timing window, so a tie
 // needs both pads down at once and letting go of either ends the gesture.
 
-func (p *PatternBank) pressPad(row, col int) bool {
+// padBit is the mask bit a pad occupies, and whether it is a pad the gesture tracks. Only
+// the pitch palette's columns are tracked; a step cell names a step rather than a pitch and
+// drives the gesture through the held step instead.
+func (p *PatternBank) padBit(row, col int) (uint64, bool) {
 	if p == nil || row < 0 || row >= len(p.rowPadMasks) || col < 0 || col >= chromaticPaletteColumns {
-		return false
+		return 0, false
 	}
-	bit := uint64(1) << uint(row*chromaticPaletteColumns+col)
-	if p.pressedPads&bit != 0 {
+	return uint64(1) << uint(row*chromaticPaletteColumns+col), true
+}
+
+func (p *PatternBank) pressPad(row, col int) bool {
+	bit, tracked := p.padBit(row, col)
+	if !tracked || p.pressedPads&bit != 0 {
 		return false
 	}
 	p.pressedPads |= bit
@@ -27,6 +34,30 @@ func (p *PatternBank) heldPadCount() int {
 	return bits.OnesCount64(p.pressedPads)
 }
 
+// heldRowPadCount is how many pads of one row are held, which is what tells a first press
+// from the second one that completes a tie.
+func (p *PatternBank) heldRowPadCount(row int) int {
+	if p == nil || row < 0 || row >= len(p.rowPadMasks) {
+		return 0
+	}
+	return bits.OnesCount16(p.rowPadMasks[row])
+}
+
+// heldStepsOnRow are the columns of one row the user is holding, in order. Two of them are
+// the pair of steps a tie gesture names.
+func (p *PatternBank) heldStepsOnRow(row int) []int {
+	if p == nil || row < 0 || row >= len(p.rowPadMasks) {
+		return nil
+	}
+	steps := make([]int, 0, 2)
+	for col := 0; col < chromaticPaletteColumns; col++ {
+		if p.rowPadMasks[row]&(uint16(1)<<uint(col)) != 0 {
+			steps = append(steps, col)
+		}
+	}
+	return steps
+}
+
 func (p *PatternBank) releasePad(row, col int) {
 	if p == nil {
 		return
@@ -39,11 +70,8 @@ func (p *PatternBank) releasePad(row, col int) {
 			p.noteEditHeldStep = noHeldStep
 		}
 	}
-	if row < 0 || row >= len(p.rowPadMasks) || col < 0 || col >= chromaticPaletteColumns {
-		return
-	}
-	bit := uint64(1) << uint(row*chromaticPaletteColumns+col)
-	if p.pressedPads&bit == 0 {
+	bit, tracked := p.padBit(row, col)
+	if !tracked || p.pressedPads&bit == 0 {
 		return
 	}
 	p.pressedPads &^= bit
@@ -71,21 +99,16 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 		}
 		return false, nil
 	}
-	rowPadCount := bits.OnesCount16(p.rowPadMasks[row])
-	if rowPadCount == 1 {
+	rowPads := p.heldRowPadCount(row)
+	if rowPads == 1 {
 		if err := p.setStepCursor(col); err != nil {
 			return true, err
 		}
 	}
-	if rowPadCount != 2 || p.heldPadCount() != 2 {
+	if rowPads != 2 || p.heldPadCount() != 2 {
 		return true, nil
 	}
-	steps := make([]int, 0, 2)
-	for col := 0; col < chromaticPaletteColumns; col++ {
-		if p.rowPadMasks[row]&(uint16(1)<<uint(col)) != 0 {
-			steps = append(steps, col)
-		}
-	}
+	steps := p.heldStepsOnRow(row)
 	if len(steps) != 2 {
 		return true, nil
 	}
@@ -93,12 +116,11 @@ func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
 	if pattern == nil {
 		return true, nil
 	}
-	if pattern.TieEventsAtSteps(steps[0], steps[1], voice) {
-		if err := p.redrawPatternRows(); err != nil {
-			return true, err
-		}
+	if !pattern.TieEventsAtSteps(steps[0], steps[1], voice) {
+		// Nothing changed, so only the readout is worth rewriting.
+		return true, p.printStepStatus()
 	}
-	return true, p.printStepStatus()
+	return true, p.repaintEditView()
 }
 
 // handleNoteEditStepPress moves the edit to a step cell, or ties the two steps when another
@@ -118,8 +140,5 @@ func (p *PatternBank) handleNoteEditStepPress(pattern *Pattern, voice *Voice, st
 		return p.printStepStatus()
 	}
 	logger.Debug("tie", "from", previous, "to", step, "voice", voiceLabel(voice))
-	if err := p.drawNotePalette(); err != nil {
-		return err
-	}
-	return p.printStepStatus()
+	return p.repaintEditView()
 }

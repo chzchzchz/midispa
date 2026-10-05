@@ -42,8 +42,14 @@ func (p *PatternBank) AdjustLength(delta int) error {
 }
 
 func (p *PatternBank) printLength() error {
+	pattern := p.CurrentPattern()
+	if pattern == nil {
+		// A bank that has not chosen a pattern yet has no length to report, and leaving
+		// the row blank says that rather than reporting on no pattern at all.
+		return p.clearTextRows(lengthDisplayRow, 1)
+	}
 	return p.printText(lengthDisplayRow, 0, fmt.Sprintf(
 		"Length %02d steps",
-		p.CurrentPattern().LengthSteps(),
+		pattern.LengthSteps(),
 	), false)
 }
