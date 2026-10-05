@@ -327,15 +327,11 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 		p.Patterns[p.selPatIdx] = oldPat
 	}
 	events, lengthSteps := pat.snapshot()
-	oldPat.mu.Lock()
-	oldPat.Events = events
-	oldPat.lengthSteps = lengthSteps
-	oldPat.normalizeLocked()
-	oldPat.mu.Unlock()
+	oldPat.install(events, lengthSteps)
 	if err := p.resetEditState(); err != nil {
 		return err
 	}
-	return p.Jump(0)
+	return p.redraw()
 }
 
 func (p *PatternBank) Jump(n int) error {

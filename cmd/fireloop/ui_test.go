@@ -86,7 +86,8 @@ func TestAltStaysEngagedAfterClear(t *testing.T) {
 	require.False(t, still, "clearing a track row left its event in place")
 	pressButton(t, patternBank, NoteStop)
 	require.True(t, patternBank.controller.alt, "clearing the pattern released Alt")
-	require.Empty(t, patternBank.CurrentPattern().Events, "clearing the pattern left events behind")
+	cleared, _ := patternBank.CurrentPattern().snapshot()
+	require.Empty(t, cleared, "clearing the pattern left events behind")
 	// An engaged Alt keeps the pattern buttons on the track window.
 	pressButton(t, patternBank, NotePatternUp)
 	require.Equal(t, 1, patternBank.selPatIdx, "pattern up with Alt")

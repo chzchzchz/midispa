@@ -14,7 +14,7 @@ func TestFindBeat(t *testing.T) {
 		{Beat: 3},
 		{Beat: 4},
 	}
-	p := Pattern{Events: evs}
+	p := *newPattern(evs)
 	for i, tt := range []struct {
 		beat float32
 		evs  int
@@ -26,13 +26,14 @@ func TestFindBeat(t *testing.T) {
 }
 
 func TestFindBeatReturnsSnapshot(t *testing.T) {
-	p := Pattern{Events: []Event{{Beat: 1, Velocity: 10}}}
+	p := *newPattern([]Event{{Beat: 1, Velocity: 10}})
 	found := p.FindBeat(0)
 	require.Len(t, found, 1)
 	found[0].Beat = 2
 	found[0].Velocity = 20
-	require.EqualValues(t, 1, p.Events[0].Beat, "editing the result changed the pattern")
-	require.Equal(t, 10, p.Events[0].Velocity, "editing the result changed the pattern")
+	kept, _ := p.snapshot()
+	require.EqualValues(t, 1, kept[0].Beat, "editing the result changed the pattern")
+	require.Equal(t, 10, kept[0].Velocity, "editing the result changed the pattern")
 	p.ToggleEvent(Event{Beat: 1})
 	require.Len(t, found, 1, "editing the pattern changed the length of the earlier result")
 }
@@ -80,13 +81,30 @@ func TestEventsStayInBeatOrder(t *testing.T) {
 	assertEventsInBeatOrder(t, "loaded from a file", fromFile)
 
 	bank, _ := quietBank(t, kit)
-	scrambled := &Pattern{Events: []Event{
+	// Built through the field rather than the boundary, because the point is that the
+	// bank normalises a pattern it is handed, not that the boundary already did.
+	scrambled := &Pattern{events: []Event{
 		{Voice: lead, Beat: stepBeat(9), Velocity: 90},
 		{Voice: snare, Beat: stepBeat(2), Velocity: 90},
 		{Voice: lead, Beat: stepBeat(4), Velocity: 90},
 	}}
 	require.NoError(t, bank.SetPattern(scrambled))
 	assertEventsInBeatOrder(t, "restored into the bank", bank.CurrentPattern())
+}
+
+// A pattern built from a list that no setter ordered is ordered by the boundary itself,
+// rather than by whichever setter the caller happens to call next. The load path used to
+// depend on that: it appended straight into the field and relied on SetLengthSteps being
+// called straight after to sort the result.
+func TestNewPatternOrdersWhatItIsGiven(t *testing.T) {
+	kit := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
+	singer := kit.voices[0]
+	pattern := newPattern([]Event{
+		{Voice: singer, Beat: stepBeat(12), Velocity: 90},
+		{Voice: singer, Beat: stepBeat(3), Velocity: 90},
+		{Voice: singer, Beat: stepBeat(7), Velocity: 90},
+	})
+	assertEventsInBeatOrder(t, "newPattern", pattern)
 }
 
 // assertEventsInBeatOrder fails when a pattern's events are out of beat order, and then
@@ -118,18 +136,19 @@ func assertEventsInBeatOrder(t *testing.T, what string, p *Pattern) {
 }
 
 func TestPatternLength(t *testing.T) {
-	pattern := Pattern{Events: []Event{
+	pattern := *newPattern([]Event{
 		{Beat: 0},
 		{Beat: 0.75},
 		{Beat: 1},
 		{Beat: 3.75},
 		{Beat: 4},
-	}}
+	})
 	require.Equal(t, defaultPatternSteps, pattern.LengthSteps())
 	require.Equal(t, 4, pattern.SetLengthSteps(4))
 	require.Equal(t, 4, pattern.LengthSteps())
 	require.EqualValues(t, 1, pattern.Beats())
-	require.Len(t, pattern.Events, 2, "events after shortening")
+	shortened, _ := pattern.snapshot()
+	require.Len(t, shortened, 2, "events after shortening")
 	require.False(t, pattern.ToggleEvent(Event{Beat: 1}), "event at the pattern boundary was accepted")
 	require.Equal(t, 1, pattern.SetLengthSteps(0), "the shortest pattern")
 	require.Equal(t, maxPatternSteps, pattern.SetLengthSteps(17), "the longest pattern")
@@ -155,12 +174,13 @@ func TestSetPatternCopiesEvents(t *testing.T) {
 		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
 	}})
 	pb := useController(t, NewFire(func([]byte) error { return nil }), vb).patbank
-	source := &Pattern{Events: []Event{{Beat: 1}}}
+	source := newPattern([]Event{{Beat: 1}})
 	source.SetLengthSteps(8)
 	require.NoError(t, pb.SetPattern(source))
-	source.Events[0].Beat = 2
+	source.events[0].Beat = 2
 	source.SetLengthSteps(4)
-	require.EqualValues(t, 1, pb.Patterns[1].Events[0].Beat, "the pasted pattern changed with the source")
+	pasted, _ := pb.Patterns[1].snapshot()
+	require.EqualValues(t, 1, pasted[0].Beat, "the pasted pattern changed with the source")
 	require.Equal(t, 8, pb.Patterns[1].LengthSteps(), "the pasted pattern length")
 }
 

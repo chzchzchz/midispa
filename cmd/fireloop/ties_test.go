@@ -55,7 +55,8 @@ func TestChromaticPadGesturesAndReleases(t *testing.T) {
 	bank.Patterns[bank.selPatIdx] = empty
 	bank.handleChromaticStepPress(0, 0)
 	bank.handleChromaticStepPress(0, 1)
-	require.Empty(t, empty.Events, "empty chromatic steps created events")
+	created, _ := empty.snapshot()
+	require.Empty(t, created, "empty chromatic steps created events")
 
 	bank.clearPadState()
 	bank.handleChromaticStepPress(0, 0)

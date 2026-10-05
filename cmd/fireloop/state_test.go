@@ -216,7 +216,7 @@ func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {
 		want int
 	}{
 		{name: "dropped count", got: report.Dropped, want: 1},
-		{name: "events kept", got: len(loaded.Patterns[1].Events), want: 1},
+		{name: "events kept", got: patternEventCount(loaded.Patterns[1]), want: 1},
 	} {
 		assert.Equalf(t, tt.want, tt.got, tt.name)
 	}
@@ -600,12 +600,20 @@ func TestStateSaveWhilePlayingMatchesSaveAtRest(t *testing.T) {
 	assertSameSession(t, atRest, playing)
 }
 
+// patternEventCount reads a pattern's events through its own snapshot rather than reaching
+// into the collection, so a test cannot take a reading while an edit is landing.
+func patternEventCount(pattern *Pattern) int {
+	events, _ := pattern.snapshot()
+	return len(events)
+}
+
 // stateEventsText renders a restored pattern as its steps and ties, so a table case states
 // its expectation in one line rather than a block of per-event assertions.
 func stateEventsText(bank *PatternBank, index int) string {
 	if pattern := bank.Patterns[index]; pattern != nil {
+		events, _ := pattern.snapshot()
 		var steps []string
-		for _, event := range pattern.Events {
+		for _, event := range events {
 			text := fmt.Sprintf("step%d", eventStep(event))
 			if event.Tie {
 				text += ":tie"
@@ -735,7 +743,7 @@ func TestStateClampsOutOfRangeValues(t *testing.T) {
 		{name: "pattern length", got: pattern.LengthSteps(), want: maxPatternSteps},
 		{name: "event velocity", got: velocity.Velocity, want: midiNoteMax},
 		{name: "dropped count", got: report.Dropped, want: 3},
-		{name: "events kept", got: len(pattern.Events), want: 1},
+		{name: "events kept", got: patternEventCount(pattern), want: 1},
 		{name: "tracks padded out to the pad rows", got: len(bank.trackVoices), want: padRows},
 		{name: "tracks holding a voice of this kit", got: voicesInKit, want: padRows},
 		// Where the user was looking is not part of a session, so a load leaves the

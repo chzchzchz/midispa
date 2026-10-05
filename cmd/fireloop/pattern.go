@@ -14,12 +14,11 @@ const (
 )
 
 type Pattern struct {
-	// Events is held in beat order. FindBeat binary searches it instead of sorting a copy
-	// of it, so every path that assigns here has to normalise before the pattern is read
-	// again: the setters here do it themselves, and the load and restore paths do it
-	// through SetLengthSteps and normalizeLocked. TestEventsStayInBeatOrder is what holds
-	// this to account.
-	Events []Event
+	// events is held in beat order. FindBeat binary searches it instead of sorting a copy
+	// of it, so the collection is private and every way in either goes through a setter or
+	// through newPattern, both of which normalise before the pattern is read again.
+	// TestEventsStayInBeatOrder is what holds this to account.
+	events []Event
 	// lengthSteps is measured in sixteenth notes; zero keeps the legacy four-beat default.
 	lengthSteps int
 	mu          sync.RWMutex
@@ -36,12 +35,37 @@ func stepBeat(step int) float32 {
 	return float32(step) * patternBeatsPerStep
 }
 
+// newPattern builds a pattern from events that no setter has touched, which is what a
+// session file and a test hand over. The events go in beat order and the ties are repaired
+// here rather than left to whichever setter a caller happened to call next, because a load
+// that relied on that ordering was one reordering away from playing the wrong notes.
+//
+// The length is left at the default; a caller that has one sets it with SetLengthSteps,
+// which also drops whatever falls past the end it sets.
+func newPattern(events []Event) *Pattern {
+	pattern := &Pattern{events: events}
+	pattern.normalizeLocked()
+	return pattern
+}
+
+// install replaces the events and the length in place, which is how a paste keeps the
+// pattern pointer a song may already be sharing. It is install rather than a new pattern
+// because the songs hold the old pointer and must keep hearing from it.
+func (p *Pattern) install(events []Event, lengthSteps int) {
+	p.mu.Lock()
+	p.events = events
+	p.lengthSteps = lengthSteps
+	p.normalizeLocked()
+	p.mu.Unlock()
+}
+
 func (p *Pattern) Copy() *Pattern {
 	p.mu.RLock()
-	evs := append([]Event(nil), p.Events...)
+	evs := append([]Event(nil), p.events...)
 	lengthSteps := p.lengthSteps
 	p.mu.RUnlock()
-	copyPattern := &Pattern{Events: evs, lengthSteps: lengthSteps}
+	copyPattern := newPattern(evs)
+	copyPattern.lengthSteps = lengthSteps
 	copyPattern.normalizeLocked()
 	return copyPattern
 }
@@ -52,7 +76,7 @@ func (p *Pattern) Copy() *Pattern {
 func (p *Pattern) snapshot() ([]Event, int) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return append([]Event(nil), p.Events...), p.lengthStepsLocked()
+	return append([]Event(nil), p.events...), p.lengthStepsLocked()
 }
 
 // ToggleEvent returns true if event is added, false if deleted.
@@ -62,7 +86,7 @@ func (p *Pattern) ToggleEvent(ev Event) bool {
 	if ev.Beat < 0 || eventStep(ev) >= p.lengthStepsLocked() {
 		return false
 	}
-	for i, current := range p.Events {
+	for i, current := range p.events {
 		if eventStep(current) == eventStep(ev) && current.Voice == ev.Voice {
 			p.removeEventLocked(i)
 			return false
@@ -81,21 +105,21 @@ func (p *Pattern) ToggleEvent(ev Event) bool {
 func (p *Pattern) FindBeat(beat float32) []Event {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	first := sort.Search(len(p.Events), func(i int) bool {
-		return p.Events[i].Beat >= beat
+	first := sort.Search(len(p.events), func(i int) bool {
+		return p.events[i].Beat >= beat
 	})
-	return append([]Event(nil), p.Events[first:]...)
+	return append([]Event(nil), p.events[first:]...)
 }
 
 func (p *Pattern) ClearVoice(v *Voice) {
 	p.mu.Lock()
-	kept := p.Events[:0]
-	for _, event := range p.Events {
+	kept := p.events[:0]
+	for _, event := range p.events {
 		if event.Voice != v {
 			kept = append(kept, event)
 		}
 	}
-	p.Events = kept
+	p.events = kept
 	p.normalizeLocked()
 	p.mu.Unlock()
 }
@@ -106,8 +130,8 @@ func (p *Pattern) ClearVoice(v *Voice) {
 func (p *Pattern) EventsForVoice(v *Voice) []Event {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	events := make([]Event, 0, len(p.Events))
-	for _, event := range p.Events {
+	events := make([]Event, 0, len(p.events))
+	for _, event := range p.events {
 		if event.Voice == v {
 			events = append(events, event)
 		}
@@ -125,7 +149,7 @@ func (p *Pattern) EventAtStep(step int, v *Voice) (Event, bool) {
 	// asks for one step at a time for every cell it paints, so it runs this more often
 	// than anything else that looks a step up, and behind a call it measured about twice
 	// the cost of the loop it replaced.
-	for _, event := range p.Events {
+	for _, event := range p.events {
 		if eventStep(event) == step && event.Voice == v {
 			return event, true
 		}
@@ -160,10 +184,10 @@ func (p *Pattern) SetChromaticNote(step int, v *Voice, note, velocity int) (Even
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if index := p.eventIndexAtStepLocked(step, v); index >= 0 {
-		p.Events[index].ChromaticNote = note
-		p.Events[index].Velocity = velocity
+		p.events[index].ChromaticNote = note
+		p.events[index].Velocity = velocity
 		p.normalizeLocked()
-		return p.Events[index], true
+		return p.events[index], true
 	}
 	event := Event{
 		Voice:         v,
@@ -172,7 +196,7 @@ func (p *Pattern) SetChromaticNote(step int, v *Voice, note, velocity int) (Even
 		Velocity:      velocity,
 	}
 	insertAt := p.insertEventLocked(event)
-	return p.Events[insertAt], true
+	return p.events[insertAt], true
 }
 
 // SetVelocity writes the dynamics of an existing step, whichever kind of voice it stands
@@ -189,8 +213,8 @@ func (p *Pattern) SetVelocity(step int, v *Voice, velocity int) (Event, bool) {
 	if index < 0 {
 		return Event{}, false
 	}
-	p.Events[index].Velocity = clampStepVelocity(v, velocity)
-	return p.Events[index], true
+	p.events[index].Velocity = clampStepVelocity(v, velocity)
+	return p.events[index], true
 }
 
 // TieEventsAtSteps links two existing events only when the earlier event's next event is the later one.
@@ -223,11 +247,11 @@ func (p *Pattern) setTieBetweenSteps(firstStep, secondStep int, v *Voice, tie bo
 		return false
 	}
 	for i := earlier + 1; i < later; i++ {
-		if p.Events[i].Voice == v {
+		if p.events[i].Voice == v {
 			return false
 		}
 	}
-	p.Events[earlier].Tie = tie
+	p.events[earlier].Tie = tie
 	p.normalizeLocked()
 	return true
 }
@@ -253,7 +277,7 @@ func (p *Pattern) validStep(step int) bool {
 }
 
 func (p *Pattern) eventIndexAtStepLocked(step int, v *Voice) int {
-	for i, event := range p.Events {
+	for i, event := range p.events {
 		if eventStep(event) == step && event.Voice == v {
 			return i
 		}
@@ -262,21 +286,21 @@ func (p *Pattern) eventIndexAtStepLocked(step int, v *Voice) int {
 }
 
 func (p *Pattern) insertEventLocked(event Event) int {
-	insertAt := sort.Search(len(p.Events), func(i int) bool {
-		return p.Events[i].Beat > event.Beat
+	insertAt := sort.Search(len(p.events), func(i int) bool {
+		return p.events[i].Beat > event.Beat
 	})
 	p.clearTieBeforeLocked(insertAt, event.Voice)
-	p.Events = append(p.Events, Event{})
-	copy(p.Events[insertAt+1:], p.Events[insertAt:])
-	p.Events[insertAt] = event
+	p.events = append(p.events, Event{})
+	copy(p.events[insertAt+1:], p.events[insertAt:])
+	p.events[insertAt] = event
 	p.normalizeLocked()
 	return insertAt
 }
 
 func (p *Pattern) removeEventLocked(index int) Event {
 	p.clearPreviousTieLocked(index)
-	event := p.Events[index]
-	p.Events = append(p.Events[:index], p.Events[index+1:]...)
+	event := p.events[index]
+	p.events = append(p.events[:index], p.events[index+1:]...)
 	p.normalizeLocked()
 	return event
 }
@@ -285,10 +309,10 @@ func (p *Pattern) removeEventLocked(index int) Event {
 // removing it has to do: the note after it would otherwise stay tied to a note that is no
 // longer there.
 func (p *Pattern) clearPreviousTieLocked(index int) {
-	if index <= 0 || index >= len(p.Events) {
+	if index <= 0 || index >= len(p.events) {
 		return
 	}
-	p.clearTieBeforeLocked(index, p.Events[index].Voice)
+	p.clearTieBeforeLocked(index, p.events[index].Voice)
 }
 
 // clearTieBeforeLocked ends the tie running into a position for one voice, which is also
@@ -296,8 +320,8 @@ func (p *Pattern) clearPreviousTieLocked(index int) {
 // beat order and only the nearest one before the position can be tied into it.
 func (p *Pattern) clearTieBeforeLocked(index int, voice *Voice) {
 	for i := index - 1; i >= 0; i-- {
-		if p.Events[i].Voice == voice {
-			p.Events[i].Tie = false
+		if p.events[i].Voice == voice {
+			p.events[i].Tie = false
 			return
 		}
 	}
@@ -305,16 +329,16 @@ func (p *Pattern) clearTieBeforeLocked(index int, voice *Voice) {
 
 func (p *Pattern) clearTieBeforeEventLocked(event Event) {
 	previous := -1
-	for i, current := range p.Events {
+	for i, current := range p.events {
 		if current.Voice != event.Voice || current.Beat >= event.Beat {
 			continue
 		}
-		if previous < 0 || current.Beat > p.Events[previous].Beat {
+		if previous < 0 || current.Beat > p.events[previous].Beat {
 			previous = i
 		}
 	}
 	if previous >= 0 {
-		p.Events[previous].Tie = false
+		p.events[previous].Tie = false
 	}
 }
 
@@ -336,34 +360,34 @@ func storedLengthSteps(stored int) int {
 
 // normalizeLocked keeps event order stable and makes every stored tie point to a valid successor.
 func (p *Pattern) normalizeLocked() {
-	if !eventsInBeatOrder(p.Events) {
-		sort.SliceStable(p.Events, func(i, j int) bool {
-			return p.Events[i].Beat < p.Events[j].Beat
+	if !eventsInBeatOrder(p.events) {
+		sort.SliceStable(p.events, func(i, j int) bool {
+			return p.events[i].Beat < p.events[j].Beat
 		})
 	}
 	// Nothing carries a tie, so there is nothing to point at anything: the repair below
 	// would clear flags that are already clear and set none of them. Skipping it keeps an
 	// ordinary note edit from walking every event twice and rounding every beat twice to
 	// find that out.
-	if !anyEventTied(p.Events) {
+	if !anyEventTied(p.events) {
 		return
 	}
-	tieFlags := make([]bool, len(p.Events))
+	tieFlags := make([]bool, len(p.events))
 	lengthSteps := p.lengthStepsLocked()
-	for i := range p.Events {
-		tieFlags[i] = p.Events[i].Tie && p.Events[i].IsChromatic() && eventStep(p.Events[i]) >= 0 && eventStep(p.Events[i]) < lengthSteps
-		p.Events[i].Tie = false
+	for i := range p.events {
+		tieFlags[i] = p.events[i].Tie && p.events[i].IsChromatic() && eventStep(p.events[i]) >= 0 && eventStep(p.events[i]) < lengthSteps
+		p.events[i].Tie = false
 	}
-	for i := range p.Events {
+	for i := range p.events {
 		if !tieFlags[i] {
 			continue
 		}
-		for j := i + 1; j < len(p.Events); j++ {
-			if eventStep(p.Events[j]) < 0 || eventStep(p.Events[j]) >= lengthSteps {
+		for j := i + 1; j < len(p.events); j++ {
+			if eventStep(p.events[j]) < 0 || eventStep(p.events[j]) >= lengthSteps {
 				break
 			}
-			if p.Events[j].Voice == p.Events[i].Voice {
-				p.Events[i].Tie = true
+			if p.events[j].Voice == p.events[i].Voice {
+				p.events[i].Tie = true
 				break
 			}
 		}
@@ -409,20 +433,20 @@ func (p *Pattern) SetLengthSteps(steps int) int {
 	steps = min(max(steps, 1), maxPatternSteps)
 	p.mu.Lock()
 	p.lengthSteps = steps
-	for _, event := range p.Events {
+	for _, event := range p.events {
 		eventStepNumber := eventStep(event)
 		if eventStepNumber < 0 || eventStepNumber >= steps {
 			p.clearTieBeforeEventLocked(event)
 		}
 	}
-	kept := p.Events[:0]
-	for _, event := range p.Events {
+	kept := p.events[:0]
+	for _, event := range p.events {
 		eventStepNumber := eventStep(event)
 		if eventStepNumber >= 0 && eventStepNumber < steps {
 			kept = append(kept, event)
 		}
 	}
-	p.Events = kept
+	p.events = kept
 	p.normalizeLocked()
 	p.mu.Unlock()
 	return steps

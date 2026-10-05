@@ -78,10 +78,22 @@ func (s *SongBank) Jump(n int) error {
 		s.Songs[newIdx] = &Song{}
 	}
 	s.selSongIdx = newIdx
-	if n != 0 || s.patternStart == 0 {
+	if n != 0 {
 		s.resetArrangementView()
 	}
+	return s.redraw()
+}
 
+// redraw puts the arrangement on the display as it stands. The window follows the current
+// pattern only while it is already at the top, which is the rule Jump has always had: a
+// window the user scrolled to is theirs, and one at the top has not been put anywhere.
+//
+// It draws and settles nothing else, and in particular it does not create the selected
+// song the way Jump does, so a repaint is not a write to the map the playback worker reads.
+func (s *SongBank) redraw() error {
+	if s.patternStart == 0 {
+		s.resetArrangementView()
+	}
 	if err := s.PrintSong(); err != nil {
 		return err
 	}

@@ -433,7 +433,7 @@ func resolvePatterns(state stateFile, vb *VoiceBank) (map[int]*Pattern, int) {
 // because a set with one bad number in it is still mostly a set, and the dropped count is
 // what tells the user which parts did not survive.
 func patternFromState(saved statePattern, vb *VoiceBank) (*Pattern, int) {
-	pattern := &Pattern{}
+	var events []Event
 	dropped := 0
 	for _, event := range saved.Events {
 		if event.Step < 0 || event.Step >= maxPatternSteps {
@@ -448,7 +448,7 @@ func patternFromState(saved statePattern, vb *VoiceBank) (*Pattern, int) {
 			dropped++
 			continue
 		}
-		pattern.Events = append(pattern.Events, Event{
+		events = append(events, Event{
 			Voice:         voice,
 			Beat:          stepBeat(event.Step),
 			ChromaticNote: clampMidiDataValue(event.Note),
@@ -456,6 +456,9 @@ func patternFromState(saved statePattern, vb *VoiceBank) (*Pattern, int) {
 			Tie:           event.Tie,
 		})
 	}
+	// The events arrive in whatever order the file listed them, so they are handed to the
+	// boundary that sorts them rather than to a setter that might be called next.
+	pattern := newPattern(events)
 	// A length of zero in the file means the default rather than an empty pattern, which is
 	// the same rule a live pattern uses for its stored zero, so both resolve it in one place.
 	lengthSteps := storedLengthSteps(saved.LengthSteps)
@@ -529,7 +532,7 @@ func (c *Controller) loadStateFile(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.patbank.Jump(0); err != nil {
+	if err := c.patbank.redraw(); err != nil {
 		return err
 	}
 	logger.Info("state loaded", append([]any{"path", path}, report.logAttrs()...)...)

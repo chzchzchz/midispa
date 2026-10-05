@@ -77,7 +77,7 @@ func TestPlaybackStopReturnsRunError(t *testing.T) {
 func TestPlaybackReturnsEventErrorAndStops(t *testing.T) {
 	note := 36
 	voice := &Voice{Note: &note, Channel: 1}
-	pattern := &Pattern{Events: []Event{{Voice: voice, Beat: 0, Velocity: 100}}}
+	pattern := newPattern([]Event{{Voice: voice, Beat: 0, Velocity: 100}})
 	expected := errors.New("event write failed")
 	writer := &failingSequencerWriter{err: expected}
 	playback := &Playback{nextPattern: func(float32) *Pattern { return pattern }}

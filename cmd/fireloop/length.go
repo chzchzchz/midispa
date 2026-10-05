@@ -38,7 +38,10 @@ func (p *PatternBank) AdjustLength(delta int) error {
 		return nil
 	}
 	pattern.SetLengthSteps(pattern.LengthSteps() + delta)
-	return p.Jump(0)
+	// Shortening leaves the cursor past the new end, and the rows are drawn from it, so it
+	// is pulled back inside before anything reads it.
+	p.clampStepCursor()
+	return p.redraw()
 }
 
 func (p *PatternBank) printLength() error {

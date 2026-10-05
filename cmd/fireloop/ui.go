@@ -239,7 +239,7 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 		if err := c.setMode(patternView, LEDOff); err != nil {
 			return err
 		}
-		return c.patbank.Jump(0)
+		return c.patbank.redraw()
 	case NoteBrowser, NoteAccent:
 		return c.handleStateButton(int(ev.Data[1]))
 	}
@@ -318,9 +318,9 @@ func (c *Controller) loadSession() error {
 		return err
 	}
 	if c.mode == songView {
-		err = c.songbank.Jump(0)
+		err = c.songbank.redraw()
 	} else {
-		err = c.patbank.Jump(0)
+		err = c.patbank.redraw()
 	}
 	if err != nil {
 		return err
@@ -417,7 +417,7 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 			if c.pending > 20 && c.pending < 300 {
 				setBPM(c.pending)
 				c.pending = 0
-				return c.patbank.Jump(0)
+				return c.patbank.redraw()
 			}
 		} else {
 			return c.patbank.f.SetLed(NoteShift, LEDRed)
@@ -512,7 +512,7 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 		if err := c.setMode(songView, LEDGreen); err != nil {
 			return err
 		}
-		return c.songbank.Jump(0)
+		return c.songbank.redraw()
 	case NoteBrowser, NoteAccent:
 		return c.handleStateButton(int(ev.Data[1]))
 	}
