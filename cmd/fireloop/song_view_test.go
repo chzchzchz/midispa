@@ -129,7 +129,7 @@ func TestPatternLengthControls(t *testing.T) {
 	require.Zero(t, event.Velocity, "a step past the end should create nothing")
 
 	require.NoError(t, dispatch(patternBank, arrangementNote(NoteOverview)))
-	require.True(t, patternBank.editingLength, "Overview did not enter length mode")
+	require.True(t, patternBank.lengthEditActive(), "Overview did not enter length mode")
 
 	require.NoError(t, dispatch(patternBank, arrangementNote(CCSelect)))
 	require.Equal(t, 9, patternBank.CurrentPattern().LengthSteps(), "the encoder should lengthen")
@@ -139,7 +139,7 @@ func TestPatternLengthControls(t *testing.T) {
 	require.Equal(t, 8, patternBank.CurrentPattern().LengthSteps(), "the encoder should shorten")
 
 	require.NoError(t, dispatch(patternBank, arrangementNote(NoteOverview)))
-	require.False(t, patternBank.editingLength, "Overview did not leave length mode")
+	require.False(t, patternBank.lengthEditActive(), "Overview did not leave length mode")
 }
 
 // A bank the user has not chosen a pattern on yet has nothing to report a length from.

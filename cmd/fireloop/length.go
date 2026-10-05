@@ -6,17 +6,21 @@ import "fmt"
 const lengthDisplayRow = 6
 
 func (p *PatternBank) ToggleLengthMode() error {
-	return p.setLengthMode(!p.editingLength)
+	return p.setLengthMode(!p.lengthEditActive())
 }
 
 func (p *PatternBank) setLengthMode(active bool) error {
 	p.clearPadState()
-	if active && p.editingNote {
+	if active && p.noteEditActive() {
 		if err := p.setNoteEdit(false); err != nil {
 			return err
 		}
 	}
-	p.editingLength = active
+	if active {
+		p.mode = lengthEdit
+	} else if p.mode == lengthEdit {
+		p.mode = stepEdit
+	}
 	if active {
 		if err := p.pads.SetLed(NoteOverview, LEDRed); err != nil {
 			return err
@@ -30,7 +34,7 @@ func (p *PatternBank) setLengthMode(active bool) error {
 }
 
 func (p *PatternBank) AdjustLength(delta int) error {
-	if !p.editingLength {
+	if !p.lengthEditActive() {
 		return nil
 	}
 	pattern := p.CurrentPattern()

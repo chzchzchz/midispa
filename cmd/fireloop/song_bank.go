@@ -194,7 +194,7 @@ func (s *SongBank) SelectPattern(n int) error {
 	if err := s.askStop(); err != nil {
 		return err
 	}
-	s.pb.editingNote = false
+	s.pb.clearNoteEdit()
 	s.pb.clearPadState()
 	if s.pb.Patterns == nil {
 		s.pb.Patterns = make(map[int]*Pattern)

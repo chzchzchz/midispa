@@ -27,7 +27,7 @@ const velocityStep = 1
 // with, and the knob is there to trim a hit rather than to replace it with whatever value
 // the encoder happened to be left at.
 func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) error {
-	if p.editingLength {
+	if p.lengthEditActive() {
 		return nil
 	}
 	voice := p.SelectedVoice()
@@ -58,7 +58,7 @@ func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) er
 	// Only the palette is repainted here, and only while note editing owns the grid: a
 	// velocity is not part of what a step row shows, so repainting the rows would send
 	// four pad messages for a change none of them would show.
-	if p.editingNote {
+	if p.noteEditActive() {
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}

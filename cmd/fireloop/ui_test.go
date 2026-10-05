@@ -108,14 +108,14 @@ func TestBlackoutHidesAndRestoresTheDisplay(t *testing.T) {
 	pressButton(t, patternBank, NoteRecord)
 	require.True(t, patternBank.controller.shift)
 	require.Equal(t, 2, patternBank.selTrackRow)
-	require.True(t, patternBank.editingLength)
+	require.True(t, patternBank.lengthEditActive())
 	require.NotNil(t, patternBank.controller.clipboard)
 	pressButton(t, patternBank, NoteAlt)
 	require.True(t, fire.IsDark(), "Shift plus Alt did not blackout")
 	// The controls keep their state, and the display stays dark afterwards.
 	require.True(t, patternBank.controller.shift, "the blackout changed the control state")
 	require.Equal(t, 2, patternBank.selTrackRow, "the blackout changed the control state")
-	require.True(t, patternBank.editingLength, "the blackout changed the control state")
+	require.True(t, patternBank.lengthEditActive(), "the blackout changed the control state")
 	require.NotNil(t, patternBank.controller.clipboard, "the blackout changed the control state")
 	require.Empty(t, recorder.lit(), "the blackout left lights on")
 	require.NotZero(t, recorder.clearsDisplay, "the blackout did not clear the pads or display")
@@ -188,14 +188,14 @@ func TestButtonsTakeEffectWithNowhereToDraw(t *testing.T) {
 		{
 			name:  "length mode",
 			press: func(t *testing.T) { pressButton(t, bank, NoteOverview) },
-			want:  func() bool { return bank.editingLength },
+			want:  func() bool { return bank.lengthEditActive() },
 		},
 		{
 			name: "length mode again",
 			press: func(t *testing.T) {
 				pressButton(t, bank, NoteOverview)
 			},
-			want: func() bool { return !bank.editingLength },
+			want: func() bool { return !bank.lengthEditActive() },
 		},
 		{
 			name: "note mode on a chromatic track",
@@ -203,12 +203,12 @@ func TestButtonsTakeEffectWithNowhereToDraw(t *testing.T) {
 				require.NoError(t, bank.SelectTrackRow(4))
 				pressButton(t, bank, NoteMode)
 			},
-			want: func() bool { return bank.editingNote },
+			want: func() bool { return bank.noteEditActive() },
 		},
 		{
 			name:  "note mode again",
 			press: func(t *testing.T) { pressButton(t, bank, NoteMode) },
-			want:  func() bool { return !bank.editingNote },
+			want:  func() bool { return !bank.noteEditActive() },
 		},
 		{
 			name:  "alt",

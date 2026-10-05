@@ -104,11 +104,11 @@ func (p *PatternBank) paletteBase() int {
 // the shift shows on the grid without a word on the display. It does nothing outside
 // note-edit mode, where the knob moves the selected track's voice instead.
 func (p *PatternBank) ShiftPaletteOctave(detents int) error {
-	if p.editingLength {
+	if p.lengthEditActive() {
 		return nil
 	}
 	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() || !p.editingNote {
+	if voice == nil || !voice.IsChromatic() || !p.noteEditActive() {
 		return nil
 	}
 	previous := p.paletteOctave
@@ -197,7 +197,7 @@ func (p *PatternBank) guardsPad(row, col int) bool {
 // dynamics that were played and the display reports that same value.
 func (p *PatternBank) handleNoteEditPad(aseq alsa.EventWriter, row, col, pressed int, alt bool) error {
 	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() || !p.editingNote {
+	if voice == nil || !voice.IsChromatic() || !p.noteEditActive() {
 		return nil
 	}
 	pattern := p.CurrentPattern()

@@ -29,12 +29,12 @@ func setBPM(value int) {
 }
 
 func (c *Controller) exitPatternEditModes() error {
-	if c.patbank.editingNote {
+	if c.patbank.noteEditActive() {
 		if err := c.patbank.setNoteEdit(false); err != nil {
 			return err
 		}
 	}
-	if c.patbank.editingLength {
+	if c.patbank.lengthEditActive() {
 		return c.patbank.setLengthMode(false)
 	}
 	return nil
@@ -84,10 +84,10 @@ func (c *Controller) restoreIndicators() error {
 	if c.clipboard != nil {
 		lights[NoteRecord] = LEDGreen
 	}
-	if c.patbank.editingNote {
+	if c.patbank.noteEditActive() {
 		lights[NoteMode] = LEDGreen
 	}
-	if c.patbank.editingLength {
+	if c.patbank.lengthEditActive() {
 		lights[NoteOverview] = LEDRed
 	}
 	if c.patbank.selTrackRow >= 1 && c.patbank.selTrackRow <= padRows {
@@ -343,7 +343,7 @@ func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) erro
 		c.patbank.releasePad(y, x)
 		return nil
 	}
-	if c.patbank.editingNote {
+	if c.patbank.noteEditActive() {
 		return c.patbank.handleNoteEditPad(aseq, y, x, vel, c.alt)
 	}
 	if c.shift {
@@ -471,7 +471,7 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 		if !turning {
 			return nil
 		}
-		if c.patbank.editingLength {
+		if c.patbank.lengthEditActive() {
 			return c.patbank.AdjustLength(dir)
 		}
 		if c.patbank.NoteEditActive() {

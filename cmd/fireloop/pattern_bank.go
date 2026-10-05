@@ -13,6 +13,24 @@ const padRows = 4
 // noPlayheadStep means the note-edit playhead is not lighting a strip cell.
 const noPlayheadStep = -1
 
+// editMode is what a grid pad means while a pattern is being edited. It is one value
+// rather than two flags because the modes are exclusive: Overview takes the grid for the
+// pattern's length, Mode takes it for the pitch palette, and a press meant for one while
+// the other was on would change something the user never asked to change. Two booleans
+// made that a convention spread over four places; one value makes it a property of the
+// type, so a bank cannot be in two of them at once even by accident.
+type editMode int
+
+const (
+	// stepEdit is the ordinary mode: a grid pad places or removes a step.
+	stepEdit editMode = iota
+	// noteEdit hands the grid to the pitch palette, so a pad chooses a pitch for the step
+	// being edited rather than being a step.
+	noteEdit
+	// lengthEdit hands the SELECT knob to the pattern's length.
+	lengthEdit
+)
+
 // noHeldStep means no step cell is held, so a press cannot be the second half of a tie.
 const noHeldStep = -1
 
@@ -21,8 +39,7 @@ type PatternBank struct {
 	selPatIdx         int
 	selTrackRow       int // pad row [1,padRows], or 0 when no row is selected
 	trackOffset       int // zero-based track shown on the first pad row
-	editingLength     bool
-	editingNote       bool
+	mode              editMode
 	stepCursor        int
 	chromaticVelocity int
 	pressedPads       uint64
@@ -247,7 +264,7 @@ func (p *PatternBank) forEachRowWithVoice(voice *Voice, fn func(row int) error) 
 // every caller is about to redraw what note editing owned, so a redraw here would only be
 // thrown away by the one that follows.
 func (p *PatternBank) leaveNoteEdit() error {
-	p.editingNote = false
+	p.clearNoteEdit()
 	p.clearPadState()
 	return p.pads.SetLed(NoteMode, LEDOff)
 }
@@ -383,10 +400,10 @@ func (p *PatternBank) redraw() error {
 			return err
 		}
 	}
-	if p.editingLength {
+	if p.lengthEditActive() {
 		return p.printLength()
 	}
-	if p.editingNote {
+	if p.noteEditActive() {
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
@@ -591,7 +608,7 @@ func (p *PatternBank) redrawTrackPads(row int) error {
 			rgb[idx] = markTieColor(rgb[idx], false)
 		}
 	}
-	if !p.editingNote {
+	if !p.noteEditActive() {
 		if p.stepCursor >= 0 && p.stepCursor < len(rgb) {
 			rgb[p.stepCursor] = markCursorColor(rgb[p.stepCursor])
 		}

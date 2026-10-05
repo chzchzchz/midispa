@@ -27,7 +27,26 @@ func (p *PatternBank) StepCursor() int {
 }
 
 func (p *PatternBank) NoteEditActive() bool {
-	return p != nil && p.editingNote
+	return p.mode == noteEdit
+}
+
+// noteEditActive and lengthEditActive are the two ways of asking what mode the grid is in.
+// They exist so a reader states which mode it means rather than reading a bare flag.
+func (p *PatternBank) noteEditActive() bool {
+	return p.mode == noteEdit
+}
+
+func (p *PatternBank) lengthEditActive() bool {
+	return p.mode == lengthEdit
+}
+
+// clearNoteEdit steps out of note editing and leaves every other mode alone. Choosing a
+// pattern or scrolling the track window is not a request to give up the length, and the
+// modes are exclusive, so this only has anything to clear when note editing is on.
+func (p *PatternBank) clearNoteEdit() {
+	if p.mode == noteEdit {
+		p.mode = stepEdit
+	}
 }
 
 func (p *PatternBank) clampStepCursor() {
@@ -57,7 +76,7 @@ func (p *PatternBank) redrawPatternRows() error {
 
 // MoveStepCursor keeps the edit target inside the active pattern length.
 func (p *PatternBank) MoveStepCursor(delta int) error {
-	if p.editingLength {
+	if p.lengthEditActive() {
 		return nil
 	}
 	previous := p.stepCursor
@@ -90,7 +109,7 @@ func (p *PatternBank) setStepCursor(step int) error {
 // reported on. Which of those two the redraw is depends on the mode rather than on the
 // edit, so it is written once here rather than repeated at every place an edit ends.
 func (p *PatternBank) repaintEditView() error {
-	if p.editingNote {
+	if p.noteEditActive() {
 		if err := p.drawNotePalette(); err != nil {
 			return err
 		}
@@ -124,7 +143,11 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 	if active && (voice == nil || !voice.IsChromatic()) {
 		return nil
 	}
-	p.editingNote = active
+	if active {
+		p.mode = noteEdit
+	} else {
+		p.clearNoteEdit()
+	}
 	// The step rows are about to be redrawn, which puts the strip back on its own, so
 	// the note-edit playhead stops lighting a cell here.
 	p.playheadStep = noPlayheadStep
@@ -140,10 +163,10 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 }
 
 func (p *PatternBank) ToggleNoteMode() error {
-	if p.editingLength {
+	if p.lengthEditActive() {
 		return nil
 	}
-	return p.setNoteEdit(!p.editingNote)
+	return p.setNoteEdit(p.noteEditActive() == false)
 }
 
 // stepStatusText is the readout for the step under the cursor: its note, its velocity, and
@@ -170,7 +193,7 @@ func stepStatusText(voice *Voice, step int, event *Event, tieStep int) string {
 // when there is one. A percussive track reports the step and its dynamics too, because the
 // Volume knob sets them and a readout that went blank would leave the knob turning blind.
 func (p *PatternBank) printStepStatus() error {
-	if p.editingLength {
+	if p.lengthEditActive() {
 		return nil
 	}
 	if err := p.clearTextRows(lengthDisplayRow, 1); err != nil {

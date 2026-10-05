@@ -57,7 +57,7 @@ func BenchmarkPaletteRedraw(b *testing.B) {
 	if err := bank.SelectTrackRow(1); err != nil {
 		b.Fatal(err)
 	}
-	bank.editingNote = true
+	bank.mode = noteEdit
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		if err := bank.drawNotePalette(); err != nil {

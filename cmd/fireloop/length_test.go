@@ -17,7 +17,7 @@ func TestShorteningAPatternPullsTheStepCursorBack(t *testing.T) {
 	require.Equal(t, maxPatternSteps-1, bank.StepCursor(), "the cursor did not reach the last step")
 
 	require.NoError(t, bank.ToggleLengthMode())
-	require.True(t, bank.editingLength, "the length mode did not open")
+	require.True(t, bank.lengthEditActive(), "the length mode did not open")
 	for bank.CurrentPattern().LengthSteps() > 4 {
 		require.NoError(t, bank.AdjustLength(-1))
 	}

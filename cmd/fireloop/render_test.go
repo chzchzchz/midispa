@@ -14,11 +14,11 @@ func TestAModeToggleIsReadableWithoutAnEvent(t *testing.T) {
 	lights := usePadRecorder(t, &bank.pads)
 
 	require.NoError(t, bank.ToggleLengthMode())
-	require.True(t, bank.editingLength, "the mode did not open")
+	require.True(t, bank.lengthEditActive(), "the mode did not open")
 	require.Equal(t, LEDRed, lights.led(NoteOverview), "opening the length mode should light Overview")
 
 	require.NoError(t, bank.ToggleLengthMode())
-	require.False(t, bank.editingLength, "the mode did not close")
+	require.False(t, bank.lengthEditActive(), "the mode did not close")
 	require.Equal(t, LEDOff, lights.led(NoteOverview), "closing the length mode should put Overview out")
 }
 
