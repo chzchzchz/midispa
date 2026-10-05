@@ -63,15 +63,11 @@ func screenBank(t *testing.T, kit *VoiceBank) (*PatternBank, *VoiceBank, *screen
 	return bank, kit, useScreenRecorder(t, &bank.screen)
 }
 
-// newTestBank is the part every bank in a test shares.
+// newTestBank is the part every bank in a test shares: a controller, its pattern bank on
+// pattern 1, and the arrangement built alongside it.
 func newTestBank(t *testing.T, fire *Fire, kit *VoiceBank) *PatternBank {
 	t.Helper()
-	bank := NewPatternBank(fire, kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
-	return bank
+	return useController(t, fire, kit).patbank
 }
 
 // pressVelocity is the strength the tests hit a palette pad with.
@@ -83,12 +79,19 @@ const pressVelocity = 100
 type captureMidiWriter struct {
 	mu     sync.Mutex
 	events []alsa.SeqEvent
+	// onWrite runs once an event is recorded, outside the lock, which is how a test changes
+	// the set at a known point in the sequence rather than racing a worker to reach it.
+	onWrite func(event alsa.SeqEvent)
 }
 
 func (w *captureMidiWriter) Write(event alsa.SeqEvent) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.events = append(w.events, event)
+	hook := w.onWrite
+	w.mu.Unlock()
+	if hook != nil {
+		hook(event)
+	}
 	return nil
 }
 

@@ -9,24 +9,12 @@ import (
 	"github.com/chzchzchz/midispa/midi"
 )
 
-// eventProcessFunc applies one event to the banks. The writer is an interface so a test can
-// drive the real handler with a stub; starting playback also needs the sync port, which is
-// why this is the wider interface rather than a plain MIDI writer.
-type eventProcessFunc func(sequencerWriter, alsa.SeqEvent) error
-
 const defaultBPM = 139
 
-var processEvent eventProcessFunc
-var shiftOn = false
-var altOn = false
-var pendingNumber = 0
+// The tempo is the one piece of state the controller does not own: the playback worker
+// samples it from its own goroutine while the event loop is still setting it, so it has to
+// stay readable from both without a lock that would sit on the step path.
 var bpm atomic.Int64
-var playbackStop playbackStopFunc
-var patternClipboard *Pattern
-var songbank *SongBank
-var patbank *PatternBank
-
-var tapTempoTimes []time.Time
 
 func init() {
 	bpm.Store(defaultBPM)
@@ -40,71 +28,47 @@ func setBPM(value int) {
 	bpm.Store(int64(value))
 }
 
-func stopPlayback() error {
+func (c *Controller) stopPlayback() error {
 	var firstErr error
-	if playbackStop != nil {
-		if err := playbackStop(); err != nil {
+	if c.playback != nil {
+		if err := c.playback(); err != nil {
 			firstErr = err
 		}
-		playbackStop = nil
+		c.playback = nil
 	}
-	if patbank != nil {
-		if playback := patbank.playback; playback != nil {
+	if c.patbank != nil {
+		if playback := c.patbank.playback; playback != nil {
 			if err := playback.releaseAll(playback.writer); err != nil && firstErr == nil {
 				firstErr = err
 			}
-			patbank.playback = nil
+			c.patbank.playback = nil
 		}
-		patbank.clearPadState()
+		c.patbank.clearPadState()
 		// A playhead left lit on the step strip would outlive the playback that put it
 		// there, so put it back.
-		if err := patbank.clearStepPlayhead(); err != nil && firstErr == nil {
+		if err := c.patbank.clearStepPlayhead(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	if songbank != nil {
-		if playback := songbank.playback; playback != nil {
+	if c.songbank != nil {
+		if playback := c.songbank.playback; playback != nil {
 			if err := playback.releaseAll(playback.writer); err != nil && firstErr == nil {
 				firstErr = err
 			}
-			songbank.playback = nil
+			c.songbank.playback = nil
 		}
 	}
 	return firstErr
 }
 
-// switchMode moves between the pattern view and the arrangement. Playback stops because
-// the other view has no sequencer for it, the edit modes are closed because each belongs
-// to the view being left, and the modifiers are released because they act on whatever the
-// view under them is.
-func switchMode(next eventProcessFunc, songLight int) error {
-	if err := stopPlayback(); err != nil {
-		return err
-	}
-	if err := exitPatternEditModes(); err != nil {
-		return err
-	}
-	if err := releaseModifiers(); err != nil {
-		return err
-	}
-	processEvent = next
-	if err := patbank.f.SetLed(NotePatternSong, songLight); err != nil {
-		return err
-	}
-	return nil
-}
-
-func exitPatternEditModes() error {
-	if patbank == nil {
-		return nil
-	}
-	if patbank.editingNote {
-		if err := patbank.setNoteEdit(false); err != nil {
+func (c *Controller) exitPatternEditModes() error {
+	if c.patbank.editingNote {
+		if err := c.patbank.setNoteEdit(false); err != nil {
 			return err
 		}
 	}
-	if patbank.editingLength {
-		return patbank.setLengthMode(false)
+	if c.patbank.editingLength {
+		return c.patbank.setLengthMode(false)
 	}
 	return nil
 }
@@ -112,27 +76,21 @@ func exitPatternEditModes() error {
 // releaseModifiers drops the engaged modifier buttons together with their lights, so a
 // mode switch cannot carry Alt or Shift into the mode that follows. An entry still on
 // the display is dropped as well, since it only means something while Shift is held.
-func releaseModifiers() error {
-	altOn = false
-	shiftOn = false
-	pendingNumber = 0
-	if patbank == nil {
-		return nil
-	}
-	if err := patbank.f.SetLed(NoteAlt, LEDOff); err != nil {
+func (c *Controller) releaseModifiers() error {
+	c.alt = false
+	c.shift = false
+	c.pending = 0
+	if err := c.patbank.f.SetLed(NoteAlt, LEDOff); err != nil {
 		return err
 	}
-	return patbank.f.SetLed(NoteShift, LEDOff)
+	return c.patbank.f.SetLed(NoteShift, LEDOff)
 }
 
 // restoreIndicators re-applies the button lights, which a blackout turned off, so each
-// light again reports the state behind it. The caller knows which view is showing, so the
-// mode is passed in rather than looked up: the handler that runs is the record of the mode,
-// and a second record of it could disagree with this one.
-func restoreIndicators(song bool) error {
-	if patbank == nil {
-		return nil
-	}
+// light again reports the state behind it. The view comes from the controller's own mode,
+// which is the one record of it rather than something a caller had to pass in and keep in
+// step with.
+func (c *Controller) restoreIndicators() error {
 	lights := map[int]int{
 		NoteAlt:         LEDOff,
 		NoteShift:       LEDOff,
@@ -145,31 +103,31 @@ func restoreIndicators(song bool) error {
 		CCMuteLED3:      LEDOff,
 		CCMuteLED4:      LEDOff,
 	}
-	if altOn {
+	if c.alt {
 		lights[NoteAlt] = LEDYellow
 	}
-	if shiftOn {
+	if c.shift {
 		lights[NoteShift] = LEDRed
 	}
-	if song {
+	if c.mode == songView {
 		// The mode light reports which view is showing, so a wake from blackout has to
 		// put it back as well, or the display claims to be in a mode it is not in.
 		lights[NotePatternSong] = LEDGreen
 	}
-	if patternClipboard != nil {
+	if c.clipboard != nil {
 		lights[NoteRecord] = LEDGreen
 	}
-	if patbank.editingNote {
+	if c.patbank.editingNote {
 		lights[NoteMode] = LEDGreen
 	}
-	if patbank.editingLength {
+	if c.patbank.editingLength {
 		lights[NoteOverview] = LEDRed
 	}
-	if patbank.selTrackRow >= 1 && patbank.selTrackRow <= padRows {
-		lights[CCMuteLED1+patbank.selTrackRow-1] = LEDGreen
+	if c.patbank.selTrackRow >= 1 && c.patbank.selTrackRow <= padRows {
+		lights[CCMuteLED1+c.patbank.selTrackRow-1] = LEDGreen
 	}
 	for control, value := range lights {
-		if err := patbank.f.SetLed(control, value); err != nil {
+		if err := c.patbank.f.SetLed(control, value); err != nil {
 			return err
 		}
 	}
@@ -181,18 +139,15 @@ func restoreIndicators(song bool) error {
 // the pattern view can be blacked out, so only that one is redrawn. The redraw is used
 // rather than Jump because the playback worker reads the selected pattern index, and a
 // blackout can happen while a pattern is playing.
-func wakeBlackout(song bool) error {
-	if patbank == nil {
-		return nil
-	}
-	if !patbank.f.Wake() {
+func (c *Controller) wakeBlackout() error {
+	if !c.patbank.f.Wake() {
 		return nil
 	}
 	logger.Info("wake from blackout")
-	if err := restoreIndicators(song); err != nil {
+	if err := c.restoreIndicators(); err != nil {
 		return err
 	}
-	return patbank.redraw()
+	return c.patbank.redraw()
 }
 
 // tapTempoWindow is how long a tap stays usable, which is a minimum of twenty beats per
@@ -203,53 +158,57 @@ var tapTempoWindow = time.Minute / 20
 // with the length and chromatic status, which are transient readouts too.
 const tempoDisplayRow = lengthDisplayRow
 
-func tapTempo() error {
+func (c *Controller) tapTempo() error {
 	// TODO: have this use the pads instead
-	if len(tapTempoTimes) > 0 {
+	if len(c.tapTimes) > 0 {
 		// Reset if the last tap was too long ago to be part of the same tempo.
-		last := tapTempoTimes[len(tapTempoTimes)-1]
+		last := c.tapTimes[len(c.tapTimes)-1]
 		if time.Since(last) > tapTempoWindow {
-			tapTempoTimes = nil
+			c.tapTimes = nil
 		}
 	}
-	if len(tapTempoTimes) > 4 {
-		tapTempoTimes = tapTempoTimes[1:]
+	if len(c.tapTimes) > 4 {
+		c.tapTimes = c.tapTimes[1:]
 	}
-	tapTempoTimes = append(tapTempoTimes, time.Now())
-	if len(tapTempoTimes) == 1 {
+	c.tapTimes = append(c.tapTimes, time.Now())
+	if len(c.tapTimes) == 1 {
 		return nil
 	}
 	var dur time.Duration
-	for i := 1; i < len(tapTempoTimes); i++ {
-		dur += tapTempoTimes[i].Sub(tapTempoTimes[i-1])
+	for i := 1; i < len(c.tapTimes); i++ {
+		dur += c.tapTimes[i].Sub(c.tapTimes[i-1])
 	}
-	dur /= time.Duration(len(tapTempoTimes) - 1)
+	dur /= time.Duration(len(c.tapTimes) - 1)
 	tempo := int(60.0 / dur.Seconds())
 	setBPM(tempo)
 	s := fmt.Sprintf("Tempo: %03d", tempo)
-	return patbank.f.Print(4, 3, s)
+	return c.patbank.f.Print(4, 3, s)
 }
 
-func handleSongGrid(x, y int) error {
+func (c *Controller) handleSongGrid(x, y int) error {
 	if x >= 12 {
-		return songbank.SelectPatternSlot((x - 12) + (y * 4))
+		return c.songbank.SelectPatternSlot((x - 12) + (y * 4))
 	}
-	if shiftOn {
-		return songbank.JumpMeasure(x, y)
+	if c.shift {
+		return c.songbank.JumpMeasure(x, y)
 	}
-	return songbank.ToggleMeasure(x, y)
+	return c.songbank.ToggleMeasure(x, y)
 }
 
-func toggleAlt() error {
-	altOn = !altOn
-	logger.Debug("alt", "on", altOn, "shift", shiftOn)
-	if altOn {
-		return patbank.f.SetLed(NoteAlt, LEDYellow)
+func (c *Controller) toggleAlt() error {
+	c.alt = !c.alt
+	logger.Debug("alt", "on", c.alt, "shift", c.shift)
+	if c.alt {
+		return c.patbank.f.SetLed(NoteAlt, LEDYellow)
 	}
-	return patbank.f.SetLed(NoteAlt, 0)
+	return c.patbank.f.SetLed(NoteAlt, 0)
 }
 
-func processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
+// The two handlers below are what a Fire event reaches once the controller has picked the
+// view. The writer is an interface so a test can drive the real handler with a stub;
+// starting playback also needs the sync port, which is why they take the wider interface
+// rather than a plain MIDI writer.
+func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
@@ -268,186 +227,192 @@ func processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
 		return nil
 	}
 	// A release must not end a blackout, so the wake waits for a real press.
-	if err := wakeBlackout(true); err != nil {
+	if err := c.wakeBlackout(); err != nil {
 		return err
 	}
 	if onGrid {
-		return handleSongGrid(x, y)
+		return c.handleSongGrid(x, y)
 	}
 	switch int(ev.Data[1]) {
 	case NotePlay:
-		if playbackStop == nil {
-			playbackStop = songbank.startSequencer(aseq)
+		if c.playback == nil {
+			c.playback = c.songbank.startSequencer(aseq)
 		}
 	case NoteStop:
-		return stopPlayback()
+		return c.stopPlayback()
 	case NoteShift:
-		shiftOn = !shiftOn
-		if shiftOn {
-			return songbank.f.SetLed(NoteShift, LEDRed)
+		c.shift = !c.shift
+		if c.shift {
+			return c.songbank.f.SetLed(NoteShift, LEDRed)
 		} else {
-			return songbank.f.SetLed(NoteShift, 0)
+			return c.songbank.f.SetLed(NoteShift, 0)
 		}
 	// In song mode these controls navigate viewports; pads still edit the arrangement.
 	case NotePatternUp:
-		if shiftOn {
-			return songbank.MovePatternSelection(1)
+		if c.shift {
+			return c.songbank.MovePatternSelection(1)
 		}
-		return songbank.ScrollPatterns(1)
+		return c.songbank.ScrollPatterns(1)
 	case NotePatternDown:
-		if shiftOn {
-			return songbank.MovePatternSelection(-1)
+		if c.shift {
+			return c.songbank.MovePatternSelection(-1)
 		}
-		return songbank.ScrollPatterns(-1)
+		return c.songbank.ScrollPatterns(-1)
 	case NoteGridLeft:
-		if shiftOn {
-			return songbank.ScrollMeasures(-measureFinePageSize)
+		if c.shift {
+			return c.songbank.ScrollMeasures(-measureFinePageSize)
 		}
-		return songbank.ScrollMeasures(-measurePageSize)
+		return c.songbank.ScrollMeasures(-measurePageSize)
 	case NoteGridRight:
-		if shiftOn {
-			return songbank.ScrollMeasures(measureFinePageSize)
+		if c.shift {
+			return c.songbank.ScrollMeasures(measureFinePageSize)
 		}
-		return songbank.ScrollMeasures(measurePageSize)
+		return c.songbank.ScrollMeasures(measurePageSize)
 	case NotePatternSong:
-		if err := switchMode(processPatternEvent, LEDOff); err != nil {
+		if err := c.setMode(patternView, LEDOff); err != nil {
 			return err
 		}
-		return patbank.Jump(0)
+		return c.patbank.Jump(0)
 	case NoteBrowser, NoteAccent:
-		return handleStateButton(int(ev.Data[1]), true)
+		return c.handleStateButton(int(ev.Data[1]))
 	}
 	return nil
 }
 
-func handlePatternMute(n int) error {
-	if altOn {
+func (c *Controller) handlePatternMute(n int) error {
+	if c.alt {
 		// Clearing a row removes the notes it holds, which the pattern cannot do while it
 		// is being played, so that one stops playback. Alt stays engaged, so a run of rows
 		// can be cleared without pressing it again.
-		if err := stopPlayback(); err != nil {
+		if err := c.stopPlayback(); err != nil {
 			return err
 		}
-		return patbank.ClearTrackRow(n)
+		return c.patbank.ClearTrackRow(n)
 	}
-	return patbank.SelectTrackRow(n)
+	return c.patbank.SelectTrackRow(n)
 }
 
 // handleStateButton binds the two unclaimed buttons to the state file. Both gestures take
 // Shift: Browser and Accent mean nothing on their own, and the modifier keeps a plain
 // press from writing over a set or replacing one mid-performance. Alt is not a candidate
-// because Shift plus Alt is the blackout. song is the view the caller is running, which a
-// load needs in order to repaint the right one.
-func handleStateButton(note int, song bool) error {
-	if !shiftOn {
+// because Shift plus Alt is the blackout.
+func (c *Controller) handleStateButton(note int) error {
+	if !c.shift {
 		return nil
 	}
 	switch note {
 	case NoteBrowser:
-		return saveSession()
+		return c.saveSession()
 	case NoteAccent:
-		return loadSession(song)
+		return c.loadSession()
 	}
 	return nil
 }
 
-// saveSession writes the session and reports on the readout row. It only reads the banks,
-// so it is safe while a pattern is playing, which is when it is most wanted.
-func saveSession() error {
-	if statePath == "" {
-		return reportState("No -state path")
+// saveSession takes the session as it stands and writes it. It only reads the banks, so it
+// is safe while a pattern is playing, which is when it is most wanted.
+//
+// Only the snapshot happens here. The write and its readout go to their own goroutine so
+// the press that asked for them is not held for the fsync.
+func (c *Controller) saveSession() error {
+	if c.sessionPath == "" {
+		return c.reportState("No -state path")
 	}
-	report, err := saveState(statePath, patbank, songbank, stateKitPaths)
+	c.saveOffLoop()
+	return nil
+}
+
+// reportSave writes what a publish produced: the same log lines and the same readout row a
+// synchronous save did, in the same words.
+func (c *Controller) reportSave(report stateReport, err error) error {
 	if err != nil {
-		logger.Error("state save failed", "path", statePath, "error", err)
-		return reportState(stateFailureText("Save failed", err))
+		logger.Error("state save failed", "path", c.sessionPath, "error", err)
+		return c.reportState(stateFailureText("Save failed", err))
 	}
-	logger.Info("state saved", append([]any{"path", statePath}, report.logAttrs()...)...)
-	return reportState(report.saveText())
+	logger.Info("state saved", append([]any{"path", c.sessionPath}, report.logAttrs()...)...)
+	return c.reportState(report.saveText())
 }
 
 // loadSession replaces the running session with the one on disk. A load stops playback
 // and repaints the view it was asked from, so what the unit shows afterwards is the set
 // that was loaded rather than the one that was there.
-func loadSession(song bool) error {
-	if statePath == "" {
-		return reportState("No -state path")
+func (c *Controller) loadSession() error {
+	if c.sessionPath == "" {
+		return c.reportState("No -state path")
 	}
-	report, err := loadState(statePath, patbank, songbank, stateKitPaths)
+	report, err := c.loadState(c.sessionPath)
 	if err != nil {
-		logger.Error("state load failed", "path", statePath, "error", err)
-		return reportState(stateFailureText("Load failed", err))
+		logger.Error("state load failed", "path", c.sessionPath, "error", err)
+		return c.reportState(stateFailureText("Load failed", err))
 	}
-	logger.Info("state loaded", append([]any{"path", statePath}, report.logAttrs()...)...)
-	// The repaint belongs here rather than in loadState, which is where the mode is
-	// known: this is only ever reached from the handler for the view in question.
-	if err := restoreIndicators(song); err != nil {
+	logger.Info("state loaded", append([]any{"path", c.sessionPath}, report.logAttrs()...)...)
+	// The repaint belongs here rather than in loadState, which is deliberately kept from
+	// knowing the view: which one is showing is the controller's business, and it is what
+	// says which bank has to be repainted and which mode light put back.
+	if err := c.restoreIndicators(); err != nil {
 		return err
 	}
-	if song {
-		err = songbank.Jump(0)
+	if c.mode == songView {
+		err = c.songbank.Jump(0)
 	} else {
-		err = patbank.Jump(0)
+		err = c.patbank.Jump(0)
 	}
 	if err != nil {
 		return err
 	}
-	return reportState(report.loadText())
+	return c.reportState(report.loadText())
 }
 
 // reportState writes a transient result on the readout row, the row the length and
 // chromatic readouts use. Anything already there is a readout too, so a message is
 // replaced by the next redraw rather than left to go stale.
-func reportState(text string) error {
-	if patbank == nil {
-		return nil
-	}
-	if err := patbank.clearTextRows(lengthDisplayRow, 1); err != nil {
+func (c *Controller) reportState(text string) error {
+	if err := c.patbank.clearTextRows(lengthDisplayRow, 1); err != nil {
 		return err
 	}
-	return patbank.printText(lengthDisplayRow, 0, fitOLEDText(text), false)
+	return c.patbank.printText(lengthDisplayRow, 0, fitOLEDText(text), false)
 }
 
-func handlePatternGrid(aseq sequencerWriter, x, y, vel int) error {
+func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) error {
 	if vel == 0 {
-		patbank.releasePad(y, x)
+		c.patbank.releasePad(y, x)
 		return nil
 	}
-	if patbank.editingNote {
-		return patbank.handleNoteEditPad(aseq, y, x, vel)
+	if c.patbank.editingNote {
+		return c.patbank.handleNoteEditPad(aseq, y, x, vel, c.alt)
 	}
-	if shiftOn {
-		pendingNumber *= 10
-		if pendingNumber > 999 {
-			pendingNumber = 0
+	if c.shift {
+		c.pending *= 10
+		if c.pending > 999 {
+			c.pending = 0
 		}
 		addend := (3*y + ((x % 4) % 3)) + 1
 		if y == 3 {
 			addend = 0
 		}
-		pendingNumber += addend
-		logger.Debug("tempo entry", "pending", pendingNumber, "padX", x, "padY", y)
+		c.pending += addend
+		logger.Debug("tempo entry", "pending", c.pending, "padX", x, "padY", y)
 		// Only the row the number goes on is cleared. Wiping the whole display here
 		// looked like a blackout: the screen went dark while the pads stayed lit.
-		if err := patbank.clearTextRows(tempoDisplayRow, 1); err != nil {
+		if err := c.patbank.clearTextRows(tempoDisplayRow, 1); err != nil {
 			return err
 		}
-		return patbank.printText(tempoDisplayRow, 4, fmt.Sprintf("Tempo: %03d", pendingNumber), false)
+		return c.patbank.printText(tempoDisplayRow, 4, fmt.Sprintf("Tempo: %03d", c.pending), false)
 	}
-	if handled, err := patbank.handleChromaticStepPress(y, x); handled {
+	if handled, err := c.patbank.handleChromaticStepPress(y, x); handled {
 		return err
 	}
-	patEv, err := patbank.ToggleEvent(y, x, vel)
+	patEv, err := c.patbank.ToggleEvent(y, x, vel)
 	if err != nil {
 		return err
 	}
-	if playbackStop != nil || patEv.Velocity == 0 {
+	if c.playback != nil || patEv.Velocity == 0 {
 		return nil
 	}
 	return writeMidiMsgs(aseq, eventDestination(patEv), patEv.ToMidi())
 }
 
-func processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
+func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
@@ -457,7 +422,7 @@ func processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
 	x, y, onGrid := Note2Grid(int(ev.Data[1]))
 	if onGrid {
 		if isPadRelease(status, velocity) {
-			patbank.releasePad(y, x)
+			c.patbank.releasePad(y, x)
 			return nil
 		}
 		if !midi.IsNoteOn(status) {
@@ -470,130 +435,130 @@ func processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
 		return nil
 	}
 	// A release must not end a blackout, so the wake waits for a real press.
-	if err := wakeBlackout(false); err != nil {
+	if err := c.wakeBlackout(); err != nil {
 		return err
 	}
 	if onGrid {
-		return handlePatternGrid(aseq, x, y, velocity)
+		return c.handlePatternGrid(aseq, x, y, velocity)
 	}
 	switch int(ev.Data[1]) {
 	case NoteShift:
-		shiftOn = !shiftOn
-		logger.Debug("shift", "on", shiftOn, "alt", altOn)
-		if !shiftOn {
-			if err := patbank.f.SetLed(NoteShift, 0); err != nil {
+		c.shift = !c.shift
+		logger.Debug("shift", "on", c.shift, "alt", c.alt)
+		if !c.shift {
+			if err := c.patbank.f.SetLed(NoteShift, 0); err != nil {
 				return err
 			}
-			if pendingNumber > 20 && pendingNumber < 300 {
-				setBPM(pendingNumber)
-				pendingNumber = 0
-				return patbank.Jump(0)
+			if c.pending > 20 && c.pending < 300 {
+				setBPM(c.pending)
+				c.pending = 0
+				return c.patbank.Jump(0)
 			}
 		} else {
-			return patbank.f.SetLed(NoteShift, LEDRed)
+			return c.patbank.f.SetLed(NoteShift, LEDRed)
 		}
 	// Overview exposes the per-pattern length while the encoder changes steps.
 	case NoteOverview:
-		if err := stopPlayback(); err != nil {
+		if err := c.stopPlayback(); err != nil {
 			return err
 		}
-		return patbank.ToggleLengthMode()
+		return c.patbank.ToggleLengthMode()
 	case NoteMode:
-		return patbank.ToggleNoteMode()
+		return c.patbank.ToggleNoteMode()
 	case NoteGridLeft:
-		return patbank.MoveStepCursor(-1)
+		return c.patbank.MoveStepCursor(-1)
 	case NoteGridRight:
-		return patbank.MoveStepCursor(1)
+		return c.patbank.MoveStepCursor(1)
 	case NotePatternUp:
 		// Alt reuses the pattern buttons for the track window, which is why Alt
 		// stays lit until it is pressed again.
-		if altOn {
-			return patbank.ScrollTracks(1)
+		if c.alt {
+			return c.patbank.ScrollTracks(1)
 		}
-		if err := stopPlayback(); err != nil {
+		if err := c.stopPlayback(); err != nil {
 			return err
 		}
-		return patbank.Jump(1)
+		return c.patbank.Jump(1)
 	case NotePatternDown:
-		if altOn {
-			return patbank.ScrollTracks(-1)
+		if c.alt {
+			return c.patbank.ScrollTracks(-1)
 		}
-		if err := stopPlayback(); err != nil {
+		if err := c.stopPlayback(); err != nil {
 			return err
 		}
-		return patbank.Jump(-1)
+		return c.patbank.Jump(-1)
 	case NoteAlt:
-		if shiftOn {
+		if c.shift {
 			// Blackout. The controls keep their state, so the next press brings the
 			// lights and screen back to it, the Alt light included.
 			logger.Info("blackout")
-			return patbank.f.Blackout()
+			return c.patbank.f.Blackout()
 		}
-		return toggleAlt()
+		return c.toggleAlt()
 	case NoteMute1:
-		return handlePatternMute(1)
+		return c.handlePatternMute(1)
 	case NoteMute2:
-		return handlePatternMute(2)
+		return c.handlePatternMute(2)
 	case NoteMute3:
-		return handlePatternMute(3)
+		return c.handlePatternMute(3)
 	case NoteMute4:
-		return handlePatternMute(4)
+		return c.handlePatternMute(4)
 	case CCVolume:
-		return patbank.AdjustVelocity(aseq, velocity)
+		return c.patbank.AdjustVelocity(aseq, velocity)
 	case CCSelect:
 		dir, turning := encoderDirection(int(ev.Data[2]))
 		if !turning {
 			return nil
 		}
-		if patbank.editingLength {
-			return patbank.AdjustLength(dir)
+		if c.patbank.editingLength {
+			return c.patbank.AdjustLength(dir)
 		}
-		if patbank.NoteEditActive() {
+		if c.patbank.NoteEditActive() {
 			// In note-edit mode the knob moves the palette by an octave rather than the
 			// track's voice, so the pitch being chosen stays on screen while it moves.
-			return patbank.ShiftPaletteOctave(dir)
+			return c.patbank.ShiftPaletteOctave(dir)
 		}
-		return patbank.JogSelect(dir)
+		return c.patbank.JogSelect(dir)
 	case NotePlay:
-		if patternClipboard != nil {
+		if c.clipboard != nil {
 			// Copy and paste.
-			if err := stopPlayback(); err != nil {
+			if err := c.stopPlayback(); err != nil {
 				return err
 			}
-			if err := patbank.SetPattern(patternClipboard); err != nil {
+			if err := c.patbank.SetPattern(c.clipboard); err != nil {
 				return err
 			}
-			patternClipboard = nil
-			return patbank.f.SetLed(NoteRecord, LEDOff)
+			c.clipboard = nil
+			return c.patbank.f.SetLed(NoteRecord, LEDOff)
 		}
-		if playbackStop == nil {
-			playbackStop = patbank.startSequencer(aseq)
+		if c.playback == nil {
+			c.playback = c.patbank.startSequencer(aseq)
 		}
 	case NoteStop:
-		if altOn {
+		if c.alt {
 			// Clear pattern. Alt stays engaged, so the track buttons keep scrolling.
-			if err := stopPlayback(); err != nil {
+			if err := c.stopPlayback(); err != nil {
 				return err
 			}
-			return patbank.SetPattern(&Pattern{})
+			return c.patbank.SetPattern(&Pattern{})
 		}
-		return stopPlayback()
+		return c.stopPlayback()
 	case NoteTap:
-		return tapTempo()
+		return c.tapTempo()
 	case NoteRecord:
-		if patternClipboard != nil {
-			patternClipboard = nil
-			return patbank.f.SetLed(NoteRecord, LEDOff)
+		if c.clipboard != nil {
+			c.clipboard = nil
+			return c.patbank.f.SetLed(NoteRecord, LEDOff)
 		}
-		patternClipboard = patbank.CurrentPattern().Copy()
-		return patbank.f.SetLed(NoteRecord, LEDGreen)
+		c.clipboard = c.patbank.CurrentPattern().Copy()
+		return c.patbank.f.SetLed(NoteRecord, LEDGreen)
 	case NotePatternSong:
-		if err := switchMode(processSongEvent, LEDGreen); err != nil {
+		if err := c.setMode(songView, LEDGreen); err != nil {
 			return err
 		}
-		return songbank.Jump(0)
+		return c.songbank.Jump(0)
 	case NoteBrowser, NoteAccent:
-		return handleStateButton(int(ev.Data[1]), false)
+		return c.handleStateButton(int(ev.Data[1]))
 	}
 	return nil
 }

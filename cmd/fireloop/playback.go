@@ -98,8 +98,12 @@ func (p *Playback) start(aseq sequencerWriter) playbackStopFunc {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	var runErr error
+	// The clock is handed to the loop rather than left on the playback, so where the time
+	// comes from is an argument at every call rather than a field a test has to remember
+	// to set and a nil check has to cover when it forgets.
+	clock := &realStepClock{}
 	go func() {
-		runErr = p.run(ctx, aseq)
+		runErr = p.run(ctx, aseq, clock)
 		if runErr != nil && ctx.Err() == nil {
 			log.Printf("fireloop playback stopped: %v", runErr)
 		}
@@ -397,7 +401,7 @@ func writeSequencerPort(aseq sequencerWriter, data []byte) error {
 	return aseq.WritePort(alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: data}, syncPort.Port)
 }
 
-func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error) {
+func (p *Playback) run(ctx context.Context, aseq sequencerWriter, clock stepClock) (runErr error) {
 	started := false
 	logger.Info("playback start", "bpm", currentBPM())
 	defer func() {
@@ -413,25 +417,18 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 	}()
 	curBpm := currentBPM()
 	curPattern := p.patternForBeat(0)
+	defer clock.Stop()
 	// The settle wait belongs here rather than in the button handler, so a press while
 	// an instrument is loading is still read, and the anchor is taken after it so
 	// the first measure keeps its full length.
 	if p.settle > 0 {
 		logger.Debug("settling after a patch", "duration", p.settle)
-		select {
-		case <-time.After(p.settle):
-		case <-ctx.Done():
+		if !clock.Wait(ctx, p.settle) {
 			return nil
 		}
 	}
-	// Compute measures w/r/t this anchor + now() to avoid drift.
-	anchor := time.Now()
-	var timer *time.Timer
-	defer func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
+	// Compute measures w/r/t this anchor + the clock's now() to avoid drift.
+	anchor := clock.Now()
 	for {
 		songBeat, patBeat, _ := p.position()
 		if !started {
@@ -463,11 +460,10 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 			p.setPosition(songBeat+nextBeat-patBeat, nextBeat)
 		} else {
 			advance := p.crossMeasure(aseq, curPattern, curBpm, patBeat, anchor)
-			curPattern, curBpm, waitUntil, anchor = advance.pattern, advance.bpm, advance.wait, advance.anchor
+			curPattern, curBpm, anchor = advance.pattern, advance.bpm, advance.anchor
+			waitUntil = anchor.Sub(clock.Now())
 		}
-		var keepGoing bool
-		timer, keepGoing = waitForTick(ctx, timer, waitUntil)
-		if !keepGoing {
+		if !clock.Wait(ctx, waitUntil) {
 			return nil
 		}
 	}
@@ -490,11 +486,11 @@ func nextEventBeat(patBeat, nextBeat, patternBeats float32) float32 {
 }
 
 // measureAdvance is what settling the end of one pattern produces: the pattern that plays
-// next, the tempo to play it at, and when it is due.
+// next, the tempo to play it at, and the moment the next one is due. The wait until that
+// moment is the caller's to take, because the clock is the caller's.
 type measureAdvance struct {
 	pattern *Pattern
 	bpm     int
-	wait    time.Duration
 	anchor  time.Time
 }
 
@@ -521,12 +517,7 @@ func (p *Playback) crossMeasure(aseq sequencerWriter, cur *Pattern, curBpm int, 
 		nextPattern = p.patternForBeat(0)
 	}
 	p.setPosition(songBeat, 0)
-	return measureAdvance{
-		pattern: nextPattern,
-		bpm:     bpm,
-		wait:    time.Until(nextAnchor),
-		anchor:  nextAnchor,
-	}
+	return measureAdvance{pattern: nextPattern, bpm: bpm, anchor: nextAnchor}
 }
 
 // patternForBeat asks the playback's own source which pattern sits at a song position. It
@@ -537,23 +528,6 @@ func (p *Playback) patternForBeat(songBeat float32) *Pattern {
 		return nil
 	}
 	return p.nextPattern(songBeat)
-}
-
-// waitForTick blocks for one step and reports whether playback should carry on. The timer
-// comes back so the next step reuses it instead of leaving one per step for the collector.
-// A cancellation is not a failure: stopping is what was asked for.
-func waitForTick(ctx context.Context, timer *time.Timer, wait time.Duration) (*time.Timer, bool) {
-	if timer == nil {
-		timer = time.NewTimer(wait)
-	} else {
-		timer.Reset(wait)
-	}
-	select {
-	case <-timer.C:
-		return timer, true
-	case <-ctx.Done():
-		return timer, false
-	}
 }
 
 // The writer is an interface so a test can drive the real sequencer loop with a stub

@@ -1,15 +1,15 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func testNote(note int) *int {
@@ -18,9 +18,7 @@ func testNote(note int) *int {
 
 func writeKitFile(t *testing.T, dir, name, contents string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644))
 }
 
 func TestLoadDevicesFile(t *testing.T) {
@@ -29,12 +27,9 @@ func TestLoadDevicesFile(t *testing.T) {
 	writeKitFile(t, dir, "kit.json", `{"Name":"single","MidiPort":"port","Channel":1,"Voices":[{"Name":"voice","Note":60}]}`)
 
 	devices, err := loadDevices(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 1 || devices[0].Name != "single" {
-		t.Fatalf("unexpected devices: %+v", devices)
-	}
+	require.NoError(t, err)
+	require.Len(t, devices, 1)
+	require.Equal(t, "single", devices[0].Name)
 }
 
 func TestLoadDevicesArray(t *testing.T) {
@@ -46,18 +41,12 @@ func TestLoadDevicesArray(t *testing.T) {
 	]`)
 
 	devices, err := loadDevices(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateDevices(devices); err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 2 || devices[0].MidiPort != "port-a" || devices[1].MidiPort != "port-b" {
-		t.Fatalf("unexpected devices: %+v", devices)
-	}
-	if devices[1].Voices[0].Channel != 3 {
-		t.Fatalf("voice channel = %d, want 3", devices[1].Voices[0].Channel)
-	}
+	require.NoError(t, err)
+	require.NoError(t, validateDevices(devices))
+	require.Len(t, devices, 2)
+	require.Equal(t, "port-a", devices[0].MidiPort)
+	require.Equal(t, "port-b", devices[1].MidiPort)
+	require.Equal(t, 3, devices[1].Voices[0].Channel)
 }
 
 func TestLoadDevicesDirectorySortsByName(t *testing.T) {
@@ -67,12 +56,10 @@ func TestLoadDevicesDirectorySortsByName(t *testing.T) {
 	writeKitFile(t, dir, "ignore.txt", "not a kit")
 
 	devices, err := loadDevices(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 2 || devices[0].Name != "alpha" || devices[1].Name != "zeta" {
-		t.Fatalf("unexpected devices: %+v", devices)
-	}
+	require.NoError(t, err)
+	require.Len(t, devices, 2)
+	require.Equal(t, "alpha", devices[0].Name)
+	require.Equal(t, "zeta", devices[1].Name)
 }
 
 func TestLoadKitMergesPathsInOrder(t *testing.T) {
@@ -83,23 +70,17 @@ func TestLoadKitMergesPathsInOrder(t *testing.T) {
 	writeKitFile(t, dir, "second.json", `[{"Name":"lead","MidiPort":"b","Channel":1,"Voices":[{"Name":"lead"}]}]`)
 
 	devices, err := loadKit([]string{first, second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateDevices(devices); err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 2 || devices[0].Name != "drums" || devices[1].Name != "lead" {
-		t.Fatalf("unexpected devices: %+v", devices)
-	}
+	require.NoError(t, err)
+	require.NoError(t, validateDevices(devices))
+	require.Len(t, devices, 2)
+	require.Equal(t, "drums", devices[0].Name)
+	require.Equal(t, "lead", devices[1].Name)
 
 	reversed, err := loadKit([]string{second, first})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(reversed) != 2 || reversed[0].Name != "lead" || reversed[1].Name != "drums" {
-		t.Fatalf("kit order not taken from the command line: %+v", reversed)
-	}
+	require.NoError(t, err)
+	require.Len(t, reversed, 2)
+	require.Equal(t, "lead", reversed[0].Name, "the kit order should come from the command line")
+	require.Equal(t, "drums", reversed[1].Name, "the kit order should come from the command line")
 }
 
 // A merged kit mixes files and directories, and the voices of a single device keep
@@ -107,27 +88,21 @@ func TestLoadKitMergesPathsInOrder(t *testing.T) {
 func TestLoadKitMergesFilesAndDirectories(t *testing.T) {
 	dir := t.TempDir()
 	kitDir := filepath.Join(dir, "kit")
-	if err := os.Mkdir(kitDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(kitDir, 0o755))
 	writeKitFile(t, kitDir, "a.json", `{"Name":"alpha","MidiPort":"a","Channel":1,"Voices":[{"Name":"one","Note":60},{"Name":"two","Note":61}]}`)
 	single := filepath.Join(dir, "single.json")
 	writeKitFile(t, dir, "single.json", `{"Name":"solo","MidiPort":"s","Channel":2,"Voices":[{"Name":"solo","Note":62}]}`)
 
 	devices, err := loadKit([]string{kitDir, single})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	names := make([]string, 0, len(devices))
 	for _, dev := range devices {
 		names = append(names, dev.Name)
 	}
-	if len(devices) != 2 || names[0] != "alpha" || names[1] != "solo" {
-		t.Fatalf("unexpected devices: %v", names)
-	}
-	if len(devices[0].Voices) != 2 || devices[0].Voices[0].Name != "one" || devices[0].Voices[1].Name != "two" {
-		t.Fatalf("voice order changed: %+v", devices[0].Voices)
-	}
+	require.Equal(t, []string{"alpha", "solo"}, names)
+	require.Len(t, devices[0].Voices, 2)
+	require.Equal(t, "one", devices[0].Voices[0].Name, "the voice order changed")
+	require.Equal(t, "two", devices[0].Voices[1].Name, "the voice order changed")
 }
 
 // One bad path fails the whole merge; a partial kit would silently drop voices.
@@ -136,12 +111,10 @@ func TestLoadKitRejectsBadPath(t *testing.T) {
 	good := filepath.Join(dir, "good.json")
 	writeKitFile(t, dir, "good.json", `{"Name":"good","MidiPort":"g","Channel":1,"Voices":[{"Name":"v","Note":60}]}`)
 
-	if _, err := loadKit([]string{good, filepath.Join(dir, "missing.json")}); err == nil {
-		t.Fatal("expected an error for the missing kit")
-	}
-	if _, err := loadKit(nil); err == nil {
-		t.Fatal("expected an error for an empty kit list")
-	}
+	_, err := loadKit([]string{good, filepath.Join(dir, "missing.json")})
+	require.Error(t, err, "a missing kit in the list should fail the merge")
+	_, err = loadKit(nil)
+	require.Error(t, err, "an empty kit list should fail")
 }
 
 // The flag has to accumulate so the same kit can be given more than once on the
@@ -151,19 +124,10 @@ func TestKitPathsFlagAccumulates(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Var(&paths, "kit", "kit")
 
-	if err := fs.Parse([]string{"-kit", "a.json", "-kit", "b.json", "-kit", "dir"}); err != nil {
-		t.Fatal(err)
-	}
-	got := paths.all()
-	if len(got) != 3 || got[0] != "a.json" || got[1] != "b.json" || got[2] != "dir" {
-		t.Fatalf("kit paths = %v", got)
-	}
-	if paths.String() != "a.json,b.json,dir" {
-		t.Fatalf("kit paths string = %q", paths.String())
-	}
-	if err := fs.Parse([]string{"-kit", ""}); err == nil {
-		t.Fatal("expected an error for an empty kit path")
-	}
+	require.NoError(t, fs.Parse([]string{"-kit", "a.json", "-kit", "b.json", "-kit", "dir"}))
+	require.Equal(t, []string{"a.json", "b.json", "dir"}, paths.all())
+	require.Equal(t, "a.json,b.json,dir", paths.String())
+	require.Error(t, fs.Parse([]string{"-kit", ""}), "an empty kit path should be refused")
 }
 
 // The default kit is only used when no -kit is given. It must not be merged with the
@@ -173,27 +137,18 @@ func TestKitPathsFlagReplacesDefault(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Var(&paths, "kit", "kit")
 
-	if err := fs.Parse([]string{"-kit", "a.json", "-kit", "b.json"}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, fs.Parse([]string{"-kit", "a.json", "-kit", "b.json"}))
 	for _, path := range paths.all() {
-		if path == defaultKitPath {
-			t.Fatalf("default kit %q loaded alongside the given kits: %v", defaultKitPath, paths.all())
-		}
+		require.NotEqualf(t, defaultKitPath, path,
+			"the default kit was loaded alongside the given kits: %v", paths.all())
 	}
 
 	empty := flag.NewFlagSet("empty", flag.ContinueOnError)
 	var untouched kitPaths
 	empty.Var(&untouched, "kit", "kit")
-	if err := empty.Parse(nil); err != nil {
-		t.Fatal(err)
-	}
-	if got := untouched.all(); len(got) != 1 || got[0] != defaultKitPath {
-		t.Fatalf("kit paths without any flag = %v, want the default", got)
-	}
-	if untouched.String() != defaultKitPath {
-		t.Fatalf("kit paths string without any flag = %q", untouched.String())
-	}
+	require.NoError(t, empty.Parse(nil))
+	require.Equal(t, []string{defaultKitPath}, untouched.all())
+	require.Equal(t, defaultKitPath, untouched.String())
 }
 
 func TestValidateDevices(t *testing.T) {
@@ -203,9 +158,7 @@ func TestValidateDevices(t *testing.T) {
 		Channel:  1,
 		Voices:   []Voice{{Name: "voice", Note: testNote(60)}},
 	}}
-	if err := validateDevices(valid); err != nil {
-		t.Fatalf("valid device rejected: %v", err)
-	}
+	require.NoError(t, validateDevices(valid), "a valid device was rejected")
 
 	tests := []struct {
 		name   string
@@ -220,9 +173,7 @@ func TestValidateDevices(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := validateDevices([]Device{tt.device}); err == nil {
-				t.Fatal("expected validation error")
-			}
+			require.Error(t, validateDevices([]Device{tt.device}), "expected a validation error")
 		})
 	}
 }
@@ -232,9 +183,8 @@ func TestLoadDevicesRejectsEmptyKit(t *testing.T) {
 	path := filepath.Join(dir, "empty.json")
 	writeKitFile(t, dir, "empty.json", "")
 
-	if _, err := loadDevices(path); err == nil {
-		t.Fatal("expected an empty kit error")
-	}
+	_, err := loadDevices(path)
+	require.Error(t, err, "an empty kit should be refused")
 }
 
 // fakeSequencer stands in for the ALSA client so the shutdown path can be exercised without
@@ -264,71 +214,49 @@ func (f *fakeSequencer) Close() error {
 // shutdownBank is a bank with one chromatic note sounding, which is the state a signal
 // arrives in. The display goes through a recorder so a test can see what the unit was left
 // showing.
-func shutdownBank(t *testing.T) (*Playback, *captureMidiWriter, *fireSim) {
+func shutdownBank(t *testing.T) (*Controller, *Playback, *captureMidiWriter, *fireSim) {
 	t.Helper()
 	sim := newFireSim()
 	kit := trackWindowKit(4, 0)
-	bank := NewPatternBank(NewFire(sim.write), kit)
-	usePatternGlobals(t, bank)
+	controller := useController(t, NewFire(sim.write), kit)
+	bank := controller.patbank
 	writer := &captureMidiWriter{}
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	bank.playback = playback
-	if err := playback.playChromaticEvent(writer, Event{
+	require.NoError(t, playback.playChromaticEvent(writer, Event{
 		Voice: kit.voices[0], ChromaticNote: 60, Velocity: 100,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if playback.activeNoteCount() != 1 {
-		t.Fatal("the test needs a note sounding")
-	}
+	}))
+	require.Equal(t, 1, playback.activeNoteCount(), "the test needs a note sounding")
 	writer.events = nil
-	return playback, writer, sim
+	return controller, playback, writer, sim
 }
 
 // Leaving the program must release the note that is sounding, or the instrument holds it
 // until its own timeout. It must also close the client.
 func TestShutdownReleasesSoundingNotes(t *testing.T) {
-	playback, writer, _ := shutdownBank(t)
+	controller, playback, writer, _ := shutdownBank(t)
 	client := &fakeSequencer{}
 
-	if err := shutdown(client); err != nil {
-		t.Fatal(err)
-	}
-	if len(writer.events) != 1 {
-		t.Fatalf("shutdown wrote %d messages, want the sounding note's note-off", len(writer.events))
-	}
+	require.NoError(t, shutdown(controller, client))
+	require.Len(t, writer.events, 1, "want the sounding note's note-off")
 	assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), 60, 0})
-	if playback.activeNoteCount() != 0 {
-		t.Fatal("shutdown left a note marked as sounding")
-	}
-	if client.closes != 1 {
-		t.Fatalf("sequencer closed %d times, want once", client.closes)
-	}
+	require.Zero(t, playback.activeNoteCount(), "shutdown left a note marked as sounding")
+	require.Equal(t, 1, client.closes, "the sequencer should close once")
 }
 
 // Leaving the unit showing the last frame reads as a sequencer that hung, so shutdown has to
 // leave it dark: no lit pad, no lit light, and a cleared screen.
 func TestShutdownBlanksTheUnit(t *testing.T) {
-	_, _, sim := shutdownBank(t)
+	controller, _, _, sim := shutdownBank(t)
 	// Light something first, so "dark" is a change rather than the state it started in.
-	if err := patbank.f.SetLed(NoteMode, LEDGreen); err != nil {
-		t.Fatal(err)
-	}
-	if err := patbank.f.LightPad(3, 1, 127, 127, 127); err != nil {
-		t.Fatal(err)
-	}
-	if err := patbank.f.Print(0, 0, "Pattern 001"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, controller.patbank.f.SetLed(NoteMode, LEDGreen))
+	require.NoError(t, controller.patbank.f.LightPad(3, 1, 127, 127, 127))
+	require.NoError(t, controller.patbank.f.Print(0, 0, "Pattern 001"))
 
-	if err := shutdown(&fakeSequencer{}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, shutdown(controller, &fakeSequencer{}))
 
 	for index, color := range sim.pads {
-		if color != [3]int{} {
-			t.Fatalf("pad %d is still lit %v after shutdown", index, color)
-		}
+		require.Equalf(t, [3]int{}, color, "pad %d is still lit after shutdown", index)
 	}
 	for control, value := range sim.leds {
 		// The top-left indicators are not plain on/off lights: zero lights Channel, so
@@ -337,77 +265,56 @@ func TestShutdownBlanksTheUnit(t *testing.T) {
 		if control == CCTopLeftLEDs {
 			want = CCTopLeftOff
 		}
-		if value != want {
-			t.Fatalf("light %d reads %d after shutdown, want %d", control, value, want)
-		}
+		require.Equalf(t, want, value, "light %d reads the wrong value after shutdown", control)
 	}
-	if sim.fullClears == 0 {
-		t.Fatal("shutdown left the screen showing the last frame")
-	}
+	require.NotZero(t, sim.fullClears, "shutdown left the screen showing the last frame")
 }
 
 // A failing close is reported, and it must not stop the notes from being released or the
 // client from being closed.
 func TestShutdownReportsCloseFailure(t *testing.T) {
-	playback, writer, _ := shutdownBank(t)
+	controller, playback, writer, _ := shutdownBank(t)
 	client := &fakeSequencer{closeErr: errOutOfRange}
 
-	if err := shutdown(client); err == nil {
-		t.Fatal("a failing close was not reported")
-	}
-	if len(writer.events) != 1 {
-		t.Fatalf("shutdown wrote %d messages, want the note-off even when closing fails", len(writer.events))
-	}
-	if playback.activeNoteCount() != 0 {
-		t.Fatal("shutdown left a note marked as sounding")
-	}
-	if client.closes != 1 {
-		t.Fatalf("sequencer closed %d times, want once", client.closes)
-	}
+	require.Error(t, shutdown(controller, client), "a failing close was not reported")
+	require.Len(t, writer.events, 1, "want the note-off even when closing fails")
+	require.Zero(t, playback.activeNoteCount(), "shutdown left a note marked as sounding")
+	require.Equal(t, 1, client.closes, "the sequencer should close once")
 }
 
 // A handler failure runs on a goroutine, where a panic would take the process with it and
 // leave every note sounding. It must be reported instead, and playback must stop so that
 // nothing keeps sounding notes that are no longer tracked.
 func TestHandlerFailureStopsPlaybackWithoutEndingTheProcess(t *testing.T) {
-	playback, writer, _ := shutdownBank(t)
+	controller, playback, writer, _ := shutdownBank(t)
 	capture := useCaptureLog(t)
-	previousProcess := processEvent
-	t.Cleanup(func() { processEvent = previousProcess })
-	processEvent = func(sequencerWriter, alsa.SeqEvent) error { return errOutOfRange }
+	controller.patbank.f = NewFire(func([]byte) error { return errOutOfRange })
 
-	handleIncomingEvent(nil, padMessage(NoteMute1, 100))
+	controller.handleIncomingEvent(nil, padMessage(NoteMute1, 100))
 
-	if playback.activeNoteCount() != 0 {
-		t.Fatal("a handler failure left playback running")
-	}
-	if len(writer.events) != 1 {
-		t.Fatalf("a handler failure wrote %d messages, want the sounding note released", len(writer.events))
-	}
-	if messages := capture.messages(); !slices.Contains(messages, "event failed") {
-		t.Fatalf("a handler failure was not reported: %v", messages)
-	}
+	require.Zero(t, playback.activeNoteCount(), "a handler failure left playback running")
+	require.Len(t, writer.events, 1, "want the sounding note released")
+	assert.Contains(t, capture.messages(), "event failed", "a handler failure was not reported")
 }
 
 // A failure to stop as well as to handle is still only reported, never fatal: the release
 // is what keeps the instrument from holding a note, so losing that must be visible.
 func TestHandlerFailureReportsAFailedStop(t *testing.T) {
-	playback, _, _ := shutdownBank(t)
+	controller, playback, _, _ := shutdownBank(t)
 	playback.writer = &failingSequencerWriter{err: errOutOfRange}
+	controller.patbank.f = NewFire(func([]byte) error { return errOutOfRange })
 	capture := useCaptureLog(t)
-	previousProcess := processEvent
-	t.Cleanup(func() { processEvent = previousProcess })
-	processEvent = func(sequencerWriter, alsa.SeqEvent) error { return errOutOfRange }
+	controller.patbank.playback = playback
+	// The stop handle is what fails here, so the release the stop asks for is the failing
+	// one rather than the handler.
+	controller.playback = func() error { return errOutOfRange }
 
-	handleIncomingEvent(nil, padMessage(NoteMute1, 100))
+	controller.handleIncomingEvent(nil, padMessage(NoteMute1, 100))
 
 	messages := capture.messages()
-	if !slices.Contains(messages, "event failed") {
-		t.Fatalf("a handler failure was not reported: %v", messages)
-	}
-	if !slices.Contains(messages, "stopping after an event failure") {
-		t.Fatalf("a handler failure that could not stop playback was not reported: %v", messages)
-	}
+	assert.Contains(t, messages, "event failed", "a handler failure was not reported")
+	assert.Contains(t, messages, "stopping after an event failure",
+		"a failure to stop as well as to handle was not reported")
 }
 
 // A pad press has to travel the whole way through the real handler to an instrument. That
@@ -417,21 +324,15 @@ func TestHandlerPlaysAPadWithoutAPort(t *testing.T) {
 	// The first voice is a drum and the second is the chromatic one, so the track the bank
 	// starts on holds a drum and a pad press adds a step rather than choosing a pitch.
 	kit := trackWindowKit(4, 1)
-	bank := NewPatternBank(NewFire(newFireSim().write), kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, bank)
+	controller := useController(t, NewFire(newFireSim().write), kit)
 	writer := &captureMidiWriter{}
 
-	handleIncomingEvent(writer, padMessage(54, 100))
+	controller.handleIncomingEvent(writer, padMessage(54, 100))
 
 	// A percussion step sends the legacy pair: the note is silenced and then sounded, so
 	// pressing a step that already holds the note does not leave two copies of it ringing.
 	note := byte(*kit.voices[0].Note)
-	if len(writer.events) != 2 {
-		t.Fatalf("a pad press wrote %d messages, want the note and the silence before it", len(writer.events))
-	}
+	require.Len(t, writer.events, 2, "want the note and the silence before it")
 	assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), note, 100})
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), note, 100})
 }
@@ -447,12 +348,8 @@ func TestReadFireReportsReadFailure(t *testing.T) {
 	}
 
 	err := readFire(reader, inc)
-	if !errors.Is(err, errOutOfRange) {
-		t.Fatalf("readFire returned %v, want the read failure", err)
-	}
-	if len(inc) != 2 {
-		t.Fatalf("readFire pumped %d events, want the 2 the reader held", len(inc))
-	}
+	require.ErrorIsf(t, err, errOutOfRange, "readFire should return the read failure")
+	require.Len(t, inc, 2, "readFire should pump the 2 events the reader held")
 }
 
 // fakeReader hands out a fixed list of events and then fails, standing in for the blocking
@@ -480,19 +377,11 @@ func TestSharedMIDIDestination(t *testing.T) {
 
 	sharedMIDIDestination = false
 	writer := &captureMidiWriter{}
-	if err := writeMidiMsgs(writer, destination, [][]byte{message}); err != nil {
-		t.Fatal(err)
-	}
-	if writer.events[0].SeqAddr != destination {
-		t.Fatalf("per-device destination = %v, want %v", writer.events[0].SeqAddr, destination)
-	}
+	require.NoError(t, writeMidiMsgs(writer, destination, [][]byte{message}))
+	require.Equal(t, destination, writer.events[0].SeqAddr, "a per-device write keeps its own address")
 
 	sharedMIDIDestination = true
 	writer = &captureMidiWriter{}
-	if err := writeMidiMsgs(writer, destination, [][]byte{message}); err != nil {
-		t.Fatal(err)
-	}
-	if writer.events[0].SeqAddr != alsa.SubsSeqAddr {
-		t.Fatalf("shared destination = %v, want %v", writer.events[0].SeqAddr, alsa.SubsSeqAddr)
-	}
+	require.NoError(t, writeMidiMsgs(writer, destination, [][]byte{message}))
+	require.Equal(t, alsa.SubsSeqAddr, writer.events[0].SeqAddr, "a shared write goes to subscribers")
 }

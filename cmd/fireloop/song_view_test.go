@@ -5,8 +5,13 @@ import (
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/require"
 )
 
+// newArrangementTest builds both banks and leaves the controller in the arrangement view,
+// which is the view these tests press controls in. Dispatching through the controller is
+// what puts them there: naming the song handler directly would skip the choice the program
+// actually makes.
 func newArrangementTest(t *testing.T) (*SongBank, *PatternBank) {
 	t.Helper()
 	fire := NewFire(func([]byte) error { return nil })
@@ -14,15 +19,10 @@ func newArrangementTest(t *testing.T) (*SongBank, *PatternBank) {
 		Channel: 1,
 		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
 	}})
-	patternBank := NewPatternBank(fire, voiceBank)
-	if err := patternBank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	songBank := NewSongBank(fire, patternBank)
-	if err := songBank.Jump(0); err != nil {
-		t.Fatal(err)
-	}
-	return songBank, patternBank
+	controller := useController(t, fire, voiceBank)
+	require.NoError(t, controller.songbank.Jump(0))
+	controller.mode = songView
+	return controller.songbank, controller.patbank
 }
 
 func arrangementNote(note int) alsa.SeqEvent {
@@ -34,192 +34,112 @@ func TestArrangementPatternViewport(t *testing.T) {
 	for index := 1; index <= 40; index++ {
 		patternBank.Patterns[index] = &Pattern{}
 	}
-	if err := songBank.ScrollPatterns(1); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.patternStart != 17 || patternBank.selPatIdx != 1 {
-		t.Fatalf("unexpected pattern viewport: start=%d selected=%d", songBank.patternStart, patternBank.selPatIdx)
-	}
-	if err := songBank.ScrollPatterns(100); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.patternStart != maxPatternIndex-patternViewSize+1 {
-		t.Fatalf("pattern viewport did not clamp: %d", songBank.patternStart)
-	}
-	if err := songBank.ScrollPatterns(-100); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.patternStart != 1 {
-		t.Fatalf("pattern viewport did not return to start: %d", songBank.patternStart)
-	}
+	require.NoError(t, songBank.ScrollPatterns(1))
+	require.Equal(t, 17, songBank.patternStart, "the viewport should move one page")
+	require.Equal(t, 1, patternBank.selPatIdx, "scrolling should not move the selection")
+
+	require.NoError(t, songBank.ScrollPatterns(100))
+	require.Equal(t, maxPatternIndex-patternViewSize+1, songBank.patternStart, "the viewport should clamp")
+
+	require.NoError(t, songBank.ScrollPatterns(-100))
+	require.Equal(t, 1, songBank.patternStart, "the viewport should return to the start")
 }
 
 func TestArrangementPatternSelection(t *testing.T) {
 	songBank, patternBank := newArrangementTest(t)
 	songBank.patternStart = 17
-	if err := songBank.SelectPatternSlot(3); err != nil {
-		t.Fatal(err)
-	}
-	if patternBank.selPatIdx != 20 {
-		t.Fatalf("visible slot selected pattern %d, want 20", patternBank.selPatIdx)
-	}
-	if err := songBank.SelectPattern(999); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.patternStart != maxPatternIndex-patternViewSize+1 {
-		t.Fatalf("selection did not reveal final pattern: %d", songBank.patternStart)
-	}
+	require.NoError(t, songBank.SelectPatternSlot(3))
+	require.Equal(t, 20, patternBank.selPatIdx, "a visible slot should select that pattern")
+
+	require.NoError(t, songBank.SelectPattern(999))
+	require.Equal(t, maxPatternIndex-patternViewSize+1, songBank.patternStart,
+		"selecting the last pattern should reveal it")
+
 	patternBank.selPatIdx = 16
 	songBank.patternStart = 1
-	if err := songBank.MovePatternSelection(1); err != nil {
-		t.Fatal(err)
-	}
-	if patternBank.selPatIdx != 17 || songBank.patternStart != 2 {
-		t.Fatalf("one-slot selection moved incorrectly: selected=%d start=%d", patternBank.selPatIdx, songBank.patternStart)
-	}
+	require.NoError(t, songBank.MovePatternSelection(1))
+	require.Equal(t, 17, patternBank.selPatIdx, "a one-slot move should land on 17")
+	require.Equal(t, 2, songBank.patternStart, "a one-slot move should reveal it")
 }
 
 func TestArrangementMeasureViewport(t *testing.T) {
 	songBank, _ := newArrangementTest(t)
-	if err := songBank.ScrollMeasures(measurePageSize); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.measureStart != measurePageSize {
-		t.Fatalf("measure page = %d, want %d", songBank.measureStart, measurePageSize)
-	}
-	if err := songBank.ScrollMeasures(-measureFinePageSize); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.measureStart != 12 {
-		t.Fatalf("fine measure scroll = %d, want 12", songBank.measureStart)
-	}
-	if err := songBank.ScrollMeasures(-100); err != nil {
-		t.Fatal(err)
-	}
-	if err := songBank.ScrollMeasures(1000); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.measureStart != maxMeasureIndex-measureViewSize+1 {
-		t.Fatalf("measure viewport did not clamp: %d", songBank.measureStart)
-	}
+	require.NoError(t, songBank.ScrollMeasures(measurePageSize))
+	require.Equal(t, measurePageSize, songBank.measureStart, "a page of measures")
+	require.NoError(t, songBank.ScrollMeasures(-measureFinePageSize))
+	require.Equal(t, 12, songBank.measureStart, "a fine measure scroll")
+	require.NoError(t, songBank.ScrollMeasures(-100))
+	require.NoError(t, songBank.ScrollMeasures(1000))
+	require.Equal(t, maxMeasureIndex-measureViewSize+1, songBank.measureStart, "the measure viewport should clamp")
 }
 
 func TestArrangementMeasureEditingUsesViewport(t *testing.T) {
 	songBank, patternBank := newArrangementTest(t)
 	songBank.measureStart = 16
-	if err := songBank.ToggleMeasure(0, 0); err != nil {
-		t.Fatal(err)
-	}
-	if got := songBank.CurrentSong().GetPattern(16); got != patternBank.Patterns[1] {
-		t.Fatalf("measure 16 points to %p, want %p", got, patternBank.Patterns[1])
-	}
-	if got := songBank.CurrentSong().GetPattern(0); got != nil {
-		t.Fatalf("measure 0 unexpectedly points to %p", got)
-	}
-	if err := songBank.ToggleMeasure(11, 3); err != nil {
-		t.Fatal(err)
-	}
-	if got := songBank.CurrentSong().GetPattern(63); got != patternBank.Patterns[1] {
-		t.Fatalf("measure 63 points to %p, want %p", got, patternBank.Patterns[1])
-	}
+	require.NoError(t, songBank.ToggleMeasure(0, 0))
+	require.Same(t, patternBank.Patterns[1], songBank.CurrentSong().GetPattern(16),
+		"the pad should address the measure in view")
+	require.Nil(t, songBank.CurrentSong().GetPattern(0), "measure 0 was not touched")
+
+	require.NoError(t, songBank.ToggleMeasure(11, 3))
+	require.Same(t, patternBank.Patterns[1], songBank.CurrentSong().GetPattern(63),
+		"a pad further down should address its own measure")
 }
 
 func TestArrangementViewportSurvivesSongRefresh(t *testing.T) {
 	songBank, _ := newArrangementTest(t)
-	if err := songBank.ScrollPatterns(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := songBank.ScrollMeasures(measurePageSize); err != nil {
-		t.Fatal(err)
-	}
-	if err := songBank.Jump(0); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.patternStart != 17 || songBank.measureStart != measurePageSize {
-		t.Fatalf("refresh reset viewport: patterns=%d measures=%d", songBank.patternStart, songBank.measureStart)
-	}
+	require.NoError(t, songBank.ScrollPatterns(1))
+	require.NoError(t, songBank.ScrollMeasures(measurePageSize))
+	require.NoError(t, songBank.Jump(0))
+	require.Equal(t, 17, songBank.patternStart, "a refresh reset the pattern viewport")
+	require.Equal(t, measurePageSize, songBank.measureStart, "a refresh reset the measure viewport")
 }
 
 func TestSongModeScrollBindings(t *testing.T) {
 	songBank, patternBank := newArrangementTest(t)
-	previousSongbank, previousShift := songbank, shiftOn
-	t.Cleanup(func() {
-		songbank = previousSongbank
-		shiftOn = previousShift
-	})
-	songbank = songBank
-	shiftOn = false
+	controller := patternBank.controller
+	controller.shift = false
 
-	if err := processSongEvent(nil, arrangementNote(NotePatternUp)); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.patternStart != 17 {
-		t.Fatalf("pattern up did not scroll: %d", songBank.patternStart)
-	}
+	require.NoError(t, dispatch(patternBank, arrangementNote(NotePatternUp)))
+	require.Equal(t, 17, songBank.patternStart, "pattern up should scroll a page")
+
 	songBank.patternStart = 1
 	patternBank.selPatIdx = 1
-	shiftOn = true
-	if err := processSongEvent(nil, arrangementNote(NotePatternUp)); err != nil {
-		t.Fatal(err)
-	}
-	if patternBank.selPatIdx != 2 || songBank.patternStart != 1 {
-		t.Fatalf("shift pattern up moved incorrectly: selected=%d start=%d", patternBank.selPatIdx, songBank.patternStart)
-	}
-	shiftOn = false
-	if err := processSongEvent(nil, arrangementNote(NoteGridRight)); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.measureStart != measurePageSize {
-		t.Fatalf("grid right did not scroll a page: %d", songBank.measureStart)
-	}
-	shiftOn = true
-	if err := processSongEvent(nil, arrangementNote(NoteGridRight)); err != nil {
-		t.Fatal(err)
-	}
-	if songBank.measureStart != measurePageSize+measureFinePageSize {
-		t.Fatalf("shift grid right did not fine-scroll: %d", songBank.measureStart)
-	}
+	controller.shift = true
+	require.NoError(t, dispatch(patternBank, arrangementNote(NotePatternUp)))
+	require.Equal(t, 2, patternBank.selPatIdx, "shift pattern up should move the selection")
+	require.Equal(t, 1, songBank.patternStart, "shift pattern up should not scroll the viewport")
+
+	controller.shift = false
+	require.NoError(t, dispatch(patternBank, arrangementNote(NoteGridRight)))
+	require.Equal(t, measurePageSize, songBank.measureStart, "grid right should scroll a page")
+
+	controller.shift = true
+	require.NoError(t, dispatch(patternBank, arrangementNote(NoteGridRight)))
+	require.Equal(t, measurePageSize+measureFinePageSize, songBank.measureStart,
+		"shift grid right should fine-scroll")
 }
 
 func TestPatternLengthControls(t *testing.T) {
 	_, patternBank := newArrangementTest(t)
-	previousPatbank := patbank
-	t.Cleanup(func() {
-		patbank = previousPatbank
-	})
-	patbank = patternBank
+	patternBank.controller.mode = patternView
 	patternBank.CurrentPattern().SetLengthSteps(8)
-	if event, err := patternBank.ToggleEvent(0, 8, 127); err != nil {
-		t.Fatal(err)
-	} else if event.Velocity != 0 {
-		t.Fatalf("out-of-range step created velocity %d", event.Velocity)
-	}
+	event, err := patternBank.ToggleEvent(0, 8, 127)
+	require.NoError(t, err)
+	require.Zero(t, event.Velocity, "a step past the end should create nothing")
 
-	if err := processPatternEvent(nil, arrangementNote(NoteOverview)); err != nil {
-		t.Fatal(err)
-	}
-	if !patternBank.editingLength {
-		t.Fatal("Overview did not enter length mode")
-	}
-	if err := processPatternEvent(nil, arrangementNote(CCSelect)); err != nil {
-		t.Fatal(err)
-	}
-	if got := patternBank.CurrentPattern().LengthSteps(); got != 9 {
-		t.Fatalf("encoder increased length to %d, want 9", got)
-	}
+	require.NoError(t, dispatch(patternBank, arrangementNote(NoteOverview)))
+	require.True(t, patternBank.editingLength, "Overview did not enter length mode")
+
+	require.NoError(t, dispatch(patternBank, arrangementNote(CCSelect)))
+	require.Equal(t, 9, patternBank.CurrentPattern().LengthSteps(), "the encoder should lengthen")
+
 	left := alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCSelect), byte(EncoderLeft)}}
-	if err := processPatternEvent(nil, left); err != nil {
-		t.Fatal(err)
-	}
-	if got := patternBank.CurrentPattern().LengthSteps(); got != 8 {
-		t.Fatalf("encoder decreased length to %d, want 8", got)
-	}
-	if err := processPatternEvent(nil, arrangementNote(NoteOverview)); err != nil {
-		t.Fatal(err)
-	}
-	if patternBank.editingLength {
-		t.Fatal("Overview did not leave length mode")
-	}
+	require.NoError(t, dispatch(patternBank, left))
+	require.Equal(t, 8, patternBank.CurrentPattern().LengthSteps(), "the encoder should shorten")
+
+	require.NoError(t, dispatch(patternBank, arrangementNote(NoteOverview)))
+	require.False(t, patternBank.editingLength, "Overview did not leave length mode")
 }
 
 // A bank the user has not chosen a pattern on yet has nothing to report a length from.
@@ -230,31 +150,17 @@ func TestLengthModeWithoutAPatternReportsNothing(t *testing.T) {
 		Channel: 1,
 		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
 	}})
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), kit)
+	bank := useEmptyController(t, NewFire(func([]byte) error { return nil }), kit).patbank
 	recorder := useScreenRecorder(t, &bank.screen)
-	if err := bank.ToggleLengthMode(); err != nil {
-		t.Fatal(err)
-	}
-	if got := recorder.row(lengthDisplayRow); got != "" {
-		t.Fatalf("length row reads %q, want it left blank", got)
-	}
+	require.NoError(t, bank.ToggleLengthMode())
+	require.Empty(t, recorder.row(lengthDisplayRow), "the length row should be left blank")
 }
 
 func TestSongModePatternPadUsesViewport(t *testing.T) {
 	songBank, patternBank := newArrangementTest(t)
-	previousSongbank, previousShift := songbank, shiftOn
-	t.Cleanup(func() {
-		songbank = previousSongbank
-		shiftOn = previousShift
-	})
-	songbank = songBank
-	shiftOn = false
+	patternBank.controller.shift = false
 	songBank.patternStart = 17
 
-	if err := processSongEvent(nil, arrangementNote(66)); err != nil {
-		t.Fatal(err)
-	}
-	if patternBank.selPatIdx != 17 {
-		t.Fatalf("pattern pad selected %d, want 17", patternBank.selPatIdx)
-	}
+	require.NoError(t, dispatch(patternBank, arrangementNote(66)))
+	require.Equal(t, 17, patternBank.selPatIdx, "the pad should select the pattern in view")
 }

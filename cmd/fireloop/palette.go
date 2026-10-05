@@ -194,7 +194,7 @@ func (p *PatternBank) guardsPad(row, col int) bool {
 // pad removes the event, and so does A1, the palette's first pad, which stands for "no note
 // here". How hard a pad was hit sets the note's velocity, so a new step lands with the
 // dynamics that were played and the display reports that same value.
-func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) error {
+func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int, alt bool) error {
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() || !p.editingNote {
 		return nil
@@ -214,7 +214,7 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		// Neither a pitch nor a step, so there is nothing here to edit.
 		return nil
 	}
-	if p.guardsPad(row, col) && !altOn {
+	if p.guardsPad(row, col) && !alt {
 		// This pad stands for the step being edited, so treating it as a pitch pad here
 		// would rewrite the note the user was trying to reach, and as A1 it would erase
 		// it. The guard lifts once a note has been chosen at this step. Alt still clears,
@@ -222,11 +222,11 @@ func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int) 
 		logger.Debug("pitch refused", "step", step, "padRow", row, "padCol", col)
 		return nil
 	}
-	if altOn || note == p.paletteBase() {
+	if alt || note == p.paletteBase() {
 		// The palette's first pad is where the palette starts, whichever octave that is,
 		// which makes it the natural key for "no note".
 		reason := "palette"
-		if altOn {
+		if alt {
 			reason = "alt"
 		}
 		return p.removeNoteAtStep(pattern, voice, step, reason)

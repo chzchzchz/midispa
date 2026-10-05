@@ -273,12 +273,12 @@ type eventReader interface {
 // the sequencer. It is the single way the program ends, so a note cannot be left on because
 // the process went away by any other route. One failure is reported but does not stop the
 // rest: a note still sounding matters more than a light that stayed on.
-func shutdown(aseq sequencerSession) error {
+func shutdown(c *Controller, aseq sequencerSession) error {
 	var firstErr error
-	if err := stopPlayback(); err != nil {
+	if err := c.stopPlayback(); err != nil {
 		firstErr = err
 	}
-	if err := blankDevice(); err != nil && firstErr == nil {
+	if err := blankDevice(c); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	if err := aseq.Close(); err != nil && firstErr == nil {
@@ -291,11 +291,8 @@ func shutdown(aseq sequencerSession) error {
 // frame lit, which reads as a sequencer that hung rather than one that stopped. It goes
 // after the release because the release puts the step strip back, and a blackout suppresses
 // the display output that would undo it.
-func blankDevice() error {
-	if patbank == nil {
-		return nil
-	}
-	return patbank.f.Blackout()
+func blankDevice(c *Controller) error {
+	return c.patbank.f.Blackout()
 }
 
 // handleIncomingEvent applies one Fire event. A failure stops playback and is reported
@@ -305,13 +302,13 @@ func blankDevice() error {
 //
 // The writer is an interface so this path can be exercised without opening a port, which
 // is what a nil or failing handler used to need a real sequencer for.
-func handleIncomingEvent(aseq sequencerWriter, ev alsa.SeqEvent) {
-	err := processEvent(aseq, ev)
+func (c *Controller) handleIncomingEvent(aseq sequencerWriter, ev alsa.SeqEvent) {
+	err := c.Handle(aseq, ev)
 	if err == nil {
 		return
 	}
 	logger.Error("event failed", "error", err, "data", fmt.Sprintf("% x", ev.Data))
-	if stopErr := stopPlayback(); stopErr != nil {
+	if stopErr := c.stopPlayback(); stopErr != nil {
 		logger.Error("stopping after an event failure", "error", stopErr)
 	}
 }
@@ -387,10 +384,10 @@ func openSequencer(firePort string, devs []Device) (*alsa.Seq, alsa.SeqAddr, err
 // passed on. That is the whole point of the save on the way out: a set should survive the
 // run that made it whether the run was ended or fell over, and re-panicking keeps the
 // failure loud instead of leaving the unit playing on with a half-applied edit.
-func processIncomingEvents(events sequencerWriter, inc <-chan alsa.SeqEvent) {
+func (c *Controller) processIncomingEvents(events sequencerWriter, inc <-chan alsa.SeqEvent) {
 	defer func() {
 		if problem := recover(); problem != nil {
-			saveSessionOnExit()
+			c.saveSessionOnExit()
 			panic(problem)
 		}
 	}()
@@ -399,10 +396,10 @@ func processIncomingEvents(events sequencerWriter, inc <-chan alsa.SeqEvent) {
 		// already ignore anything that is not three bytes, so an empty event cannot
 		// collide with real traffic.
 		if len(ev.Data) == 0 {
-			saveSessionOnExit()
+			c.saveSessionOnExit()
 			return
 		}
-		handleIncomingEvent(events, ev)
+		c.handleIncomingEvent(events, ev)
 	}
 }
 
@@ -437,7 +434,7 @@ func run() error {
 	logLevel := flag.String("log-level", "info", "log verbosity: debug, info, warn or error")
 	logFormat := flag.String("log-format", "text", "log format: text or json")
 	flag.BoolVar(&sharedMIDIDestination, "shared-midi-destination", false, "broadcast MIDI output to all connected destinations")
-	flag.StringVar(&statePath, "state", "", "session file: loaded at startup when it exists, saved on exit, saved and loaded from the panel")
+	stateFile := flag.String("state", "", "session file: loaded at startup when it exists, saved on exit, saved and loaded from the panel")
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -464,46 +461,48 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Every way out of here goes through shutdown, including the failures below it.
-	defer func() {
-		if err := shutdown(aseq); err != nil {
-			logger.Error("shutdown", "error", err)
-		}
-	}()
-
 	f := NewFire(func(b []byte) error {
 		return aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: b})
 	})
 
 	vb := NewVoiceBank(devs)
-	patbank = NewPatternBank(f, vb)
+	// The banks are built by the controller that owns them, so neither is ever handed out
+	// before it can reach its owner.
+	ctrl := newController(f, vb, *stateFile)
+	// Every way out of here goes through shutdown, including the failures below it. It
+	// takes the controller rather than reaching for globals because stopping playback is
+	// the controller's, and shutdown is the one path that has to be able to ask.
+	defer func() {
+		if err := shutdown(ctrl, aseq); err != nil {
+			logger.Error("shutdown", "error", err)
+		}
+	}()
+
 	if err := f.Off(); err != nil {
 		return err
 	}
-	if err := patbank.Jump(1); err != nil {
+	if err := ctrl.patbank.Jump(1); err != nil {
 		return err
 	}
-	songbank = NewSongBank(f, patbank)
 
 	inc := make(chan alsa.SeqEvent, 4)
-	processEvent = processPatternEvent
 
-	if statePath != "" {
-		stateKitPaths = kits.all()
-		if err := loadStateFile(statePath); err != nil {
+	if ctrl.sessionPath != "" {
+		ctrl.sessionKit = kits.all()
+		if err := ctrl.loadStateFile(ctrl.sessionPath); err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
 				// Starting empty when a set was on disk looks exactly like the set having
 				// been deleted, so an unreadable state file stops startup instead.
-				return fmt.Errorf("state %q: %w", statePath, err)
+				return fmt.Errorf("state %q: %w", ctrl.sessionPath, err)
 			}
-			logger.Info("no state file to load, starting empty", "path", statePath)
+			logger.Info("no state file to load, starting empty", "path", ctrl.sessionPath)
 		}
 	}
 
 	handled := make(chan struct{})
 	go func() {
 		defer close(handled)
-		processIncomingEvents(aseq, inc)
+		ctrl.processIncomingEvents(aseq, inc)
 	}()
 
 	// Leaving is the only thing this function does from here: wait to be asked, hand the

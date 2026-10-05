@@ -1,8 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // The font holds 256 byte glyphs and nothing else, so a rune outside printable ASCII has
@@ -14,19 +15,10 @@ func TestPrintReplacesRunesTheFontCannotDraw(t *testing.T) {
 		written = append(written, msg)
 		return nil
 	})
-	if err := f.Print(0, 0, "Körg"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Print(0, 0, "K?rg"); err != nil {
-		t.Fatal(err)
-	}
-	if len(written) != 2 {
-		t.Fatalf("screen writes = %d, want 2", len(written))
-	}
-	if !bytes.Equal(written[0], written[1]) {
-		t.Fatalf("bytes for an undrawable name = %x, want the same as a question mark = %x",
-			written[0], written[1])
-	}
+	require.NoError(t, f.Print(0, 0, "Körg"))
+	require.NoError(t, f.Print(0, 0, "K?rg"))
+	require.Len(t, written, 2, "one screen write per Print")
+	require.Equal(t, written[1], written[0], "an undrawable rune must draw as a question mark")
 }
 
 func TestClearOLEDRowsRejectsInvalidRange(t *testing.T) {
@@ -43,9 +35,7 @@ func TestClearOLEDRowsRejectsInvalidRange(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := f.ClearOLEDRows(tt.y, tt.n); err != errOutOfRange {
-				t.Fatalf("ClearOLEDRows(%d, %d) = %v, want %v", tt.y, tt.n, err, errOutOfRange)
-			}
+			require.ErrorIsf(t, f.ClearOLEDRows(tt.y, tt.n), errOutOfRange, "ClearOLEDRows(%d, %d)", tt.y, tt.n)
 		})
 	}
 }
@@ -55,67 +45,34 @@ func TestClearOLEDRowsRejectsInvalidRange(t *testing.T) {
 func TestBlackoutDropsUpdatesAndClears(t *testing.T) {
 	recorder := &ledRecorder{}
 	f := NewFire(recorder.write)
-	if err := f.SetLed(NoteAlt, LEDYellow); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Blackout(); err != nil {
-		t.Fatal(err)
-	}
-	if !f.IsDark() {
-		t.Fatal("blackout did not go dark")
-	}
-	if lit := recorder.lit(); len(lit) != 0 {
-		t.Fatalf("blackout left lights on: %v", lit)
-	}
-	if recorder.clearsDisplay == 0 {
-		t.Fatal("blackout did not clear the pads or display")
-	}
+	require.NoError(t, f.SetLed(NoteAlt, LEDYellow))
+	require.NoError(t, f.Blackout())
+	require.True(t, f.IsDark(), "blackout did not go dark")
+	require.Empty(t, recorder.lit(), "the blackout left lights on")
+	require.NotZero(t, recorder.clearsDisplay, "the blackout did not clear the pads or display")
 
 	recorder.reset()
-	if err := f.SetLed(NoteAlt, LEDYellow); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.LightPad(0, 0, 127, 127, 127); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Print(0, 0, "x"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Off(); err != nil {
-		t.Fatal(err)
-	}
-	if len(recorder.leds) != 0 || recorder.clearsDisplay != 0 {
-		t.Fatal("output reached the display during a blackout")
-	}
-	if !f.Wake() {
-		t.Fatal("Wake did not report the blackout")
-	}
-	if f.Wake() {
-		t.Fatal("Wake reported a second blackout")
-	}
+	require.NoError(t, f.SetLed(NoteAlt, LEDYellow))
+	require.NoError(t, f.LightPad(0, 0, 127, 127, 127))
+	require.NoError(t, f.Print(0, 0, "x"))
+	require.NoError(t, f.Off())
+	require.Empty(t, recorder.leds, "a light reached the display during a blackout")
+	require.Zero(t, recorder.clearsDisplay, "a redraw reached the display during a blackout")
+	require.True(t, f.Wake(), "Wake did not report the blackout")
+	require.False(t, f.Wake(), "Wake reported a second blackout")
 	// A wake puts the display back in service.
 	recorder.reset()
-	if err := f.SetLed(NoteAlt, LEDYellow); err != nil {
-		t.Fatal(err)
-	}
-	if recorder.leds[NoteAlt] != LEDYellow {
-		t.Fatal("the display stayed dead after a wake")
-	}
+	require.NoError(t, f.SetLed(NoteAlt, LEDYellow))
+	require.Equal(t, LEDYellow, recorder.leds[NoteAlt], "the display stayed dead after a wake")
 }
 
 // Coordinate validation is a property of the call, not of the display state, so a
 // blackout must not hide a bad argument.
 func TestBlackoutDoesNotHideInvalidCoordinates(t *testing.T) {
 	f := NewFire(func([]byte) error { return nil })
-	if err := f.Blackout(); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.ClearOLEDRows(0, 99); err != errOutOfRange {
-		t.Fatalf("ClearOLEDRows error = %v, want %v", err, errOutOfRange)
-	}
-	if err := f.Print(0, 99, "x"); err != errOutOfRange {
-		t.Fatalf("Print error = %v, want %v", err, errOutOfRange)
-	}
+	require.NoError(t, f.Blackout())
+	require.ErrorIs(t, f.ClearOLEDRows(0, 99), errOutOfRange)
+	require.ErrorIs(t, f.Print(0, 99, "x"), errOutOfRange)
 }
 
 func TestLightPadRejectsInvalidCoordinates(t *testing.T) {
@@ -132,9 +89,7 @@ func TestLightPadRejectsInvalidCoordinates(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := f.LightPad(tt.x, tt.y, 0, 0, 0); err != errOutOfRange {
-				t.Fatalf("LightPad(%d, %d) = %v, want %v", tt.x, tt.y, err, errOutOfRange)
-			}
+			require.ErrorIsf(t, f.LightPad(tt.x, tt.y, 0, 0, 0), errOutOfRange, "LightPad(%d, %d)", tt.x, tt.y)
 		})
 	}
 }
@@ -145,15 +100,9 @@ func TestLightPadRejectsInvalidCoordinates(t *testing.T) {
 func TestLedsOffBlanksTheTopLeftLights(t *testing.T) {
 	recorder := &ledRecorder{}
 	f := NewFire(recorder.write)
-	if err := f.LedsOff(); err != nil {
-		t.Fatal(err)
-	}
-	if got := recorder.leds[CCTopLeftLEDs]; got != CCTopLeftOff {
-		t.Fatalf("top-left clear value = %#02x, want %#02x", got, CCTopLeftOff)
-	}
-	if got := recorder.leds[CCMuteLED1]; got != LEDOff {
-		t.Fatalf("track row clear value = %d, want off", got)
-	}
+	require.NoError(t, f.LedsOff())
+	require.Equal(t, CCTopLeftOff, recorder.leds[CCTopLeftLEDs], "the top-left clear value")
+	require.Equal(t, LEDOff, recorder.leds[CCMuteLED1], "the track row clear value")
 }
 
 // The top-left mask form was measured on the hardware: one bit per light with the mode
@@ -173,9 +122,7 @@ func TestTopLeftMaskMatchesTheMeasuredValues(t *testing.T) {
 		{lights: []int{TopLeftChannel, TopLeftMixer, TopLeftUser1, TopLeftUser2}, want: 0x1f},
 	}
 	for _, tt := range tests {
-		if got := topLeftMask(tt.lights...); got != tt.want {
-			t.Fatalf("topLeftMask(%v) = %#02x, want %#02x", tt.lights, got, tt.want)
-		}
+		require.Equalf(t, tt.want, topLeftMask(tt.lights...), "topLeftMask(%v)", tt.lights)
 	}
 }
 
@@ -192,9 +139,7 @@ func TestGlyphCacheMatchesTheFontTable(t *testing.T) {
 					want |= 1 << uint(j)
 				}
 			}
-			if got := glyphCache[code][i]; got != want {
-				t.Fatalf("glyph %d column %d = %#02x, want %#02x", code, i, got, want)
-			}
+			require.Equalf(t, want, glyphCache[code][i], "glyph %d column %d", code, i)
 		}
 	}
 }
@@ -205,18 +150,13 @@ func TestGlyphCacheMatchesTheFontTable(t *testing.T) {
 func TestInvertedGlyphsDoNotAlterTheCache(t *testing.T) {
 	plain := appendGlyph(nil, 'A', false)
 	inverted := appendGlyph(nil, 'A', true)
-	if len(plain) != glyphWidth || len(inverted) != glyphWidth {
-		t.Fatalf("glyph width = %d and %d, want %d", len(plain), len(inverted), glyphWidth)
-	}
+	require.Len(t, plain, glyphWidth)
+	require.Len(t, inverted, glyphWidth)
 	for i := range plain {
-		if inverted[i] != ^plain[i] {
-			t.Fatalf("inverted column %d = %#02x, want the complement %#02x", i, inverted[i], ^plain[i])
-		}
+		require.Equalf(t, ^plain[i], inverted[i], "inverted column %d must be the complement", i)
 	}
 	again := appendGlyph(nil, 'A', false)
 	for i := range plain {
-		if again[i] != plain[i] {
-			t.Fatalf("column %d after an inverted draw = %#02x, want %#02x", i, again[i], plain[i])
-		}
+		require.Equalf(t, plain[i], again[i], "column %d after an inverted draw", i)
 	}
 }

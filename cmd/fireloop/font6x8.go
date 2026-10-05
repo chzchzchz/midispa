@@ -7,8 +7,8 @@ package main
 // font6x8Rows is how many bytes each glyph occupies in the table before that transpose,
 // which is what a caller reading the table directly needs.
 const (
-	glyphWidth    = 6
-	font6x8Rows   = 8
+	glyphWidth  = 6
+	font6x8Rows = 8
 )
 
 var font6x8 = []byte{

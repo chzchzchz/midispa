@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/stretchr/testify/require"
 )
 
 // This file captures what the sequencer logs so a scripted sequence can be read back the
@@ -113,13 +114,10 @@ func walkPattern(t *testing.T, writer midiWriter, pattern *Pattern) *Playback {
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	for step := 0; step < pattern.LengthSteps(); step++ {
 		playback.setPosition(0, stepBeat(step))
-		if _, err := playback.playBeat(writer, pattern); err != nil {
-			t.Fatal(err)
-		}
+		_, err := playback.playBeat(writer, pattern)
+		require.NoError(t, err)
 	}
-	if err := playback.releaseAll(writer); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, playback.releaseAll(writer))
 	return playback
 }
 
@@ -181,13 +179,9 @@ func TestTraceChromaticNoteLifecycle(t *testing.T) {
 			walkPattern(t, &captureMidiWriter{}, pattern)
 			got := log.outbound()
 			t.Logf("outbound: %v", got)
-			if len(got) != len(tt.want) {
-				t.Fatalf("outbound = %v, want %v", got, tt.want)
-			}
+			require.Len(t, got, len(tt.want))
 			for i, line := range got {
-				if line != tt.want[i] {
-					t.Fatalf("outbound[%d] = %q, want %q", i, line, tt.want[i])
-				}
+				require.Equalf(t, tt.want[i], line, "outbound[%d]", i)
 			}
 		})
 	}
@@ -205,17 +199,14 @@ func TestTraceFailedWriteStillTracksTheNote(t *testing.T) {
 	writer := &failingWriter{failAfter: 1}
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	playback.setPosition(0, 0)
-	if _, err := playback.playBeat(writer, pattern); err != nil {
-		t.Fatal(err)
-	}
+	_, err := playback.playBeat(writer, pattern)
+	require.NoError(t, err)
 	// The second write fails, which is the note-off half of the legato pair.
 	playback.setPosition(0, stepBeat(4))
-	if _, err := playback.playBeat(writer, pattern); err == nil {
-		t.Fatal("the failing write was not reported")
-	}
-	if playback.activeNoteCount() != 1 {
-		t.Fatal("the note that was written is not tracked, so nothing would release it")
-	}
+	_, err = playback.playBeat(writer, pattern)
+	require.Error(t, err, "the failing write was not reported")
+	require.Equal(t, 1, playback.activeNoteCount(),
+		"the note that was written is not tracked, so nothing would release it")
 }
 
 // failingWriter refuses writes past a count, standing in for a full MIDI buffer.
@@ -247,17 +238,13 @@ func TestTraceTapTempoWindowResets(t *testing.T) {
 	tapTempoWindow = 5 * time.Millisecond
 	setBPM(120)
 
-	pressButton(t, NoteTap)
-	waitFor(t, "a tap to be recorded", func() bool { return len(tapTempoTimes) == 1 })
+	pressButton(t, patternBank, NoteTap)
+	waitFor(t, "a tap to be recorded", func() bool { return len(patternBank.controller.tapTimes) == 1 })
 	time.Sleep(4 * tapTempoWindow)
-	pressButton(t, NoteTap)
+	pressButton(t, patternBank, NoteTap)
 	// The window passed, so the earlier tap was discarded rather than averaged in.
-	if currentBPM() != 120 {
-		t.Fatalf("tempo = %d, want the discarded tap to leave 120 alone", currentBPM())
-	}
-	if len(tapTempoTimes) != 1 {
-		t.Fatalf("tap history = %d, want the window to have reset it to one", len(tapTempoTimes))
-	}
+	require.Equal(t, 120, currentBPM(), "the discarded tap must leave the tempo alone")
+	require.Len(t, patternBank.controller.tapTimes, 1, "the window should have reset the tap history to one")
 	_ = patternBank
 }
 
@@ -274,24 +261,17 @@ func TestTraceNoteStopsAfterOneStep(t *testing.T) {
 	// pattern boundary or from a later event.
 	for _, step := range []int{0, 1} {
 		playback.setPosition(0, stepBeat(step))
-		if _, err := playback.playBeat(writer, pattern); err != nil {
-			t.Fatal(err)
-		}
+		_, err := playback.playBeat(writer, pattern)
+		require.NoError(t, err)
 	}
 	got := log.outbound()
 	t.Logf("outbound: %v", got)
 	want := []string{"note on 60 100", "note off 60 0"}
-	if len(got) != len(want) {
-		t.Fatalf("outbound = %v, want %v", got, want)
-	}
+	require.Len(t, got, len(want))
 	for i, line := range got {
-		if line != want[i] {
-			t.Fatalf("outbound[%d] = %q, want %q", i, line, want[i])
-		}
+		require.Equalf(t, want[i], line, "outbound[%d]", i)
 	}
-	if playback.activeNoteCount() != 0 {
-		t.Fatal("the note is still sounding after its step")
-	}
+	require.Zero(t, playback.activeNoteCount(), "the note is still sounding after its step")
 }
 
 // A tie is the way to hold a note past its step, so the gate must not cut it short.
@@ -306,35 +286,24 @@ func TestTraceTieHoldsPastItsStep(t *testing.T) {
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	for step := 0; step <= 4; step++ {
 		playback.setPosition(0, stepBeat(step))
-		if _, err := playback.playBeat(writer, pattern); err != nil {
-			t.Fatal(err)
-		}
+		_, err := playback.playBeat(writer, pattern)
+		require.NoError(t, err)
 	}
-	if playback.activeNoteCount() != 1 {
-		t.Fatal("the tied note stopped at the end of its own step")
-	}
-	if got := log.outbound(); len(got) != 1 || got[0] != "note on 60 100" {
-		t.Fatalf("outbound while tied = %v, want only the opening note", got)
-	}
+	require.Equal(t, 1, playback.activeNoteCount(), "the tied note stopped at the end of its own step")
+	require.Equal(t, []string{"note on 60 100"}, log.outbound(), "only the opening note is written while tied")
 	// The tied event ends the hold.
 	playback.setPosition(0, stepBeat(8))
-	if _, err := playback.playBeat(writer, pattern); err != nil {
-		t.Fatal(err)
-	}
+	_, err := playback.playBeat(writer, pattern)
+	require.NoError(t, err)
 	playback.setPosition(0, stepBeat(9))
-	if _, err := playback.playBeat(writer, pattern); err != nil {
-		t.Fatal(err)
-	}
+	_, err = playback.playBeat(writer, pattern)
+	require.NoError(t, err)
 	got := log.outbound()
 	t.Logf("outbound: %v", got)
 	want := []string{"note on 60 100", "note off 60 0"}
-	if len(got) != len(want) {
-		t.Fatalf("outbound = %v, want %v", got, want)
-	}
+	require.Len(t, got, len(want))
 	for i, line := range got {
-		if line != want[i] {
-			t.Fatalf("outbound[%d] = %q, want %q", i, line, want[i])
-		}
+		require.Equalf(t, want[i], line, "outbound[%d]", i)
 	}
 }
 
@@ -356,13 +325,10 @@ func TestLogFormatChoosesTheHandler(t *testing.T) {
 			logger := slog.New(newLogHandler(&out, slog.LevelInfo, tt.format))
 			logger.Info("midi out", "kind", "note on", "note", 60, "velocity", 100)
 			line := out.String()
-			if !strings.Contains(line, tt.want) {
-				t.Fatalf("format %q produced %q, want it to contain %q", tt.format, line, tt.want)
-			}
+			require.Containsf(t, line, tt.want, "format %q", tt.format)
 			// Both shapes carry the same fields, so a reader sees the same facts.
-			if !strings.Contains(line, "note on") || !strings.Contains(line, "60") {
-				t.Fatalf("format %q dropped a field: %q", tt.format, line)
-			}
+			require.Containsf(t, line, "note on", "format %q dropped a field", tt.format)
+			require.Containsf(t, line, "60", "format %q dropped a field", tt.format)
 		})
 	}
 }

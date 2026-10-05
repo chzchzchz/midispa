@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // stateKit is a kit with one chromatic voice and the rest percussive, so a session has to
@@ -21,14 +21,17 @@ func stateKit() *VoiceBank {
 	return trackWindowKit(6, 2)
 }
 
-func stateTestBank(t *testing.T, kit *VoiceBank) (*PatternBank, *SongBank) {
+func stateTestBank(t *testing.T, kit *VoiceBank) *Controller {
 	t.Helper()
-	fire := NewFire(func([]byte) error { return nil })
-	bank := NewPatternBank(fire, kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	return bank, NewSongBank(fire, bank)
+	return useController(t, NewFire(func([]byte) error { return nil }), kit)
+}
+
+// withSession points a controller at the file a save writes and a load reads. The banks
+// already exist and already have their owner, so this only names the file.
+func withSession(controller *Controller, path string, kit []string) *Controller {
+	controller.sessionPath = path
+	controller.sessionKit = kit
+	return controller
 }
 
 // stateFilePath is where a test saves. Each call gets its own directory, so two tests can
@@ -42,9 +45,16 @@ func stateFilePath(t *testing.T) string {
 // landed does not have to carry the same error check as one that reads the report back.
 func saveTo(t *testing.T, path string, bank *PatternBank, songs *SongBank, kit []string) {
 	t.Helper()
-	if _, err := saveState(path, bank, songs, kit); err != nil {
-		t.Fatal(err)
-	}
+	_, err := saveState(path, bank, songs, kit)
+	require.NoError(t, err)
+}
+
+// loadInto installs the session at path into a controller's banks, which is the far side of
+// a round trip. It goes through the controller because stopping playback and the banks the
+// load applies to belong to one, so the test drives the same path a panel gesture would.
+func loadInto(controller *Controller, path string, kit []string) (stateReport, error) {
+	controller.sessionKit = kit
+	return controller.loadState(path)
 }
 
 // loadedSession is the far side of a round trip: a bank and a song bank built from a fresh
@@ -58,17 +68,17 @@ type loadedSession struct {
 
 // roundTrip saves a session and loads it into banks built from a fresh copy of the kit.
 // Sharing voices with the writer would hide a restore that resolves against the wrong ones.
+// The far side gets its own controller because it is its own session, not a view of the
+// one that wrote the file.
 func roundTrip(t *testing.T, bank *PatternBank, songs *SongBank, kit []string) loadedSession {
 	t.Helper()
 	path := stateFilePath(t)
 	saveTo(t, path, bank, songs, kit)
 	loadedKit := stateKit()
-	loadedBank, loadedSongs := stateTestBank(t, loadedKit)
-	report, err := loadState(path, loadedBank, loadedSongs, kit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return loadedSession{kit: loadedKit, bank: loadedBank, songs: loadedSongs, report: report}
+	far := stateTestBank(t, loadedKit)
+	report, err := loadInto(far, path, kit)
+	require.NoError(t, err)
+	return loadedSession{kit: loadedKit, bank: far.patbank, songs: far.songbank, report: report}
 }
 
 // loadCrafted writes a hand-built file and loads it, for the tests about a truncated,
@@ -76,12 +86,11 @@ func roundTrip(t *testing.T, bank *PatternBank, songs *SongBank, kit []string) l
 func loadCrafted(t *testing.T, file stateFile, kit *VoiceBank) (*PatternBank, stateReport, error) {
 	t.Helper()
 	path := stateFilePath(t)
-	if _, err := writeStateFile(path, file); err != nil {
-		t.Fatal(err)
-	}
-	bank, songs := stateTestBank(t, kit)
-	report, err := loadState(path, bank, songs, nil)
-	return bank, report, err
+	_, err := writeStateFile(path, file)
+	require.NoError(t, err)
+	session := stateTestBank(t, kit)
+	report, err := loadInto(session, path, nil)
+	return session.patbank, report, err
 }
 
 // fillStateSession writes through the production editing calls, so the state under test is
@@ -92,33 +101,24 @@ func fillStateSession(t *testing.T, bank *PatternBank, songs *SongBank, kit *Voi
 	chromatic := kit.voices[2]
 	pattern := bank.CurrentPattern()
 	for _, col := range []int{0, 4, 8} {
-		if _, err := bank.ToggleEvent(0, col, 100); err != nil {
-			t.Fatal(err)
-		}
+		_, err := bank.ToggleEvent(0, col, 100)
+		require.NoError(t, err)
 	}
 	pattern.SetChromaticNote(2, chromatic, 60, 100)
 	pattern.SetChromaticNote(5, chromatic, 62, 90)
-	if !pattern.TieEventsAtSteps(2, 5, chromatic) {
-		t.Fatal("tie was refused on the pattern being written")
-	}
-	if got := pattern.SetLengthSteps(8); got != 8 {
-		t.Fatalf("pattern length = %d, want 8", got)
-	}
-	if _, err := bank.ToggleEvent(1, 3, 100); err != nil {
-		t.Fatal(err)
-	}
+	require.True(t, pattern.TieEventsAtSteps(2, 5, chromatic), "tie was refused on the pattern being written")
+	require.Equal(t, 8, pattern.SetLengthSteps(8))
+	_, err := bank.ToggleEvent(1, 3, 100)
+	require.NoError(t, err)
 
 	// A second pattern, so the file has more than one and the song has something to pick.
 	// Jump is a relative move, so this is a step rather than a pattern number.
-	if err := bank.Jump(2); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.Jump(2))
 	third := bank.selPatIdx
 	second := bank.CurrentPattern()
 	second.SetChromaticNote(1, chromatic, 64, 70)
-	if _, err := bank.ToggleEvent(0, 1, 100); err != nil {
-		t.Fatal(err)
-	}
+	_, err = bank.ToggleEvent(0, 1, 100)
+	require.NoError(t, err)
 
 	// The song places the first pattern in two measures and the second in another, which is
 	// what proves the measures and the bank end up sharing one pattern each after a load.
@@ -126,28 +126,20 @@ func fillStateSession(t *testing.T, bank *PatternBank, songs *SongBank, kit *Voi
 	song.SetPattern(bank.Patterns[1], 0)
 	song.SetPattern(bank.Patterns[1], 1)
 	song.SetPattern(second, 4)
-	if bank.Patterns[third] != second {
-		t.Fatalf("pattern %d is not the one the bank selected", third)
-	}
+	require.Equalf(t, second, bank.Patterns[third], "pattern %d is not the one the bank selected", third)
 
 	// Only the track's voice, which is part of the set. Scrolling the window, moving the
 	// cursor and turning the palette are view state and are no longer saved, so setting
 	// them here would only make the round trip look busier than it is.
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.JogSelect(2); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.JogSelect(2))
 	setBPM(150)
 }
 
 func mustStateJSON(t *testing.T, state stateFile) string {
 	t.Helper()
 	data, err := json.MarshalIndent(state, "", stateIndent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return string(data)
 }
 
@@ -157,9 +149,8 @@ func assertSameSession(t *testing.T, want, got stateFile) {
 	t.Helper()
 	want.SavedAt = time.Time{}
 	got.SavedAt = time.Time{}
-	if !reflect.DeepEqual(want, got) {
-		t.Fatalf("session changed across the round trip\nwant:\n%s\ngot:\n%s", mustStateJSON(t, want), mustStateJSON(t, got))
-	}
+	require.Equalf(t, want, got, "the session changed across the round trip\nwant:\n%s\ngot:\n%s",
+		mustStateJSON(t, want), mustStateJSON(t, got))
 }
 
 // A session has to come back whole: every note, tie, length, track assignment and tempo.
@@ -167,7 +158,8 @@ func assertSameSession(t *testing.T, want, got stateFile) {
 // saved nor restored shows up as a difference here.
 func TestStateRoundTrip(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	fillStateSession(t, bank, songs, kit)
 	loaded := roundTrip(t, bank, songs, []string{"kits/gm_drums.json"})
 	assertSameSession(t, stateFrom(bank, songs, nil), stateFrom(loaded.bank, loaded.songs, nil))
@@ -178,7 +170,8 @@ func TestStateRoundTrip(t *testing.T) {
 // an edit through one measure would stop reaching the others.
 func TestStateKeepsMeasuresSharingOnePattern(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, kit.voices[2], 60, 100)
 	song := songs.Songs[songs.selSongIdx]
@@ -187,27 +180,24 @@ func TestStateKeepsMeasuresSharingOnePattern(t *testing.T) {
 
 	loaded := roundTrip(t, bank, songs, nil)
 	first, second := loaded.songs.CurrentSong().GetPattern(0), loaded.songs.CurrentSong().GetPattern(1)
-	if first == nil || second == nil {
-		t.Fatalf("measures = %v/%v, want both restored", first, second)
-	}
-	if first != second {
-		t.Fatal("the two measures stopped sharing one pattern after the load")
-	}
-	if first != loaded.bank.Patterns[1] {
-		t.Fatal("the measure is not the same object as the pattern the bank selects")
-	}
+	require.NotNil(t, first, "measure 0 was not restored")
+	require.NotNil(t, second, "measure 1 was not restored")
+	require.Same(t, first, second, "the two measures stopped sharing one pattern after the load")
+	require.Same(t, loaded.bank.Patterns[1], first, "the measure is not the object the bank selects")
+
 	// An edit through the measure has to be the edit the bank sees.
 	first.SetChromaticNote(0, loaded.kit.voices[2], 72, 100)
-	if event, ok := loaded.bank.Patterns[1].EventAtStep(0, loaded.kit.voices[2]); !ok || event.ChromaticNote != 72 {
-		t.Fatalf("editing the measure did not reach the pattern: %+v/%v", event, ok)
-	}
+	event, ok := loaded.bank.Patterns[1].EventAtStep(0, loaded.kit.voices[2])
+	require.True(t, ok, "editing the measure removed the note")
+	require.Equal(t, 72, event.ChromaticNote, "editing the measure did not reach the pattern")
 }
 
 // A kit that has lost voices cannot supply the events naming them. Losing one drum must not
 // cost the set, but the loss has to be counted rather than passing unnoticed.
 func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, kit.voices[2], 60, 100)
 	// A percussive voice near the end of the kit, which the smaller kit will not have.
@@ -216,11 +206,10 @@ func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {
 	path := stateFilePath(t)
 	saveTo(t, path, bank, songs, []string{"kits/gm_drums.json"})
 	smaller := trackWindowKit(4, 2)
-	loaded, loadedSongs := stateTestBank(t, smaller)
-	report, err := loadState(path, loaded, loadedSongs, []string{"kits/gm_drums.json"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	far := stateTestBank(t, smaller)
+	loaded := far.patbank
+	report, err := loadInto(far, path, []string{"kits/gm_drums.json"})
+	require.NoError(t, err)
 	for _, tt := range []struct {
 		name string
 		got  int
@@ -229,19 +218,14 @@ func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {
 		{name: "dropped count", got: report.Dropped, want: 1},
 		{name: "events kept", got: len(loaded.Patterns[1].Events), want: 1},
 	} {
-		if tt.got != tt.want {
-			t.Errorf("%s = %d, want %d", tt.name, tt.got, tt.want)
-		}
+		assert.Equalf(t, tt.want, tt.got, tt.name)
 	}
-	if event, ok := loaded.Patterns[1].EventAtStep(0, smaller.voices[2]); !ok || event.ChromaticNote != 60 {
-		t.Fatalf("the surviving event = %+v/%v, want it kept", event, ok)
-	}
-	if _, ok := loaded.Patterns[1].EventAtStep(1, smaller.voices[2]); ok {
-		t.Fatal("an event named a voice this kit does not have and was kept anyway")
-	}
-	if !strings.Contains(report.loadText(), "dropped") {
-		t.Fatalf("report text = %q, want it to say what was dropped", report.loadText())
-	}
+	event, ok := loaded.Patterns[1].EventAtStep(0, smaller.voices[2])
+	require.True(t, ok, "the surviving event was dropped")
+	require.Equal(t, 60, event.ChromaticNote, "the surviving event changed pitch")
+	_, kept := loaded.Patterns[1].EventAtStep(1, smaller.voices[2])
+	require.False(t, kept, "an event naming a voice this kit lacks was kept anyway")
+	require.Contains(t, report.loadText(), "dropped", "the readout should say what was dropped")
 }
 
 // The file records the kit it was written against, so a load against a different one says so
@@ -249,50 +233,38 @@ func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {
 // to add an instrument has not damaged the set.
 func TestStateRecordsAndReportsTheKit(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 60, 100)
 	written := []string{"kits/gm_drums.json", "my_leads.json"}
 	path := stateFilePath(t)
 	saveTo(t, path, bank, songs, written)
 	saved, err := readStateFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(saved.Kit, written) {
-		t.Fatalf("kit = %v, want %v", saved.Kit, written)
-	}
-	if saved.VoiceCount != len(kit.voices) {
-		t.Fatalf("voice count = %d, want %d", saved.VoiceCount, len(kit.voices))
-	}
-	loaded, loadedSongs := stateTestBank(t, stateKit())
-	report, err := loadState(path, loaded, loadedSongs, []string{"kits/other.json"})
-	if err != nil {
-		t.Fatalf("a different kit path refused the load: %v", err)
-	}
-	if report.Dropped != 0 {
-		t.Fatalf("dropped = %d for a kit of the same size, want nothing lost", report.Dropped)
-	}
+	require.NoError(t, err)
+	require.Equal(t, written, saved.Kit)
+	require.Equal(t, len(kit.voices), saved.VoiceCount)
+
+	far := stateTestBank(t, stateKit())
+	report, err := loadInto(far, path, []string{"kits/other.json"})
+	require.NoErrorf(t, err, "a different kit path should be reported, not refused")
+	require.Equal(t, 0, report.Dropped, "a kit of the same size should lose nothing")
 	changed, reason := saved.kitChanged([]string{"kits/other.json"}, len(stateKit().voices))
-	if !changed || !strings.Contains(reason, "kit") {
-		t.Fatalf("kit change = %v/%q, want it reported", changed, reason)
-	}
+	require.True(t, changed, "a different kit path should be reported")
+	require.Contains(t, reason, "kit")
 }
 
 // The voice on each track is part of the set, not the view, and is not recoverable from the
 // patterns: those record which voice sounds on a step, not which row it sits on.
 func TestStateRestoresTheKitAssignment(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	// Move every track's voice away from where the bank starts it, so a load that fell back
 	// to the defaults would be visibly wrong rather than coincidentally right.
 	want := make([]int, len(bank.trackVoices))
 	for row := 1; row <= len(want); row++ {
-		if err := bank.SelectTrackRow(row); err != nil {
-			t.Fatal(err)
-		}
-		if err := bank.JogSelect(3); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, bank.SelectTrackRow(row))
+		require.NoError(t, bank.JogSelect(3))
 	}
 	copy(want, bank.trackVoices)
 	path := stateFilePath(t)
@@ -303,18 +275,15 @@ func TestStateRestoresTheKitAssignment(t *testing.T) {
 		bank.trackVoices[index] = 0
 	}
 	loadedKit := stateKit()
-	loaded, loadedSongs := stateTestBank(t, loadedKit)
-	if _, err := loadState(path, loaded, loadedSongs, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(loaded.trackVoices, want) {
-		t.Fatalf("track voices = %v, want the kit assignment %v", loaded.trackVoices, want)
-	}
+	far := stateTestBank(t, loadedKit)
+	loaded := far.patbank
+	_, err := loadInto(far, path, nil)
+	require.NoError(t, err)
+	require.Equal(t, want, loaded.trackVoices, "the kit assignment should come back whole")
 	// The voices themselves have to belong to the kit that loaded the file.
 	for row, index := range loaded.trackVoices {
-		if loadedKit.voices[index] == kit.voices[index] {
-			t.Fatalf("track %d resolved onto a voice of the writing kit, not the loading one", row+1)
-		}
+		require.NotSamef(t, kit.voices[index], loadedKit.voices[index],
+			"track %d resolved onto a voice of the writing kit", row+1)
 	}
 }
 
@@ -323,38 +292,30 @@ func TestStateRestoresTheKitAssignment(t *testing.T) {
 // diffed.
 func TestStateSavesInIndexOrder(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 60, 100)
 	song := songs.Songs[songs.selSongIdx]
 	for _, index := range []int{40, 3, 17, 8} {
-		if err := bank.Jump(index); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, bank.Jump(index))
 		bank.CurrentPattern().SetChromaticNote(index%maxPatternSteps, kit.voices[2], 60+index%12, 90)
 		song.SetPattern(bank.Patterns[bank.selPatIdx], index%8)
 	}
 	first := stateFrom(bank, songs, nil)
 	for i := 1; i < len(first.Patterns); i++ {
-		if first.Patterns[i-1].Index > first.Patterns[i].Index {
-			t.Fatalf("patterns are out of order at %d: %d then %d",
-				i, first.Patterns[i-1].Index, first.Patterns[i].Index)
-		}
+		require.LessOrEqualf(t, first.Patterns[i-1].Index, first.Patterns[i].Index,
+			"patterns are out of order at %d", i)
 	}
-	if len(first.Songs) != 1 {
-		t.Fatalf("songs = %d, want one", len(first.Songs))
-	}
+	require.Len(t, first.Songs, 1)
 	measures := first.Songs[0].Measures
-	if measures[len(measures)-1] == emptyMeasure {
-		t.Fatalf("measures = %v, want the trailing empties trimmed", measures)
-	}
+	require.NotEqual(t, emptyMeasure, measures[len(measures)-1], "the trailing empties should be trimmed")
+
 	// Two saves of the same session have to produce the same payload. The timestamp is the
 	// one field that moves, and its length varies with the precision of the clock.
 	again := stateFrom(bank, songs, nil)
 	first.SavedAt = time.Time{}
 	again.SavedAt = time.Time{}
-	if mustStateJSON(t, first) != mustStateJSON(t, again) {
-		t.Fatalf("two saves of one session differ:\n%s\n%s", mustStateJSON(t, first), mustStateJSON(t, again))
-	}
+	require.Equal(t, mustStateJSON(t, first), mustStateJSON(t, again), "two saves of one session differ")
 }
 
 // A song with no measures is not written to a file, so a bank sitting on one loads a set
@@ -363,25 +324,20 @@ func TestStateSavesInIndexOrder(t *testing.T) {
 // takes the whole view down.
 func TestStateLoadKeepsTheSelectedSong(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	// Song 1 gets a measure so the file carries it, and song 7 stays empty so it does not.
 	songs.CurrentSong().SetPattern(bank.Patterns[1], 0)
 	path := stateFilePath(t)
 	saveTo(t, path, bank, songs, nil)
-	if err := songs.Jump(6); err != nil {
-		t.Fatal(err)
-	}
-	if songs.selSongIdx != 7 {
-		t.Fatalf("selected song = %d, want 7", songs.selSongIdx)
-	}
+	require.NoError(t, songs.Jump(6))
+	require.Equal(t, 7, songs.selSongIdx)
 
-	useStateGlobals(t, path, bank, songs, nil)
-	if _, err := loadState(path, bank, songs, nil); err != nil {
-		t.Fatal(err)
-	}
-	if songs.CurrentSong() == nil {
-		t.Fatalf("selected song %d is nil after the load; the bank holds %v", songs.selSongIdx, songs.Songs)
-	}
+	withSession(session, path, nil)
+	_, err := loadInto(session, path, nil)
+	require.NoError(t, err)
+	require.NotNilf(t, songs.CurrentSong(), "selected song %d is nil after the load; the bank holds %v",
+		songs.selSongIdx, songs.Songs)
 	// The arrangement view has to work against it, which is what reads the selected song.
 	songs.playback = &Playback{}
 	songs.JumpMeasure(0, 0)
@@ -391,19 +347,17 @@ func TestStateLoadKeepsTheSelectedSong(t *testing.T) {
 // not put it back: an empty song restores as an empty song rather than as a stale one.
 func TestStateLoadEmptiesTheSelectedSong(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	songs.CurrentSong().SetPattern(bank.Patterns[1], 0)
 	path := stateFilePath(t)
 	saveTo(t, path, bank, songs, nil)
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 72, 100)
 
-	useStateGlobals(t, path, bank, songs, nil)
-	if _, err := loadState(path, bank, songs, nil); err != nil {
-		t.Fatal(err)
-	}
-	if pattern := songs.CurrentSong().GetPattern(0); pattern != bank.Patterns[1] {
-		t.Fatalf("measure 0 = %p, want the saved pattern %p", pattern, bank.Patterns[1])
-	}
+	withSession(session, path, nil)
+	_, err := loadInto(session, path, nil)
+	require.NoError(t, err)
+	require.Samef(t, bank.Patterns[1], songs.CurrentSong().GetPattern(0), "measure 0 is not the saved pattern")
 }
 
 // The trailing measures of an arrangement are trimmed by the one rule SetPattern applies,
@@ -411,15 +365,12 @@ func TestStateLoadEmptiesTheSelectedSong(t *testing.T) {
 // A gap in the middle is not a trailing measure and has to survive.
 func TestStateSavesTheArrangementSetPatternWouldLeave(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	first := bank.CurrentPattern()
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.Jump(1))
 	second := bank.CurrentPattern()
-	if err := songs.Jump(0); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, songs.Jump(0))
 	song := songs.CurrentSong()
 	song.SetPattern(first, 0)
 	song.SetPattern(first, 4) // a gap at 1-3 is interior and stays
@@ -428,17 +379,11 @@ func TestStateSavesTheArrangementSetPatternWouldLeave(t *testing.T) {
 	tail := len(song.measurePatterns())
 
 	saved := stateFrom(bank, songs, nil)
-	if len(saved.Songs) != 1 {
-		t.Fatalf("wrote %d songs, want one", len(saved.Songs))
-	}
+	require.Len(t, saved.Songs, 1)
 	measures := saved.Songs[0].Measures
-	if len(measures) != tail {
-		t.Fatalf("wrote %d measures, want the %d SetPattern leaves", len(measures), tail)
-	}
+	require.Equalf(t, tail, len(measures), "wrote the wrong number of measures")
 	for measure, want := range map[int]int{0: 1, 1: emptyMeasure, 4: 1, 7: 2} {
-		if measures[measure] != want {
-			t.Errorf("measure %d = %d, want %d", measure, measures[measure], want)
-		}
+		assert.Equalf(t, want, measures[measure], "measure %d", measure)
 	}
 }
 
@@ -448,14 +393,10 @@ func TestStateSavesTheArrangementSetPatternWouldLeave(t *testing.T) {
 func TestStateFailureTextFitsTheRow(t *testing.T) {
 	dir := t.TempDir()
 	foreign := filepath.Join(dir, "foreign.json")
-	if err := os.WriteFile(foreign, []byte(`{"app":"somethingelse"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(foreign, []byte(`{"app":"somethingelse"}`), 0o644))
 	_, foreignErr := readStateFile(foreign)
 	future := filepath.Join(dir, "future.json")
-	if err := os.WriteFile(future, []byte(`{"app":"fireloop","version":99}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(future, []byte(`{"app":"fireloop","version":99}`), 0o644))
 	_, versionErr := readStateFile(future)
 	_, missingErr := os.Stat(filepath.Join(dir, "does-not-exist.json"))
 
@@ -471,12 +412,8 @@ func TestStateFailureTextFitsTheRow(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			text := stateFailureText("Load failed", tt.err)
-			if text != tt.want {
-				t.Errorf("readout = %q, want %q", text, tt.want)
-			}
-			if fitted := fitOLEDText(text); fitted != text {
-				t.Errorf("readout %q would be cut to %q on the row", text, fitted)
-			}
+			assert.Equal(t, tt.want, text)
+			assert.Equalf(t, text, fitOLEDText(text), "readout %q would be cut on the row", text)
 		})
 	}
 }
@@ -501,42 +438,82 @@ func TestReportTextFitsTheRow(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, text := range []string{tt.report.loadText(), tt.report.saveText()} {
-				if len(text) > oledTextWidth {
-					t.Errorf("readout %q is %d characters, want at most %d", text, len(text), oledTextWidth)
-				}
-				if fitted := fitOLEDText(text); fitted != text {
-					t.Errorf("readout %q would be cut to %q on the row", text, fitted)
-				}
+				assert.LessOrEqualf(t, len(text), oledTextWidth, "readout %q is too long for the row", text)
+				assert.Equalf(t, text, fitOLEDText(text), "readout %q would be cut on the row", text)
 			}
 		})
 	}
 	// The counts a reader acts on have to survive whole, which is the part a plain width
 	// check cannot see: a number cut short still fits.
-	if text := (stateReport{Patterns: 100, Dropped: 15}).loadText(); !strings.Contains(text, "15") {
-		t.Errorf("readout %q does not carry the whole dropped count", text)
-	}
-	if text := (stateReport{Patterns: 999, Dropped: 16000}).loadText(); !strings.Contains(text, "16000") {
-		t.Errorf("readout %q does not carry the whole dropped count", text)
-	}
+	assert.Contains(t, (stateReport{Patterns: 100, Dropped: 15}).loadText(), "15",
+		"the readout does not carry the whole dropped count")
+	assert.Contains(t, (stateReport{Patterns: 999, Dropped: 16000}).loadText(), "16000",
+		"the readout does not carry the whole dropped count")
+}
+
+// The session path is an argument to building the controller rather than something set
+// afterwards, because a controller that is built and then reconfigured is one where a whole
+// configuration can be dropped without anything noticing. This pins the path from the flag
+// through construction to a save: -state was silently dead when run built a controller and
+// then copied a fresh one over the top of it.
+func TestControllerSavesThroughThePathItWasBuiltWith(t *testing.T) {
+	path := stateFilePath(t)
+	controller := newController(NewFire(func([]byte) error { return nil }), stateKit(), path)
+	require.Equal(t, path, controller.sessionPath)
+	require.NoError(t, controller.saveSession())
+	waitFor(t, "a controller built with a session path to write it", func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	})
+}
+
+// A save used to publish on the event loop, which held it for the fsync: on this
+// filesystem that is tens of milliseconds of a button press nobody asked for. Only the
+// write is off the loop now, and this is what that buys: the controls keep working while a
+// publish is outstanding.
+func TestAnOutstandingSaveDoesNotStallTheLoop(t *testing.T) {
+	session := stateTestBank(t, stateKit())
+	controller := withSession(session, stateFilePath(t), nil)
+	bank := controller.patbank
+
+	// Stand in for a publish that has not finished, released once the loop has come back.
+	// Nothing on the event path waits for it, so a loop that did would deadlock here rather
+	// than fail, which is the clearest way to show that it does not.
+	controller.saves.Add(1)
+
+	inc := make(chan alsa.SeqEvent, 2)
+	inc <- padMessage(54, 100) // a pad press, which adds a step to the first track
+	inc <- padMessage(54, 100) // and another, which removes it again
+	// Closing rather than sending the leave request keeps the exit save, which does wait
+	// for outstanding publishes, out of this test.
+	close(inc)
+	controller.processIncomingEvents(nil, inc)
+
+	controller.saves.Done()
+
+	// Both presses ran while the publish was outstanding: the step is there and then it is
+	// not, which is what two presses on one pad do.
+	_, left := bank.CurrentPattern().EventAtStep(0, bank.trackVoice(1))
+	require.Falsef(t, left, "the step was left behind: two presses should cancel")
 }
 
 // A panic in the handler ends the process, so the session has to be on disk before it goes.
 // Without that, the one save this feature exists for is the one a crash skips.
 func TestLeavingSavesAfterAPanic(t *testing.T) {
-	bank, songs := stateTestBank(t, stateKit())
+	session := stateTestBank(t, stateKit())
 	path := stateFilePath(t)
-	exitSaveOnce = sync.Once{} // the once is process-wide
-	useStateGlobals(t, path, bank, songs, nil)
-	previousProcess := processEvent
-	t.Cleanup(func() { processEvent = previousProcess })
-	processEvent = func(aseq sequencerWriter, ev alsa.SeqEvent) error {
-		// The edit lands through the production handler first, so what the save has to
-		// catch is a half-finished gesture rather than an untouched session.
-		if err := processPatternEvent(aseq, ev); err != nil {
-			return err
+	controller := withSession(session, path, nil)
+	// The unit falls over while the handler is repainting the grid, which is after the edit
+	// has been made. That is the case the exit save exists for: a half-finished gesture
+	// reaching the disk rather than an untouched session.
+	controller.patbank.f = NewFire(func(data []byte) error {
+		// The pad repaint is the first thing the unit is sent after the edit lands, and
+		// lights leave as a SysEx block rather than as a note.
+		if isPadLight(data) {
+			panic("the unit fell over after the edit")
 		}
-		panic("the handler fell over after the edit")
-	}
+		return nil
+	})
 
 	inc := make(chan alsa.SeqEvent, 1)
 	inc <- padMessage(54, 100) // a pad press, which adds a step to the first track
@@ -546,76 +523,60 @@ func TestLeavingSavesAfterAPanic(t *testing.T) {
 				t.Fatal("the panic was swallowed, so a failure would leave the unit playing")
 			}
 		}()
-		processIncomingEvents(nil, inc)
+		controller.processIncomingEvents(nil, inc)
 	}()
 
 	saved, err := readStateFile(path)
-	if err != nil {
-		t.Fatalf("the panic took the session with it: %v", err)
-	}
-	if len(saved.Patterns) != 1 || len(saved.Patterns[0].Events) != 1 {
-		t.Fatalf("saved patterns = %+v, want the edit the handler was making", saved.Patterns)
-	}
+	require.NoErrorf(t, err, "the panic took the session with it")
+	require.Lenf(t, saved.Patterns, 1, "the edit the handler was making should be the one saved")
+	require.Len(t, saved.Patterns[0].Events, 1)
 }
 
 // A write publishes the whole file with a rename, so what is on disk is always one whole
 // session: never a mixture of the old file and the new, and never nothing at all.
 func TestStatePublishesOneWholeFile(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	dir := t.TempDir()
 	path := filepath.Join(dir, "set.json")
 
 	// write sets every step on the first track and saves, reporting the size.
 	write := func() int64 {
 		t.Helper()
-		if _, err := bank.ToggleEvent(0, 0, 100); err != nil {
-			t.Fatal(err)
-		}
+		_, err := bank.ToggleEvent(0, 0, 100)
+		require.NoError(t, err)
 		saveTo(t, path, bank, songs, nil)
 		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		return info.Size()
 	}
 	full := write()
 	for range maxPatternSteps {
 		write()
 	}
-	if empty := write(); empty >= full {
-		t.Fatalf("the file did not shrink: %d then %d bytes", full, empty)
-	}
+	empty := write()
+	require.Less(t, empty, full, "the file should shrink once the notes are off the track")
+
 	state, err := readStateFile(path)
-	if err != nil {
-		t.Fatalf("the replaced file is not readable: %v", err)
-	}
+	require.NoErrorf(t, err, "the replaced file is not readable")
 	for _, pattern := range state.Patterns {
-		if len(pattern.Events) > 0 {
-			t.Fatalf("pattern %d still holds %d events after the notes were removed", pattern.Index, len(pattern.Events))
-		}
+		require.Emptyf(t, pattern.Events, "pattern %d still holds events after the notes were removed", pattern.Index)
 	}
 
 	// A save that cannot be written leaves the previous set exactly where it was, and says
 	// so rather than reporting a file it never wrote.
 	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := saveState(filepath.Join(dir, "no-such-dir", "set.json"), bank, songs, nil); err == nil {
-		t.Fatal("a save into a missing directory was accepted")
-	}
-	if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
-		t.Fatal("a failed save changed the file that was already there")
-	}
+	require.NoError(t, err)
+	_, err = saveState(filepath.Join(dir, "no-such-dir", "set.json"), bank, songs, nil)
+	require.Error(t, err, "a save into a missing directory was accepted")
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, string(before), string(after), "a failed save changed the file already there")
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), stateTempSuffix) {
-			t.Fatalf("a failed save left %s behind", entry.Name())
-		}
+		require.NotEqualf(t, stateTempSuffix, filepath.Ext(entry.Name()), "a failed save left %s behind", entry.Name())
 	}
 }
 
@@ -623,22 +584,19 @@ func TestStatePublishesOneWholeFile(t *testing.T) {
 // running has to be the same snapshot taken while nothing is playing.
 func TestStateSaveWhilePlayingMatchesSaveAtRest(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
-	usePatternGlobals(t, bank)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	fillStateSession(t, bank, songs, kit)
 	atRest := stateFrom(bank, songs, nil)
 
 	writer := &captureMidiWriter{}
-	playbackStop = bank.startSequencer(writer)
+	controller := bank.controller
+	controller.playback = bank.startSequencer(writer)
 	// Let the worker get into the pattern and start moving the playhead.
 	time.Sleep(20 * time.Millisecond)
 	playing := stateFrom(bank, songs, nil)
-	if err := stopPlayback(); err != nil {
-		t.Fatal(err)
-	}
-	if len(writer.events) == 0 {
-		t.Fatal("the playback worker wrote nothing, so this test proves nothing")
-	}
+	require.NoError(t, bank.controller.stopPlayback())
+	require.NotEmpty(t, writer.events, "the playback worker wrote nothing, so this test proves nothing")
 	assertSameSession(t, atRest, playing)
 }
 
@@ -720,29 +678,21 @@ func TestStateHandlesUnusableFiles(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			bank, _, err := loadCrafted(t, tt.file, tt.kit())
 			if tt.refuse != "" {
-				if err == nil {
-					t.Fatal("the load was accepted")
-				}
-				if !strings.Contains(err.Error(), tt.refuse) {
-					t.Fatalf("error = %q, want it to mention %q", err, tt.refuse)
-				}
+				require.Error(t, err, "the load was accepted")
+				require.Contains(t, err.Error(), tt.refuse)
 				// A refused file changes nothing that was already on the display.
-				if len(bank.Patterns) != 1 {
-					t.Fatal("a refused load changed the running session")
-				}
+				require.Len(t, bank.Patterns, 1, "a refused load changed the running session")
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := stateEventsText(bank, 1); tt.wantEvents != "" && got != tt.wantEvents {
-				t.Errorf("restored events = %q, want %q", got, tt.wantEvents)
+			require.NoError(t, err)
+			got := stateEventsText(bank, 1)
+			if tt.wantEvents != "" {
+				assert.Equal(t, tt.wantEvents, got)
 			}
 		})
 	}
-	if _, err := readStateFile(filepath.Join(t.TempDir(), "does-not-exist.json")); err == nil {
-		t.Fatal("a missing file was not an error")
-	}
+	_, err := readStateFile(filepath.Join(t.TempDir(), "does-not-exist.json"))
+	require.Error(t, err, "a missing file was not an error")
 }
 
 // A set with one bad number in it is still mostly a set, so out-of-range values are clamped
@@ -766,13 +716,9 @@ func TestStateClampsOutOfRangeValues(t *testing.T) {
 		}},
 		Songs: []stateSong{{Index: 1, Measures: []int{2, 7}}},
 	}, kit)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	pattern := bank.Patterns[2]
-	if pattern == nil {
-		t.Fatal("the pattern the file names is missing after the load")
-	}
+	require.NotNil(t, pattern, "the pattern the file names is missing after the load")
 	velocity, _ := pattern.EventAtStep(3, kit.voices[0])
 	voicesInKit := 0
 	for _, voice := range bank.trackVoices {
@@ -796,9 +742,7 @@ func TestStateClampsOutOfRangeValues(t *testing.T) {
 		// selection alone rather than restoring a position the file does not carry.
 		{name: "selected pattern", got: bank.selPatIdx, want: 1},
 	} {
-		if tt.got != tt.want {
-			t.Errorf("%s = %d, want %d", tt.name, tt.got, tt.want)
-		}
+		assert.Equalf(t, tt.want, tt.got, tt.name)
 	}
 }
 
@@ -818,18 +762,11 @@ func TestStateRefusesIndexesTheBankHasNoRoomFor(t *testing.T) {
 			{Index: 2, Measures: []int{4}},
 		},
 	}, trackWindowKit(2, 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Dropped != 4 {
-		t.Errorf("dropped = %d, want the two patterns and two songs the bank has no room for", report.Dropped)
-	}
-	if bank.Patterns[4] == nil {
-		t.Error("the pattern the bank does have room for was not installed")
-	}
-	if bank.Patterns[0] != nil || bank.Patterns[maxPatternIndex+1] != nil {
-		t.Error("a refused pattern index was installed anyway")
-	}
+	require.NoError(t, err)
+	require.Equal(t, 4, report.Dropped, "the two patterns and two songs the bank has no room for")
+	require.NotNil(t, bank.Patterns[4], "the pattern the bank does have room for was not installed")
+	require.Nil(t, bank.Patterns[0], "a refused pattern index was installed anyway")
+	require.Nil(t, bank.Patterns[maxPatternIndex+1], "a refused pattern index was installed anyway")
 }
 
 // Shift with Browser saves and Shift with Accent loads, in either mode. Neither button does
@@ -841,52 +778,52 @@ func TestStateGesturesSaveAndLoad(t *testing.T) {
 	}{{name: "pattern mode"}, {name: "song mode", song: true}} {
 		t.Run(tt.name, func(t *testing.T) {
 			kit := stateKit()
-			bank, songs := stateTestBank(t, kit)
+			session := stateTestBank(t, kit)
+			bank, songs := session.patbank, session.songbank
 			pattern := bank.CurrentPattern()
 			pattern.SetChromaticNote(0, kit.voices[2], 60, 100)
 			song := songs.Songs[songs.selSongIdx]
 			song.SetPattern(pattern, 0)
 			song.SetPattern(pattern, 3)
 			path := stateFilePath(t)
-			useStateGlobals(t, path, bank, songs, nil)
+			controller := withSession(session, path, nil)
 			recorder := useScreenRecorder(t, &bank.screen)
 			readout := func() string { return recorder.row(lengthDisplayRow) }
 			if tt.song {
-				processEvent = processSongEvent
+				controller.mode = songView
 			}
-			t.Cleanup(func() { processEvent = processPatternEvent })
+			t.Cleanup(func() { controller.mode = patternView })
 
 			for _, note := range []int{NoteBrowser, NoteAccent} {
-				pressButton(t, note)
+				pressButton(t, bank, note)
 			}
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Fatal("a plain press of Browser wrote the state file")
-			}
+			_, err := os.Stat(path)
+			require.True(t, os.IsNotExist(err), "a plain press of Browser wrote the state file")
 
-			pressButton(t, NoteShift)
-			pressButton(t, NoteBrowser)
-			if _, err := os.Stat(path); err != nil {
-				t.Fatalf("Shift plus Browser did not write the file: %v", err)
-			}
-			if text := readout(); !strings.HasPrefix(text, "Saved") {
-				t.Errorf("readout = %q, want it to report the save", text)
-			}
+			pressButton(t, bank, NoteShift)
+			pressButton(t, bank, NoteBrowser)
+			// The publish runs off the event loop, so the press is answered before the
+			// file exists. Both the file and the row it reported on arrive together.
+			waitFor(t, "the off-loop save to land", func() bool {
+				_, err := os.Stat(path)
+				return err == nil
+			})
+			waitFor(t, "the save to report itself", func() bool {
+				return strings.HasPrefix(readout(), "Saved")
+			})
 
 			// Shift stays engaged for the whole gesture, the way a held modifier does, so
 			// the load below is a second press rather than a new one.
 			bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 72, 100)
-			pressButton(t, NoteAccent)
-			if text := readout(); !strings.HasPrefix(text, "Loaded") {
-				t.Errorf("readout = %q, want it to report the load", text)
-			}
-			if event, _ := bank.Patterns[1].EventAtStep(0, kit.voices[2]); event.ChromaticNote != 60 {
-				t.Errorf("pitch after the load = %d, want the saved 60", event.ChromaticNote)
-			}
+			pressButton(t, bank, NoteAccent)
+			assert.Truef(t, strings.HasPrefix(readout(), "Loaded"), "readout = %q, want it to report the load", readout())
+			event, _ := bank.Patterns[1].EventAtStep(0, kit.voices[2])
+			assert.Equalf(t, 60, event.ChromaticNote, "pitch after the load")
 			first, second := songs.CurrentSong().GetPattern(0), songs.CurrentSong().GetPattern(3)
-			if first == nil || first != second {
-				t.Errorf("measures = %v/%v, want both to hold the same pattern", first, second)
+			if assert.NotNil(t, first, "measure 0 holds nothing") {
+				assert.Same(t, first, second, "both measures should hold the same pattern")
 			}
-			pressButton(t, NoteShift)
+			pressButton(t, bank, NoteShift)
 		})
 	}
 }
@@ -894,32 +831,30 @@ func TestStateGesturesSaveAndLoad(t *testing.T) {
 // With no -state path there is nowhere to save, and the unit says so rather than writing
 // somewhere it was not asked to.
 func TestStateGesturesWithoutAPathSaySo(t *testing.T) {
-	bank, _ := stateTestBank(t, stateKit())
-	usePatternGlobals(t, bank)
+	session := stateTestBank(t, stateKit())
+	bank := session.patbank
 	recorder := useScreenRecorder(t, &bank.screen)
 	for _, gesture := range []struct {
 		name string
 		run  func() error
 	}{
-		{name: "save", run: func() error { return saveSession() }},
-		{name: "load", run: func() error { return loadSession(false) }},
+		{name: "save", run: session.saveSession},
+		{name: "load", run: session.loadSession},
 	} {
-		if err := gesture.run(); err != nil {
-			t.Fatal(err)
-		}
-		if text := recorder.row(lengthDisplayRow); !strings.Contains(text, "-state") {
-			t.Errorf("readout after %s = %q, want it to say there is no state path", gesture.name, text)
-		}
+		require.NoErrorf(t, gesture.run(), "the %s gesture reported an error", gesture.name)
+		assert.Containsf(t, recorder.row(lengthDisplayRow), "-state",
+			"readout after %s should say there is no state path", gesture.name)
 	}
 }
 
 // A load that cannot be read reports why and leaves the running session alone.
 func TestStateLoadFailureLeavesTheSessionAlone(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank := session.patbank
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 60, 100)
 	path := stateFilePath(t)
-	useStateGlobals(t, path, bank, songs, nil)
+	controller := withSession(session, path, nil)
 	recorder := useScreenRecorder(t, &bank.screen)
 	for _, tt := range []struct {
 		name    string
@@ -929,30 +864,24 @@ func TestStateLoadFailureLeavesTheSessionAlone(t *testing.T) {
 		{name: "not a session", content: "this is not a session"},
 	} {
 		if tt.content != "" {
-			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o644))
 		} else {
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				t.Fatal(err)
-			}
+			err := os.Remove(path)
+			require.Truef(t, err == nil || os.IsNotExist(err), "removing the file: %v", err)
 		}
-		if err := loadSession(false); err != nil {
-			t.Fatal(err)
-		}
-		if text := recorder.row(lengthDisplayRow); !strings.Contains(text, "Load failed") {
-			t.Errorf("%s: readout = %q, want the failure reported", tt.name, text)
-		}
-		if _, ok := bank.Patterns[1].EventAtStep(0, kit.voices[2]); !ok {
-			t.Fatalf("%s: a failed load changed the running session", tt.name)
-		}
+		require.NoErrorf(t, controller.loadSession(), "%s", tt.name)
+		assert.Containsf(t, recorder.row(lengthDisplayRow), "Load failed",
+			"%s: the failure should be reported", tt.name)
+		_, ok := bank.Patterns[1].EventAtStep(0, kit.voices[2])
+		require.Truef(t, ok, "%s: a failed load changed the running session", tt.name)
 	}
 }
 
 // A load repaints the view it was asked from, so the display agrees with what was installed.
 func TestStateLoadRepaintsTheCurrentView(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, kit.voices[2], 60, 100)
 	song := songs.Songs[songs.selSongIdx]
@@ -960,7 +889,7 @@ func TestStateLoadRepaintsTheCurrentView(t *testing.T) {
 	song.SetPattern(pattern, 5)
 	path := stateFilePath(t)
 	saveTo(t, path, bank, songs, nil)
-	useStateGlobals(t, path, bank, songs, nil)
+	controller := withSession(session, path, nil)
 	recorder := useScreenRecorder(t, &bank.screen)
 	// Both banks draw through one recorder on purpose: which view a load repaints is the
 	// thing under test, so the same rows have to be readable whichever mode is showing.
@@ -975,23 +904,16 @@ func TestStateLoadRepaintsTheCurrentView(t *testing.T) {
 		{name: "pattern mode", song: false, want: "Pattern 001"},
 		{name: "song mode", song: true, want: "Song 001", other: "M 001-048"},
 	} {
-		processEvent = processPatternEvent
+		controller.mode = patternView
 		if tt.song {
-			processEvent = processSongEvent
+			controller.mode = songView
 		}
-		if err := loadSession(tt.song); err != nil {
-			t.Fatal(err)
-		}
-		if text := recorder.row(0); !strings.Contains(text, tt.want) {
-			t.Errorf("%s header = %q, want it to show %q", tt.name, text, tt.want)
-		}
+		require.NoErrorf(t, controller.loadSession(), "%s", tt.name)
+		assert.Containsf(t, recorder.row(0), tt.want, "%s header", tt.name)
 		if tt.other != "" {
-			if text := recorder.row(3); !strings.Contains(text, tt.other) {
-				t.Errorf("%s view = %q, want it to show %q", tt.name, text, tt.other)
-			}
+			assert.Containsf(t, recorder.row(3), tt.other, "%s view", tt.name)
 		}
 	}
-	processEvent = processPatternEvent
 }
 
 // Leaving saves the session on the goroutine that owns the banks, so the save comes after
@@ -999,31 +921,26 @@ func TestStateLoadRepaintsTheCurrentView(t *testing.T) {
 // writing it is a fatal concurrent access, not a lost note. It is written once, however the
 // exit is reached.
 func TestLeavingSavesBehindTheQueuedEditsOnce(t *testing.T) {
-	bank, songs := stateTestBank(t, stateKit())
+	session := stateTestBank(t, stateKit())
 	path := stateFilePath(t)
-	exitSaveOnce = sync.Once{} // the once is process-wide
-	useStateGlobals(t, path, bank, songs, nil)
+	controller := withSession(session, path, nil)
 
 	inc := make(chan alsa.SeqEvent, 2)
 	inc <- padMessage(54, 100) // a pad press, which adds a step to the first track
 	inc <- alsa.SeqEvent{}     // then the leave request
-	processIncomingEvents(nil, inc)
+	controller.processIncomingEvents(nil, inc)
 
 	saved, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("leaving did not leave a readable file: %v", err)
-	}
+	require.NoErrorf(t, err, "leaving did not leave a readable file")
 	state, err := readStateFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Patterns) != 1 || len(state.Patterns[0].Events) != 1 {
-		t.Fatalf("saved patterns = %+v, want the queued edit to land before the save", state.Patterns)
-	}
-	saveSessionOnExit() // reaching the exit by another route must not write again
-	if again, err := os.ReadFile(path); err != nil || string(again) != string(saved) {
-		t.Fatal("the session was written a second time")
-	}
+	require.NoError(t, err)
+	require.Len(t, state.Patterns, 1, "the queued edit should land before the save")
+	require.Len(t, state.Patterns[0].Events, 1)
+
+	controller.saveSessionOnExit() // reaching the exit by another route must not write again
+	again, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, string(saved), string(again), "the session was written a second time")
 }
 
 // An untouched pattern is not written out: every pattern the user lands on has an entry, and
@@ -1032,44 +949,28 @@ func TestLeavingSavesBehindTheQueuedEditsOnce(t *testing.T) {
 // does not.
 func TestStateOmitsUntouchedPatternsButKeepsShortenedOnes(t *testing.T) {
 	kit := stateKit()
-	bank, songs := stateTestBank(t, kit)
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
 	for _, index := range []int{2, 5, 9, 6} {
-		if err := bank.Jump(index); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, bank.Jump(index))
 	}
 	shortened := bank.selPatIdx
 	bank.CurrentPattern().SetLengthSteps(4)
 	state := stateFrom(bank, songs, nil)
-	if len(state.Patterns) != 1 {
-		t.Fatalf("wrote %d patterns, want only the shortened one", len(state.Patterns))
-	}
-	if state.Patterns[0].Index != shortened || state.Patterns[0].LengthSteps != 4 {
-		t.Fatalf("wrote pattern %+v, want the shortened pattern %d", state.Patterns[0], shortened)
-	}
+	require.Len(t, state.Patterns, 1, "only the shortened pattern should be written")
+	require.Equalf(t, shortened, state.Patterns[0].Index, "the wrong pattern was written")
+	require.Equal(t, 4, state.Patterns[0].LengthSteps)
 
 	path := stateFilePath(t)
-	if _, err := writeStateFile(path, state); err != nil {
-		t.Fatal(err)
-	}
-	loaded, loadedSongs := stateTestBank(t, stateKit())
-	if _, err := loadState(path, loaded, loadedSongs, nil); err != nil {
-		t.Fatal(err)
-	}
-	for _, tt := range []struct {
-		name string
-		got  int
-		want int
-	}{
-		{name: "restored length", got: loaded.Patterns[shortened].LengthSteps(), want: 4},
-	} {
-		if tt.got != tt.want {
-			t.Errorf("%s = %d, want %d", tt.name, tt.got, tt.want)
-		}
-	}
+	_, err := writeStateFile(path, state)
+	require.NoError(t, err)
+	far := stateTestBank(t, stateKit())
+	loaded := far.patbank
+	_, err = loadInto(far, path, nil)
+	require.NoError(t, err)
+	require.Equal(t, 4, loaded.Patterns[shortened].LengthSteps(), "restored length")
+
 	// The bank stays on whatever pattern it was showing: the selection is the display's
 	// business, and the file does not carry it.
-	if loaded.selPatIdx == shortened {
-		t.Errorf("selected pattern = %d, want the selection left where it was", shortened)
-	}
+	require.NotEqualf(t, shortened, loaded.selPatIdx, "the selection should be left where it was")
 }

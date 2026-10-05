@@ -92,9 +92,6 @@ func (sb *SongBank) SelectPatternSlot(slot int) error {
 }
 
 func (sb *SongBank) MovePatternSelection(delta int) error {
-	if sb.pb == nil {
-		return nil
-	}
 	return sb.SelectPattern(clampIndex(sb.pb.selPatIdx+delta, 1, maxPatternIndex))
 }
 

@@ -37,9 +37,6 @@ func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
 // kit is the voice bank the song's patterns are written against, which is also where the
 // patches sent when playback starts are read from.
 func (sb *SongBank) kit() *VoiceBank {
-	if sb.pb == nil {
-		return nil
-	}
 	return sb.pb.vb
 }
 
@@ -62,9 +59,16 @@ func (s *SongBank) installSongs(songs map[int]*Song) {
 	s.Songs = songs
 }
 
+// askStop stops whatever is playing on behalf of an edit that rewrites a measure. The
+// controller is the pattern bank's, which is the same one: an arrangement is always built
+// over a pattern bank, so asking through it is asking the owner rather than a copy of it.
+func (s *SongBank) askStop() error {
+	return s.pb.controller.stopPlayback()
+}
+
 func (s *SongBank) Jump(n int) error {
 	if n != 0 {
-		if err := stopPlayback(); err != nil {
+		if err := s.askStop(); err != nil {
 			return err
 		}
 	}
@@ -168,10 +172,10 @@ func (sb *SongBank) ToggleMeasureBrightness(lastMeasure, nextMeasure int) error 
 }
 
 func (s *SongBank) SelectPattern(n int) error {
-	if s.pb == nil || n <= 0 || n > maxPatternIndex {
+	if n <= 0 || n > maxPatternIndex {
 		return nil
 	}
-	if err := stopPlayback(); err != nil {
+	if err := s.askStop(); err != nil {
 		return err
 	}
 	s.pb.editingNote = false

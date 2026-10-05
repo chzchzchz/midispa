@@ -331,7 +331,7 @@ func (f *Fire) printFont(x, y int, s string, invert bool) error {
 	if !f.out() {
 		return nil
 	}
-bmp := make([]byte, 0, len(s)*glyphWidth)
+	bmp := make([]byte, 0, len(s)*glyphWidth)
 	for _, v := range s {
 		bmp = appendGlyph(bmp, byte(v), invert)
 	}

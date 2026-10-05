@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -130,14 +129,6 @@ func (r stateReport) saveText() string {
 func (r stateReport) logAttrs() []any {
 	return []any{"patterns", r.Patterns, "songs", r.Songs, "dropped", r.Dropped, "bytes", r.Bytes}
 }
-
-// statePath is the file the session is saved to and loaded from, and stateKitPaths is the
-// kit it is measured against. Both stay empty until main wires the flag, so the panel
-// gestures report that there is nowhere to save rather than writing somewhere unasked.
-var (
-	statePath     string
-	stateKitPaths []string
-)
 
 // The two ways a file can be refused are named so the panel can say which one it hit in
 // the handful of characters the readout row has, instead of the path and the version
@@ -266,7 +257,13 @@ func stateSongsFrom(sb *SongBank, indices map[*Pattern]int) []stateSong {
 // saveState writes the session to path. It reads only, so it is safe to call while a
 // pattern is playing, which is exactly when a user reaches for it.
 func saveState(path string, pb *PatternBank, sb *SongBank, kit []string) (stateReport, error) {
-	state := stateFrom(pb, sb, kit)
+	return publishState(path, stateFrom(pb, sb, kit))
+}
+
+// publishState writes a snapshot that has already been taken. Taking the snapshot and
+// publishing it are separate because they belong to different goroutines: the snapshot has
+// to be read on the one that owns the banks, and the write does not.
+func publishState(path string, state stateFile) (stateReport, error) {
 	written, err := writeStateFile(path, state)
 	if err != nil {
 		return stateReport{}, err
@@ -276,6 +273,24 @@ func saveState(path string, pb *PatternBank, sb *SongBank, kit []string) (stateR
 		Patterns: len(state.Patterns),
 		Songs:    len(state.Songs),
 	}, nil
+}
+
+// saveOffLoop takes the snapshot on the event loop and publishes it on its own goroutine.
+// The write is where the fsync lives, and on this filesystem that is tens of milliseconds
+// of a button press nobody asked for, so only the write is handed off.
+//
+// The outcome is reported from the goroutine that published it rather than handed back to
+// the loop, because a report that waited for the next Fire event would simply not appear
+// on a unit nobody touched again. That is how the other transient readouts work: the tempo
+// entry writes its row and the next redraw replaces it. The save only adds a log line.
+func (c *Controller) saveOffLoop() {
+	state := stateFrom(c.patbank, c.songbank, c.sessionKit)
+	c.saves.Add(1)
+	go func() {
+		defer c.saves.Done()
+		report, err := publishState(c.sessionPath, state)
+		c.reportSave(report, err)
+	}()
 }
 
 // writeStateFile encodes into memory and then publishes the result with a rename. A
@@ -356,18 +371,21 @@ func (s stateFile) kitChanged(kit []string, voices int) (changed bool, reason st
 // turns out to be unusable leaves the running session exactly as it was. It does not
 // repaint: only the caller knows which view is showing, and only the caller has the mode
 // light to restore.
-func loadState(path string, pb *PatternBank, sb *SongBank, kit []string) (stateReport, error) {
+//
+// Stopping playback belongs to the controller rather than to a free function because it is
+// the one step here that touches the running set, and the running set is the controller's.
+func (c *Controller) loadState(path string) (stateReport, error) {
 	state, err := readStateFile(path)
 	if err != nil {
 		return stateReport{}, err
 	}
 	var voiceBank *VoiceBank
 	voiceCount := 0
-	if pb != nil {
-		voiceBank = pb.vb
+	if c.patbank != nil {
+		voiceBank = c.patbank.vb
 		voiceCount = len(voiceBank.voices)
 	}
-	if changed, reason := state.kitChanged(kit, voiceCount); changed {
+	if changed, reason := state.kitChanged(c.sessionKit, voiceCount); changed {
 		logger.Warn("state written against a different kit",
 			"path", path, "reason", reason, "fileKit", state.Kit, "fileVoices", state.VoiceCount)
 	}
@@ -375,18 +393,18 @@ func loadState(path string, pb *PatternBank, sb *SongBank, kit []string) (stateR
 	// Playback is stopped only once there is something to install. The worker reads the
 	// banks from its own goroutine, and stopping joins it, so from here on no reader is
 	// left holding a pattern the load is about to replace.
-	if err := stopPlayback(); err != nil {
+	if err := c.stopPlayback(); err != nil {
 		return stateReport{}, err
 	}
 	report := stateReport{Patterns: len(patterns), Dropped: droppedPatterns}
-	if pb != nil {
-		pb.restoreState(state, patterns)
+	if c.patbank != nil {
+		c.patbank.restoreState(state, patterns)
 	}
 	songs, droppedMeasures := resolveSongs(state, patterns)
 	report.Songs = len(songs)
 	report.Dropped += droppedMeasures
-	if sb != nil {
-		sb.installSongs(songs)
+	if c.songbank != nil {
+		c.songbank.installSongs(songs)
 	}
 	setBPM(clampIndex(state.BPM, stateTempoMin, stateTempoMax))
 	return report, nil
@@ -506,37 +524,37 @@ func stateFailureText(prefix string, err error) string {
 // loadStateFile loads the session named by -state into the banks and repaints the pattern
 // view, which is the view a run starts in. It is the startup path, so a missing file is
 // reported rather than treated as an error: that is what a first run looks like.
-func loadStateFile(path string) error {
-	report, err := loadState(path, patbank, songbank, stateKitPaths)
+func (c *Controller) loadStateFile(path string) error {
+	report, err := c.loadState(path)
 	if err != nil {
 		return err
 	}
-	if err := patbank.Jump(0); err != nil {
+	if err := c.patbank.Jump(0); err != nil {
 		return err
 	}
 	logger.Info("state loaded", append([]any{"path", path}, report.logAttrs()...)...)
 	return nil
 }
 
-// exitSaveOnce keeps the exit save to one write. The signal path and a panic unwind can
-// both reach it, and a second write would only add another timestamp to a file the user
-// is about to read.
-var exitSaveOnce sync.Once
-
 // saveSessionOnExit writes the session as the process goes down. It is the save that stops
 // a set being lost to a pulled cable, so it runs whether the program was asked to stop or
 // the event handler fell over doing it. A panic on some other goroutine, the playback
 // worker being the one that matters, still ends the process without it.
-func saveSessionOnExit() {
-	if statePath == "" || patbank == nil {
+func (c *Controller) saveSessionOnExit() {
+	if c.sessionPath == "" {
 		return
 	}
-	exitSaveOnce.Do(func() {
-		report, err := saveState(statePath, patbank, songbank, stateKitPaths)
+	// A publish still in flight holds an older snapshot. Waiting for it is the one thing
+	// worth blocking for here: leaving is the end of the loop, so there is nothing left
+	// for the wait to delay, and a late rename would otherwise overwrite this write with
+	// the state from before the last few edits.
+	c.saves.Wait()
+	c.exitSave.Do(func() {
+		report, err := saveState(c.sessionPath, c.patbank, c.songbank, c.sessionKit)
 		if err != nil {
-			logger.Error("state save on exit failed", "path", statePath, "error", err)
+			logger.Error("state save on exit failed", "path", c.sessionPath, "error", err)
 			return
 		}
-		logger.Info("state saved on exit", append([]any{"path", statePath, "kit", stateKitPaths}, report.logAttrs()...)...)
+		logger.Info("state saved on exit", append([]any{"path", c.sessionPath, "kit", c.sessionKit}, report.logAttrs()...)...)
 	})
 }

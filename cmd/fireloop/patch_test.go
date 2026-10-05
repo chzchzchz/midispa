@@ -19,6 +19,8 @@ import (
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const patchTestTicksPerQuarter = 96
@@ -35,18 +37,14 @@ var patchDeviceAddr = alsa.SeqAddr{Client: 10, Port: 20}
 func writePatchFile(t *testing.T, path string, messages ...gomidi.Message) {
 	t.Helper()
 	file, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer file.Close()
 
 	writer := smfwriter.New(file,
 		smfwriter.NumTracks(1),
 		smfwriter.TimeFormat(smf.MetricTicks(patchTestTicksPerQuarter)),
 	)
-	if err := writer.WriteHeader(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, writer.WriteHeader())
 	events := []gomidi.Message{
 		meta.TrackSequenceName("patch"),
 		meta.TimeSig{
@@ -61,7 +59,7 @@ func writePatchFile(t *testing.T, path string, messages ...gomidi.Message) {
 	for _, event := range events {
 		// Writing the last event of the only track reports the end of the file.
 		if err := writer.Write(event); err != nil && err != smf.ErrFinished && err != io.EOF {
-			t.Fatal(err)
+			require.NoErrorf(t, err, "writing %v", event)
 		}
 	}
 }
@@ -113,16 +111,10 @@ func patchKit(t *testing.T, devicePatch string, voices ...Voice) (*VoiceBank, st
 	kitPath := filepath.Join(dir, "kit.json")
 	kit := []Device{patchedDevice(dir, devicePatch, voices...)}
 	data, err := json.Marshal(kit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(kitPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(kitPath, data, 0o600))
 	devices, err := loadDeviceFile(kitPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return NewVoiceBank(devices), patchPath
 }
 
@@ -131,13 +123,9 @@ func patchKit(t *testing.T, devicePatch string, voices ...Voice) (*VoiceBank, st
 func assertEvents(t *testing.T, writer *captureMidiWriter, want []alsa.SeqEvent) {
 	t.Helper()
 	got := writer.snapshot()
-	if len(got) != len(want) {
-		t.Fatalf("sent %d events, want %d: %v", len(got), len(want), got)
-	}
+	require.Lenf(t, got, len(want), "the kit sent %v", got)
 	for i := range want {
-		if got[i].SeqAddr != want[i].SeqAddr {
-			t.Fatalf("event %d went to %v, want %v", i, got[i].SeqAddr, want[i].SeqAddr)
-		}
+		require.Equalf(t, want[i].SeqAddr, got[i].SeqAddr, "event %d", i)
 		assertMidiData(t, got[i], want[i].Data)
 	}
 }
@@ -164,25 +152,17 @@ func TestPatchPrecedenceAndResolution(t *testing.T) {
 		{overrides, "other.mid"},
 		{none, "instrument.mid"},
 	} {
-		if got := tc.voice.EffectivePatch(); got != tc.want {
-			t.Fatalf("%s resolved to %q, want %q", tc.voice.Name, got, tc.want)
-		}
+		require.Equalf(t, tc.want, tc.voice.EffectivePatch(), "%s resolved elsewhere", tc.voice.Name)
 	}
 
 	// The kit file sits in a temp directory, so the patch must be found beside it even
 	// though nothing in the test is running from there.
-	if got := inherits.patchPath(); got != patchPath {
-		t.Fatalf("resolved patch = %q, want the kit-relative %q", got, patchPath)
-	}
+	require.Equal(t, patchPath, inherits.patchPath())
 	// An absolute path is used as given.
 	kit.voices[2].Patch = patchPath
-	if got := none.patchPath(); got != patchPath {
-		t.Fatalf("absolute patch = %q, want %q", got, patchPath)
-	}
+	require.Equal(t, patchPath, none.patchPath())
 	// A voice on a kit with no patch anywhere has nothing to play.
-	if got := (&Voice{Name: "bare", device: &Device{}}).patchPath(); got != "" {
-		t.Fatalf("kit without patches resolved to %q, want nothing", got)
-	}
+	require.Empty(t, (&Voice{Name: "bare", device: &Device{}}).patchPath())
 }
 
 // A patch that cannot be read stops startup rather than leaving an instrument on the
@@ -190,39 +170,25 @@ func TestPatchPrecedenceAndResolution(t *testing.T) {
 func TestPatchValidationRejectsUnusableFiles(t *testing.T) {
 	dir := t.TempDir()
 	wrongType := filepath.Join(dir, "notes.txt")
-	if err := os.WriteFile(wrongType, []byte("not midi"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(wrongType, []byte("not midi"), 0o600))
 	notSMF := filepath.Join(dir, "broken.mid")
-	if err := os.WriteFile(notSMF, []byte("MThd but not really"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(notSMF, []byte("MThd but not really"), 0o600))
 	newKit := func(patch string) []Device {
 		return []Device{patchedDevice(dir, patch)}
 	}
 
 	for _, patch := range []string{"missing.mid", "notes.txt", "broken.mid"} {
 		err := validateDevices(newKit(patch))
-		if err == nil {
-			t.Fatalf("patch %q was accepted", patch)
-		}
-		if !strings.Contains(err.Error(), patch) {
-			t.Fatalf("error for %q does not name the file: %v", patch, err)
-		}
+		require.Errorf(t, err, "patch %q was accepted", patch)
+		require.ErrorContainsf(t, err, patch, "the error must name the file that was looked for")
 	}
-	if err := validateDevices(newKit(patchFile(t, dir, "good.mid",
-		channel.Channel(0).ControlChange(74, 90)))); err != nil {
-		t.Fatalf("a readable patch was rejected: %v", err)
-	}
+	require.NoError(t, validateDevices(newKit(patchFile(t, dir, "good.mid",
+		channel.Channel(0).ControlChange(74, 90)))))
 	// A voice's own patch is validated the same way, resolved against the device's kit.
 	voices := newKit("")
 	voices[0].Voices[0].Patch = "missing.mid"
-	if err := validateDevices(voices); err == nil {
-		t.Fatal("a voice patch that does not exist was accepted")
-	}
-	if err := validateDevices(newKit("")); err != nil {
-		t.Fatalf("a kit without patches was rejected: %v", err)
-	}
+	require.Error(t, validateDevices(voices), "a voice patch that does not exist was accepted")
+	require.NoError(t, validateDevices(newKit("")))
 }
 
 // The file's channel is the one it was dumped on, which is rarely the channel the voice
@@ -262,9 +228,8 @@ func TestPatchRemapsEveryChannelMessageAndKeepsSysEx(t *testing.T) {
 			one := t.TempDir()
 			device := patchedDevice(one, patchFile(t, one, "patch.mid", tc.in), patchVoices(3)...)
 			writer := &captureMidiWriter{}
-			if _, err := sendKitPatches(writer, NewVoiceBank([]Device{device})); err != nil {
-				t.Fatal(err)
-			}
+			_, err := sendKitPatches(writer, NewVoiceBank([]Device{device}))
+			require.NoError(t, err)
 			assertEvents(t, writer, []alsa.SeqEvent{sentTo(tc.want)})
 		})
 	}
@@ -279,9 +244,8 @@ func TestPatchRemapsEveryChannelMessageAndKeepsSysEx(t *testing.T) {
 	}
 	writer := &captureMidiWriter{}
 	device := patchedDevice(dir, patchFile(t, dir, "all.mid", all...), patchVoices(3)...)
-	if _, err := sendKitPatches(writer, NewVoiceBank([]Device{device})); err != nil {
-		t.Fatal(err)
-	}
+	_, err := sendKitPatches(writer, NewVoiceBank([]Device{device}))
+	require.NoError(t, err)
 	assertEvents(t, writer, want)
 }
 
@@ -360,9 +324,8 @@ func TestKitPatchSendSet(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			writer := &captureMidiWriter{}
-			if _, err := sendKitPatches(writer, NewVoiceBank(tc.devices)); err != nil {
-				t.Fatal(err)
-			}
+			_, err := sendKitPatches(writer, NewVoiceBank(tc.devices))
+			require.NoError(t, err)
 			assertEvents(t, writer, tc.want)
 		})
 	}
@@ -376,7 +339,7 @@ func TestPlaybackStartsWithTheKitPatch(t *testing.T) {
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[0], 60, 100)
 
 	writer := &captureMidiWriter{}
-	playbackStop = bank.startSequencer(writer)
+	bank.controller.playback = bank.startSequencer(writer)
 	// The worker writes the note a moment after start returns, so wait for it rather
 	// than racing it.
 	events := writer.waitForEvents(t, 4)
@@ -391,23 +354,17 @@ func TestPlaybackStartsWithTheKitPatch(t *testing.T) {
 			break
 		}
 	}
-	if note < 0 {
-		t.Fatalf("no note-on in the %d messages written, want the pattern's first note", len(events))
-	}
-	if err := stopPlayback(); err != nil {
-		t.Fatal(err)
-	}
+	require.GreaterOrEqualf(t, note, 0, "no note-on in the %d messages written, want the pattern's first note", len(events))
+	require.NoError(t, bank.controller.stopPlayback())
 
 	// Starting again sends the patch again, because the point is to put the instrument
 	// back the way the kit says even if something else moved it in between.
 	restarted := &captureMidiWriter{}
-	playbackStop = bank.startSequencer(restarted)
+	bank.controller.playback = bank.startSequencer(restarted)
 	again := restarted.waitForEvents(t, 2)
 	assertMidiData(t, again[0], []byte{midi.MakeCC(1), 74, 90})
 	assertMidiData(t, again[1], []byte{midi.MakePgm(1), 42})
-	if err := stopPlayback(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.controller.stopPlayback())
 }
 
 // Song playback goes through its own sequencer, and the kit's patches belong there too.
@@ -421,9 +378,7 @@ func TestSongPlaybackStartsWithTheKitPatch(t *testing.T) {
 	// Only the patch is checked here: stopping the song also writes the transport's
 	// Start and Stop to the sync port, and the timing between them is another test's job.
 	events := writer.snapshot()
-	if len(events) < 2 {
-		t.Fatalf("song playback wrote %d messages, want the kit patch", len(events))
-	}
+	require.GreaterOrEqualf(t, len(events), 2, "song playback wrote too few messages to hold the kit patch")
 	assertMidiData(t, events[0], []byte{midi.MakeCC(1), 74, 90})
 	assertMidiData(t, events[1], []byte{midi.MakePgm(1), 42})
 }
@@ -452,12 +407,8 @@ func TestSettleComesFromTheDeviceAndOnlyAfterADump(t *testing.T) {
 			device.Settle = tc.settle
 			writer := &captureMidiWriter{}
 			settle, err := sendKitPatches(writer, NewVoiceBank([]Device{device}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if settle != tc.want {
-				t.Fatalf("settle = %v, want %v", settle, tc.want)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, time.Duration(settle))
 		})
 	}
 
@@ -468,20 +419,15 @@ func TestSettleComesFromTheDeviceAndOnlyAfterADump(t *testing.T) {
 	fast := patchedDevice(dir, dump)
 	fast.SeqAddr = alsa.SeqAddr{Client: 11, Port: 21}
 	settle, err := sendKitPatches(&captureMidiWriter{}, NewVoiceBank([]Device{slow, fast}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if settle != 300*time.Millisecond {
-		t.Fatalf("settle across two devices = %v, want the longest at 300ms", settle)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 300*time.Millisecond, time.Duration(settle))
 
 	// A kit with no patches has nothing to settle for either.
 	settle, err = sendKitPatches(&captureMidiWriter{}, NewVoiceBank([]Device{
 		{Name: "drums", MidiPort: "out", Channel: 1, Voices: patchVoices(1), Settle: Settle(time.Second)},
 	}))
-	if err != nil || settle != 0 {
-		t.Fatalf("kit without patches settled for %v (%v), want no wait", settle, err)
-	}
+	require.NoError(t, err)
+	require.Zero(t, settle, "a kit without patches must not make the first note wait")
 }
 
 // A kit says how long in text, so a device can be given time without the kit having to
@@ -497,48 +443,33 @@ func TestSettleIsReadFromTheKitAsText(t *testing.T) {
 		{"null", 0},
 	} {
 		var device Device
-		if err := json.Unmarshal([]byte(`{"Name":"kit","MidiPort":"out","Channel":1,"Settle":`+tc.settle+`}`), &device); err != nil {
-			t.Fatalf("Settle %s was rejected: %v", tc.settle, err)
-		}
-		if device.Settle != tc.want {
-			t.Fatalf("Settle %s = %v, want %v", tc.settle, device.Settle, tc.want)
-		}
+		require.NoErrorf(t, json.Unmarshal([]byte(`{"Name":"kit","MidiPort":"out","Channel":1,"Settle":`+tc.settle+`}`), &device), "Settle %s", tc.settle)
+		require.Equalf(t, tc.want, device.Settle, "Settle %s", tc.settle)
 	}
 	// A value nobody can read is reported rather than taken as no wait, since a settle
 	// that is silently dropped is a first note that sounds the previous patch. A number
 	// counts as unreadable too: nanoseconds are not what a kit is asked to say.
 	for _, settle := range []string{`"soon"`, `100`} {
 		var device Device
-		if err := json.Unmarshal([]byte(`{"Settle":`+settle+`}`), &device); err == nil {
-			t.Fatalf("Settle %s was read as %v", settle, device.Settle)
-		}
+		require.Errorf(t, json.Unmarshal([]byte(`{"Settle":`+settle+`}`), &device), "Settle %s was read as %v", settle, device.Settle)
 	}
 	// A duration that parses but would be waited backwards is a kit mistake, caught when
 	// the kit is validated rather than turned into no wait at playback.
-	if err := validateDevices([]Device{{
+	negative := []Device{{
 		Name: "kit", MidiPort: "out", Channel: 1, Settle: Settle(-time.Second),
 		Voices: []Voice{{Name: "voice", Channel: 1}},
-	}}); err == nil {
-		t.Fatal("a negative settle was accepted")
-	}
+	}}
+	require.Error(t, validateDevices(negative), "a negative settle was accepted")
 	// A kit that is read and written keeps saying what it says in text. Without this a
 	// device's settle marshals as a count of nanoseconds that its own reader rejects, so
 	// a kit written out could not be loaded back.
 	device := Device{Name: "kit", MidiPort: "out", Channel: 1, Settle: Settle(150 * time.Millisecond)}
 	data, err := json.Marshal(device)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"150ms"`) {
-		t.Fatalf("a settle was written as %s, want the text a kit is written in", data)
-	}
+	require.NoError(t, err)
+	require.Containsf(t, string(data), `"150ms"`, "a settle must be written as the text a kit is read from")
 	var reloaded Device
-	if err := json.Unmarshal(data, &reloaded); err != nil {
-		t.Fatalf("a written kit could not be read back: %v", err)
-	}
-	if reloaded.Settle != device.Settle {
-		t.Fatalf("settle came back as %v, want %v", time.Duration(reloaded.Settle), time.Duration(device.Settle))
-	}
+	require.NoError(t, json.Unmarshal(data, &reloaded))
+	require.Equal(t, device.Settle, reloaded.Settle)
 }
 
 // The settle has to hold the first note back, or it is not holding anything back: the
@@ -552,22 +483,17 @@ func TestSettleKeepsTheFirstNoteBack(t *testing.T) {
 
 	writer := &captureMidiWriter{}
 	start := time.Now()
-	playbackStop = bank.startSequencer(writer)
+	bank.controller.playback = bank.startSequencer(writer)
 	// The dump is written before the worker starts, so it is the only thing on the wire
 	// while the instrument loads.
-	if got := len(writer.snapshot()); got != 1 {
-		t.Fatalf("%d messages written at once, want the dump alone", got)
-	}
+	require.Len(t, writer.snapshot(), 1, "only the dump is on the wire while the instrument loads")
 	// A timer never fires early, so a note well before the settle would mean the wait is
 	// not happening at all.
 	writer.waitForEvents(t, 3)
-	if elapsed := time.Since(start); elapsed < time.Duration(device.Settle)/2 {
-		t.Fatalf("the first note arrived after %v, want it held back by the %v settle",
-			elapsed, time.Duration(device.Settle))
-	}
-	if err := stopPlayback(); err != nil {
-		t.Fatal(err)
-	}
+	elapsed := time.Since(start)
+	require.GreaterOrEqualf(t, elapsed, time.Duration(device.Settle)/2,
+		"the first note arrived early, so the settle held nothing back")
+	require.NoError(t, bank.controller.stopPlayback())
 }
 
 // Stopping during the settle must not wait it out: the instrument is still loading and
@@ -583,11 +509,9 @@ func TestStopDuringPatchSettleReturnsPromptly(t *testing.T) {
 	go func() { stopped <- stop() }()
 	select {
 	case err := <-stopped:
-		if err != nil {
-			t.Fatalf("stop reported %v, want the playback to end quietly", err)
-		}
+		require.NoError(t, err, "the playback should end quietly rather than report the settle")
 	case <-time.After(5 * time.Second):
-		t.Fatalf("stop waited out the %v settle", time.Duration(device.Settle))
+		require.FailNowf(t, "stop waited out the settle", "settle = %v", time.Duration(device.Settle))
 	}
 }
 
@@ -598,18 +522,13 @@ func TestUnreadablePatchDoesNotStopPlayback(t *testing.T) {
 	device := patchedDevice(dir, patchFile(t, dir, "patch.mid",
 		channel.Channel(0).ControlChange(74, 90)))
 	bank, _ := quietBank(t, NewVoiceBank([]Device{device}))
-	if err := os.Remove(device.Patch); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Remove(device.Patch))
 
 	writer := &captureMidiWriter{}
-	playbackStop = bank.startSequencer(writer)
-	if playbackStop == nil {
-		t.Fatal("playback did not start")
-	}
-	if err := stopPlayback(); err != nil {
-		t.Fatalf("stop reported the patch failure: %v", err)
-	}
+	bank.controller.playback = bank.startSequencer(writer)
+	require.NotNil(t, bank.controller.playback, "playback did not start")
+	require.NoError(t, bank.controller.stopPlayback(),
+		"an unreadable patch must not be reported as a failure to stop")
 }
 
 // A kit states a channel as 1-16 and the wire counts from zero. The conversion belongs at
@@ -626,16 +545,12 @@ func TestProtocolChannelIsWhereTheKitNumberingEnds(t *testing.T) {
 		{10, 0x99}, // the kit example's drum channel
 		{16, 0x9f}, // the last channel is the last index
 	} {
-		if got := protocolChannel(tc.channel); got != int(tc.wantByte&0x0f) {
-			t.Fatalf("channel %d became index %d, want %d", tc.channel, got, tc.wantByte&0x0f)
-		}
+		wantIndex := int(tc.wantByte & 0x0f)
+		require.Equalf(t, wantIndex, protocolChannel(tc.channel), "channel %d", tc.channel)
 		device := Device{Name: "kit", MidiPort: "out", Channel: 1}
 		voice := &Voice{Name: "v", Channel: tc.channel, device: &device}
 		event := &Event{Voice: voice, ChromaticNote: 60, Velocity: 100}
-		want := []byte{tc.wantByte, 60, 100}
-		if got := event.NoteOnMidi(); string(got) != string(want) {
-			t.Fatalf("channel %d wrote % X, want % X", tc.channel, got, want)
-		}
+		require.Equalf(t, []byte{tc.wantByte, 60, 100}, event.NoteOnMidi(), "channel %d", tc.channel)
 	}
 }
 
@@ -645,9 +560,7 @@ func TestProtocolChannelIsWhereTheKitNumberingEnds(t *testing.T) {
 func TestPatchWithoutAChannelIsNotConfusedWithChannelOne(t *testing.T) {
 	withControllers := []gomidi.Message{channel.Channel(0).ControlChange(74, 90)}
 
-	if patchChannelNone >= 0 {
-		t.Fatalf("the no-channel sentinel is %d, which is inside the 0-15 the protocol numbers channels with", patchChannelNone)
-	}
+	require.Lessf(t, patchChannelNone, 0, "the no-channel sentinel must sit outside the 0-15 the protocol numbers channels with")
 	for _, tc := range []struct {
 		name     string
 		channel  int
@@ -660,20 +573,15 @@ func TestPatchWithoutAChannelIsNotConfusedWithChannelOne(t *testing.T) {
 		{"a patch holding only a dump", 1, []gomidi.Message{patchDump}, patchChannelNone, "none"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := patchChannel(tc.channel, tc.messages); got != tc.want {
-				t.Fatalf("channel index = %d, want %d", got, tc.want)
-			}
-			if got := patchChannelName(tc.want); got != tc.wantName {
-				t.Fatalf("channel logged as %q, want %q", got, tc.wantName)
-			}
+			require.Equal(t, tc.want, patchChannel(tc.channel, tc.messages))
+			require.Equal(t, tc.wantName, patchChannelName(tc.want))
 		})
 	}
 
 	// A channel message with nowhere to go is dropped rather than written as an index of
 	// -1, which would reach whatever is listening on channel 15.
-	if _, ok := patchMessage(withControllers[0], patchChannelNone); ok {
-		t.Fatal("a channel message was encoded with no channel to send it on")
-	}
+	_, ok := patchMessage(withControllers[0], patchChannelNone)
+	require.False(t, ok, "a channel message was encoded with no channel to send it on")
 }
 
 // A relative Patch belongs to the kit that declares it. Falling back to the working
@@ -687,42 +595,25 @@ func TestRelativePatchIsNotTakenFromTheWorkingDirectory(t *testing.T) {
 	working := t.TempDir()
 	decoy := patchFile(t, working, "instrument.mid", channel.Channel(0).ControlChange(75, 20))
 	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(working); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(working))
 	t.Cleanup(func() {
-		if err := os.Chdir(previous); err != nil {
-			t.Errorf("restoring the working directory: %v", err)
-		}
+		assert.NoError(t, os.Chdir(previous), "restoring the working directory")
 	})
 
 	// With the file beside the kit, that is the one played.
 	device := patchedDevice(kitDir, "instrument.mid")
-	if got := resolvePatchPath(&device, device.Patch); got != beside {
-		t.Fatalf("resolved to %q, want the kit's own %q", got, beside)
-	}
-	if err := validateDevices([]Device{device}); err != nil {
-		t.Fatalf("a kit with its patch beside it was rejected: %v", err)
-	}
+	require.Equal(t, beside, resolvePatchPath(&device, device.Patch))
+	require.NoError(t, validateDevices([]Device{device}))
 
 	// With it missing from the kit, the decoy is not substituted: startup says which file
 	// was looked for, so the kit can be fixed.
-	if err := os.Remove(beside); err != nil {
-		t.Fatal(err)
-	}
-	if got := resolvePatchPath(&device, device.Patch); got == decoy {
-		t.Fatalf("resolved to the working directory's %q instead of the kit's", decoy)
-	}
+	require.NoError(t, os.Remove(beside))
+	require.NotEqualf(t, decoy, resolvePatchPath(&device, device.Patch),
+		"the working directory's file of the same name was substituted")
 	err = validateDevices([]Device{device})
-	if err == nil {
-		t.Fatal("a kit missing its patch was accepted because a file of that name stood in the working directory")
-	}
-	if !strings.Contains(err.Error(), beside) {
-		t.Fatalf("error does not name the file that was looked for: %v", err)
-	}
+	require.Error(t, err, "a kit missing its patch was accepted because a file of that name stood in the working directory")
+	require.ErrorContainsf(t, err, beside, "the error must name the file that was looked for")
 }
 
 // A kit's patches do not change while fireloop runs, so each file is read once instead of
@@ -735,19 +626,15 @@ func TestPatchIsReadOnceAndKeptForTheKit(t *testing.T) {
 	want := []alsa.SeqEvent{sentTo([]byte{midi.MakeCC(0), 74, 90})}
 
 	first := &captureMidiWriter{}
-	if _, err := sendKitPatches(first, kit); err != nil {
-		t.Fatal(err)
-	}
+	_, err := sendKitPatches(first, kit)
+	require.NoError(t, err)
 	assertEvents(t, first, want)
 
 	// With the file gone, a second send can only happen from what was already read.
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Remove(path))
 	second := &captureMidiWriter{}
-	if _, err := sendKitPatches(second, kit); err != nil {
-		t.Fatalf("the second send went back to the file: %v", err)
-	}
+	_, err = sendKitPatches(second, kit)
+	require.NoError(t, err, "the second send went back to the file")
 	assertEvents(t, second, want)
 }
 
@@ -756,15 +643,13 @@ func TestPatchIsReadOnceAndKeptForTheKit(t *testing.T) {
 func TestPatchThatCouldNotBeReadIsTriedAgain(t *testing.T) {
 	dir := t.TempDir()
 	kit := NewVoiceBank([]Device{patchedDevice(dir, "later.mid")})
-	if _, err := sendKitPatches(&captureMidiWriter{}, kit); err == nil {
-		t.Fatal("a kit whose patch is not there yet reported nothing")
-	}
+	_, err := sendKitPatches(&captureMidiWriter{}, kit)
+	require.Error(t, err, "a kit whose patch is not there yet reported nothing")
 	patchFile(t, dir, "later.mid", channel.Channel(0).ControlChange(74, 90))
 
 	writer := &captureMidiWriter{}
-	if _, err := sendKitPatches(writer, kit); err != nil {
-		t.Fatalf("the file appeared but the kit still reported it missing: %v", err)
-	}
+	_, err = sendKitPatches(writer, kit)
+	require.NoError(t, err, "the file appeared but the kit still reported it missing")
 	assertEvents(t, writer, []alsa.SeqEvent{sentTo([]byte{midi.MakeCC(0), 74, 90})})
 }
 
@@ -774,25 +659,17 @@ func TestOneBrokenPatchIsReportedOnce(t *testing.T) {
 	dir := t.TempDir()
 	device := patchedDevice(dir, "gone.mid", patchVoices(1, 2, 3, 4, 5, 6)...)
 	_, err := sendKitPatches(&captureMidiWriter{}, NewVoiceBank([]Device{device}))
-	if err == nil {
-		t.Fatal("a kit whose patch is missing sent nothing and reported nothing")
-	}
+	require.Error(t, err, "a kit whose patch is missing sent nothing and reported nothing")
 	// Counted against the path rather than the bare name, so one file whose name ends in
 	// another's does not count as a second mention of it.
-	if got := strings.Count(err.Error(), `/gone.mid"`); got != 1 {
-		t.Fatalf("the missing file is named %d times across %d voices, want once: %v",
-			got, len(device.Voices), err)
-	}
+	require.Equalf(t, 1, strings.Count(err.Error(), `/gone.mid"`),
+		"the missing file is named once across %d voices, not once per voice", len(device.Voices))
 	// Two files that are both broken are two problems, and both have to be visible.
 	second := patchedDevice(dir, "also-gone.mid", patchVoices(1)...)
 	second.Voices = append(second.Voices, Voice{Name: "own", Channel: 2, Patch: "gone.mid"})
 	_, err = sendKitPatches(&captureMidiWriter{}, NewVoiceBank([]Device{device, second}))
-	if err == nil {
-		t.Fatal("two kits with missing patches reported nothing")
-	}
+	require.Error(t, err, "two kits with missing patches reported nothing")
 	for _, name := range []string{`/gone.mid"`, `/also-gone.mid"`} {
-		if got := strings.Count(err.Error(), name); got != 1 {
-			t.Fatalf("%s is named %d times, want once: %v", name, got, err)
-		}
+		require.Equalf(t, 1, strings.Count(err.Error(), name), "%s must be named once", name)
 	}
 }

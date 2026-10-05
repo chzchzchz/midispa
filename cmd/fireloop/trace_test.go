@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // This file models the Fire's display so a button sequence can be replayed and read back
@@ -130,15 +133,21 @@ func (s *fireSim) litLEDs() []string {
 }
 
 // screenRecorder is a text-only display. It stands in for the Fire so a test can read what
-// a row says, without rasterizing glyphs or decoding pixels.
+// a row says, without rasterizing glyphs or decoding pixels. Access is guarded because a
+// save publishes off the event loop and writes its result to the same row the test is
+// polling, so a test that watches for a late report reads and writes at once.
 type screenRecorder struct {
+	mu   sync.Mutex
 	rows [8]string
 }
 
 func (r *screenRecorder) Print(_, row int, text string) error {
-	if row >= 0 && row < len(r.rows) {
-		r.rows[row] = text
+	if row < 0 || row >= len(r.rows) {
+		return nil
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rows[row] = text
 	return nil
 }
 
@@ -147,6 +156,8 @@ func (r *screenRecorder) PrintInvert(col, row int, text string) error {
 }
 
 func (r *screenRecorder) ClearOLEDRows(row, n int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for i := row; i < row+n && i < len(r.rows); i++ {
 		if i >= 0 {
 			r.rows[i] = ""
@@ -159,6 +170,8 @@ func (r *screenRecorder) row(n int) string {
 	if n < 0 || n >= len(r.rows) {
 		return ""
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.rows[n]
 }
 
@@ -179,6 +192,10 @@ type uiStep struct {
 	label string
 	note  int
 	vel   int
+	// until is set on a step whose result arrives late. A save publishes off the event
+	// loop, so the row it reports on is not written by the time the press returns, and a
+	// trace that read it straight away would be describing a moment the user never sees.
+	until func(recorder *screenRecorder) bool
 }
 
 func press(label string, note int) uiStep {
@@ -211,17 +228,12 @@ func (s uiSnapshot) String() string {
 func traceUI(t *testing.T, steps []uiStep) []uiSnapshot {
 	t.Helper()
 	sim := newFireSim()
-	patternBank := NewPatternBank(NewFire(sim.write), trackWindowKit(8, -1))
-	if err := patternBank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	usePatternGlobals(t, patternBank)
+	controller := useController(t, NewFire(sim.write), trackWindowKit(8, -1))
+	patternBank := controller.patbank
 	snapshots := make([]uiSnapshot, 0, len(steps))
 	for _, step := range steps {
 		before := len(sim.writes)
-		if err := processPatternEvent(nil, padMessage(step.note, step.vel)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(patternBank, padMessage(step.note, step.vel)))
 		snapshot := uiSnapshot{
 			label:   step.label,
 			litPads: sim.litPads(),
@@ -249,24 +261,16 @@ func TestTraceBlackoutBlanksTheWholeGrid(t *testing.T) {
 		press("mute 3", NoteMute3),
 	}
 	snapshots := traceUI(t, steps)
-	if snapshots[1].litPads == 0 {
-		t.Fatal("the trace does not start from a lit grid, so it cannot prove a blank")
-	}
+	require.NotZero(t, snapshots[1].litPads, "the trace must start from a lit grid")
 	blackout := snapshots[3]
-	if blackout.litPads != 0 {
-		t.Fatalf("blackout left the grid lit: %v", blackout.litRow)
-	}
-	if len(blackout.litLEDs) != 0 {
-		t.Fatalf("blackout left buttons lit: %v", blackout.litLEDs)
-	}
+	require.Zerof(t, blackout.litPads, "blackout left the grid lit: %v", blackout.litRow)
+	require.Emptyf(t, blackout.litLEDs, "blackout left buttons lit: %v", blackout.litLEDs)
 	// Stop is a real press, so it ends the blackout and then stops playback.
-	if woken := snapshots[4]; woken.litPads == 0 || len(woken.litLEDs) == 0 {
-		t.Fatalf("a press did not wake the blackout: %v", woken)
-	}
+	woken := snapshots[4]
+	require.NotZerof(t, woken.litPads, "a press did not wake the blackout: %v", woken)
+	require.NotEmptyf(t, woken.litLEDs, "a press did not wake the blackout: %v", woken)
 	// The waking press is handled, so the mute selection follows.
-	if after := snapshots[5]; !contains(after.litLEDs, "Mute3=2") {
-		t.Fatalf("the waking press was not handled: %v", after.litLEDs)
-	}
+	assert.Contains(t, snapshots[5].litLEDs, "Mute3=2", "the waking press was not handled")
 }
 
 // A blackout has to survive the buttons being released, which is how the Fire reports
@@ -278,11 +282,9 @@ func TestTraceBlackoutSurvivesButtonReleases(t *testing.T) {
 		release("shift", NoteShift),
 		release("alt", NoteAlt),
 	})
-	if after := snapshots[2]; after.litPads != 0 || len(after.litLEDs) != 0 {
-		t.Fatalf("a release ended the blackout: %v", after)
-	}
-	if after := snapshots[3]; after.litPads != 0 || len(after.litLEDs) != 0 {
-		t.Fatalf("the second release ended the blackout: %v", after)
+	for _, after := range snapshots[2:] {
+		require.Zerof(t, after.litPads, "a release ended the blackout: %v", after)
+		require.Emptyf(t, after.litLEDs, "a release ended the blackout: %v", after)
 	}
 }
 
@@ -298,34 +300,22 @@ func contains(values []string, want string) bool {
 // Tempo entry writes its number on one row. Wiping the whole display made it look like a
 // blackout: the screen went dark while the pads stayed lit.
 func TestTraceTempoEntryOnlyClearsItsRow(t *testing.T) {
-	_, _, sim := recordedBank(t, trackWindowKit(8, -1))
+	bank, _, sim := recordedBank(t, trackWindowKit(8, -1))
 	// Light the grid first, so a later blank could be told from never having been lit.
 	for _, step := range []uiStep{press("select row 1", NoteMute1), press("toggle a step", 54)} {
-		if err := processPatternEvent(nil, padMessage(step.note, step.vel)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, padMessage(step.note, step.vel)))
 	}
-	if sim.litPads() == 0 {
-		t.Fatal("the grid never lit, so the check below cannot prove anything")
-	}
+	require.NotZero(t, sim.litPads(), "the grid never lit, so the checks below prove nothing")
 	sim.resetLog()
 	for _, step := range []uiStep{press("shift", NoteShift), press("pad", 55), press("pad", 56)} {
-		if err := processPatternEvent(nil, padMessage(step.note, step.vel)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, padMessage(step.note, step.vel)))
 	}
 	for _, write := range sim.writes {
 		t.Log(write)
 	}
-	if sim.fullClears != 0 {
-		t.Fatalf("tempo entry wiped the display %d times, want row clears only", sim.fullClears)
-	}
-	if sim.rowClears == 0 {
-		t.Fatal("tempo entry cleared no row, so the number would be drawn over stale text")
-	}
-	if sim.litPads() == 0 {
-		t.Fatal("tempo entry blanked the grid, which a readout should never do")
-	}
+	require.Zerof(t, sim.fullClears, "tempo entry wiped the display, want row clears only")
+	require.NotZerof(t, sim.rowClears, "tempo entry cleared no row, so the number would be drawn over stale text")
+	require.NotZerof(t, sim.litPads(), "tempo entry blanked the grid, which a readout should never do")
 }
 
 // The status line has to show each step's own velocity. Two steps holding different
@@ -335,28 +325,18 @@ func TestTraceStatusShowsEachStepItsOwnVelocity(t *testing.T) {
 	voice := voiceBank.voices[0]
 	bank.CurrentPattern().SetChromaticNote(0, voice, 60, 83)
 	bank.CurrentPattern().SetChromaticNote(4, voice, 62, 99)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
 
 	seen := map[int]string{}
 	for _, step := range []int{0, 4} {
-		if err := bank.setStepCursor(step); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, bank.setStepCursor(step))
 		status := recorder.row(lengthDisplayRow)
 		t.Logf("cursor at step %d -> status %q", step, status)
 		seen[step] = status
 	}
-	if seen[0] == seen[4] {
-		t.Fatalf("two steps with different velocities read the same: %q", seen[0])
-	}
-	if !strings.Contains(seen[0], "@083") {
-		t.Fatalf("status at step 1 = %q, want its own velocity 083", seen[0])
-	}
-	if !strings.Contains(seen[4], "@099") {
-		t.Fatalf("status at step 5 = %q, want its own velocity 099", seen[4])
-	}
+	require.NotEqualf(t, seen[4], seen[0], "two steps with different velocities read the same: %q", seen[0])
+	assert.Containsf(t, seen[0], "@083", "status at step 1 should carry its own velocity")
+	assert.Containsf(t, seen[4], "@099", "status at step 5 should carry its own velocity")
 }
 
 // A step with no note must not display a velocity. The value a new note would inherit is
@@ -365,27 +345,16 @@ func TestTraceEmptyStepShowsNoVelocity(t *testing.T) {
 	bank, voiceBank, recorder := screenBank(t, trackWindowKit(8, 0))
 	voice := voiceBank.voices[0]
 	bank.CurrentPattern().SetChromaticNote(0, voice, 60, 83)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.setStepCursor(0); err != nil {
-		t.Fatal(err)
-	}
-	if status := recorder.row(lengthDisplayRow); !strings.Contains(status, "@083") {
-		t.Fatalf("step 1 status = %q, want its velocity 083", status)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.setStepCursor(0))
+	assert.Contains(t, recorder.row(lengthDisplayRow), "@083", "step 1 should show its own velocity")
+
 	// An empty step must not carry the previous note's velocity on the display.
-	if err := bank.setStepCursor(4); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.setStepCursor(4))
 	empty := recorder.row(lengthDisplayRow)
 	t.Logf("empty step status %q", empty)
-	if strings.Contains(empty, "@") {
-		t.Fatalf("empty step shows a velocity: %q", empty)
-	}
-	if empty != "S05 --" {
-		t.Fatalf("empty step status = %q, want %q", empty, "S05 --")
-	}
+	require.NotContainsf(t, empty, "@", "an empty step shows a velocity: %q", empty)
+	require.Equal(t, "S05 --", empty)
 }
 
 // Moving onto a step with a pad shows that step's velocity without disturbing the encoder.
@@ -395,34 +364,21 @@ func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 83)
 	pattern.SetChromaticNote(4, voice, 62, 99)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
 	// Move onto step 5 by pressing its pad, the way a pad press does.
-	if handled, err := bank.handleChromaticStepPress(0, 4); !handled || err != nil {
-		t.Fatalf("pad move = %v/%v", handled, err)
-	}
+	handled, err := bank.handleChromaticStepPress(0, 4)
+	require.NoErrorf(t, err, "the pad press was not handled (handled=%v)", handled)
+	require.True(t, handled, "the pad press was not handled")
 	// The display reports the step that is now selected.
-	if status := recorder.row(lengthDisplayRow); !strings.Contains(status, "@099") {
-		t.Fatalf("status after a pad move = %q, want @099", status)
-	}
+	assert.Contains(t, recorder.row(lengthDisplayRow), "@099", "status after a pad move")
 	// Re-picking the pitch sets the dynamics from the new press.
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.handleNoteEditPad(nil, 1, 2, 60); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.ToggleNoteMode())
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 2, 60, false))
 	event, ok := pattern.EventAtStep(4, voice)
-	if !ok {
-		t.Fatal("the pitch edit removed the note")
-	}
-	if event.Velocity != 60 {
-		t.Fatalf("velocity after a pitch change = %d, want the new press 60", event.Velocity)
-	}
-	if want, _ := chromaticPaletteNote(1, 2, 0); event.ChromaticNote != want {
-		t.Fatalf("pitch = %d, want the palette note", event.ChromaticNote)
-	}
+	require.True(t, ok, "the pitch edit removed the note")
+	require.Equal(t, 60, event.Velocity, "velocity after a pitch change should be the new press")
+	want, _ := chromaticPaletteNote(1, 2, 0)
+	require.Equal(t, want, event.ChromaticNote, "the pad should choose the palette pitch")
 }
 
 // How hard the palette pad was pressed becomes the note's velocity, and the display
@@ -430,54 +386,35 @@ func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
 func TestTracePressVelocityBecomesTheNotesVelocity(t *testing.T) {
 	bank, voiceBank, recorder := screenBank(t, trackWindowKit(8, 0))
 	voice := voiceBank.voices[0]
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
 	preview := &captureMidiWriter{}
 	for _, pressed := range []int{40, 90} {
-		if err := bank.setStepCursor(0); err != nil {
-			t.Fatal(err)
-		}
-		if err := bank.handleNoteEditPad(preview, 0, 1, pressed); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, bank.setStepCursor(0))
+		require.NoError(t, bank.handleNoteEditPad(preview, 0, 1, pressed, false))
 		event, ok := bank.CurrentPattern().EventAtStep(0, voice)
-		if !ok || event.Velocity != pressed {
-			t.Fatalf("note velocity = %d/%v, want the pad press %d", event.Velocity, ok, pressed)
-		}
-		if status := recorder.row(lengthDisplayRow); !strings.Contains(status, fmt.Sprintf("@%03d", pressed)) {
-			t.Fatalf("status = %q, want the press velocity %03d", status, pressed)
-		}
+		require.Truef(t, ok, "the pad press placed no note (velocity %d)", event.Velocity)
+		require.Equalf(t, pressed, event.Velocity, "the note should carry the pad press")
+		assert.Containsf(t, recorder.row(lengthDisplayRow), fmt.Sprintf("@%03d", pressed),
+			"the status should show the press velocity")
 	}
 	// The audition carries the press velocity too, so what is heard matches what is shown.
 	events := preview.events
-	if len(events) < 4 {
-		t.Fatalf("audition wrote %d messages, want a pair per press", len(events))
-	}
+	require.GreaterOrEqualf(t, len(events), 4, "audition wrote too few messages")
 	last := events[len(events)-2:]
-	if !midi.IsNoteOn(last[0].Data[0]) || last[0].Data[2] != 90 {
-		t.Fatalf("audition note on = %v, want velocity 90", last[0].Data)
-	}
-	if !midi.IsNoteOff(last[1].Data[0]) || last[1].Data[2] != 0 {
-		t.Fatalf("audition note off = %v, want velocity 0", last[1].Data)
-	}
+	require.Truef(t, midi.IsNoteOn(last[0].Data[0]) && last[0].Data[2] == 90,
+		"audition note on = %v, want velocity 90", last[0].Data)
+	require.Truef(t, midi.IsNoteOff(last[1].Data[0]) && last[1].Data[2] == 0,
+		"audition note off = %v, want velocity 0", last[1].Data)
 }
 
 // The two unclaimed buttons reach the state file, and what they did has to be readable on
 // the display rather than only in the log: during a set there is nowhere else to look.
 func TestTraceStateGesturesReportOnTheReadoutRow(t *testing.T) {
 	kit := trackWindowKit(6, 2)
-	fire := NewFire(func([]byte) error { return nil })
-	bank := NewPatternBank(fire, kit)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	songs := NewSongBank(fire, bank)
 	path := filepath.Join(t.TempDir(), "set.json")
-	useStateGlobals(t, path, bank, songs, []string{"kits/gm_drums.json"})
+	controller := useStateController(t, path, NewFire(func([]byte) error { return nil }), kit, []string{"kits/gm_drums.json"})
+	bank := controller.patbank
 	recorder := useScreenRecorder(t, &bank.screen)
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 60, 100)
 
@@ -486,11 +423,19 @@ func TestTraceStateGesturesReportOnTheReadoutRow(t *testing.T) {
 		press("select row 1", NoteMute1),
 		press("browser alone", NoteBrowser),
 		press("shift", NoteShift),
-		press("shift+browser: save", NoteBrowser),
+		{
+			label: "shift+browser: save",
+			note:  NoteBrowser,
+			vel:   100,
+			until: func(r *screenRecorder) bool {
+				return strings.HasPrefix(r.row(lengthDisplayRow), "Saved")
+			},
+		},
 		press("shift+accent: load", NoteAccent),
 	} {
-		if err := processPatternEvent(nil, padMessage(step.note, step.vel)); err != nil {
-			t.Fatal(err)
+		require.NoError(t, dispatch(bank, padMessage(step.note, step.vel)))
+		if step.until != nil {
+			waitFor(t, step.label+" to report", func() bool { return step.until(recorder) })
 		}
 		readout := recorder.row(lengthDisplayRow)
 		t.Logf("%-20s readout %q", step.label, readout)
@@ -499,16 +444,9 @@ func TestTraceStateGesturesReportOnTheReadoutRow(t *testing.T) {
 	// A press of Browser on its own says nothing and writes nothing. What the readout row
 	// already holds is the step status the selection left there, so what the press must not
 	// do is change it.
-	if rows[1] != rows[0] {
-		t.Fatalf("Browser on its own changed the readout from %q to %q, want it untouched",
-			rows[0], rows[1])
-	}
-	if !strings.HasPrefix(rows[3], "Saved") {
-		t.Fatalf("shift+browser reported %q, want the save", rows[3])
-	}
-	if !strings.HasPrefix(rows[4], "Loaded") {
-		t.Fatalf("shift+accent reported %q, want the load", rows[4])
-	}
+	assert.Equalf(t, rows[0], rows[1], "Browser on its own changed the readout")
+	assert.Truef(t, strings.HasPrefix(rows[3], "Saved"), "shift+browser reported %q, want the save", rows[3])
+	assert.Truef(t, strings.HasPrefix(rows[4], "Loaded"), "shift+accent reported %q, want the load", rows[4])
 	// Shift is left engaged by the trace, so the test hands the next one a clean unit.
-	pressPatternButton(t, NoteShift)
+	pressButton(t, bank, NoteShift)
 }

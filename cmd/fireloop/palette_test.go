@@ -6,6 +6,7 @@ import (
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChromaticPaletteAndModeEditing(t *testing.T) {
@@ -14,107 +15,71 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 		writeCount++
 		return nil
 	})
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
-		t.Fatal(err)
-	}
-	if !bank.NoteEditActive() {
-		t.Fatal("Mode did not enter note-edit mode")
-	}
-	if err := handlePatternGrid(nil, 1, 0, 100); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, dispatch(bank, padMessage(NoteMode, 100)))
+	require.True(t, bank.NoteEditActive(), "Mode did not enter note-edit mode")
+	require.NoError(t, bank.controller.handlePatternGrid(nil, 1, 0, 100))
+
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+	require.True(t, ok, "the palette pad placed no note")
 	firstNote, _ := chromaticPaletteNote(0, 1, 0)
-	if !ok || event.ChromaticNote != firstNote {
-		t.Fatalf("palette assignment = %+v/%v", event, ok)
-	}
+	require.Equal(t, firstNote, event.ChromaticNote)
+
 	preview := &captureMidiWriter{}
-	if err := bank.auditionEvent(preview, event); err != nil {
-		t.Fatal(err)
-	}
-	if len(preview.events) != 2 {
-		t.Fatalf("audition wrote %d messages, want 2", len(preview.events))
-	}
+	require.NoError(t, bank.auditionEvent(preview, event))
+	require.Len(t, preview.events, 2)
 	// The palette pad was pressed at pressVelocity, so that is the note's velocity.
 	assertMidiData(t, preview.events[0], []byte{midi.MakeNoteOn(0), byte(firstNote), pressVelocity})
 	assertMidiData(t, preview.events[1], []byte{midi.MakeNoteOff(0), byte(firstNote), 0})
-	if err := processPatternEvent(nil, padMessage(NoteGridRight, 100)); err != nil {
-		t.Fatal(err)
-	}
-	if bank.StepCursor() != 1 {
-		t.Fatalf("grid right moved cursor to %d, want 1", bank.StepCursor())
-	}
-	altOn = true
+
+	require.NoError(t, dispatch(bank, padMessage(NoteGridRight, 100)))
+	require.Equal(t, 1, bank.StepCursor(), "grid right moved the cursor")
+
+	bank.controller.alt = true
 	writeCount = 0
-	if err := handlePatternGrid(nil, 1, 0, 100); err != nil {
-		t.Fatal(err)
-	}
-	if writeCount != 3 {
-		t.Fatalf("Alt clear wrote %d Fire messages, want palette and status writes", writeCount)
-	}
-	if _, ok := bank.CurrentPattern().EventAtStep(1, voice); ok {
-		t.Fatal("Alt plus palette pad did not clear the current-step event")
-	}
-	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); !ok {
-		t.Fatal("Alt plus palette pad cleared a different step")
-	}
+	require.NoError(t, bank.controller.handlePatternGrid(nil, 1, 0, 100))
+	require.Equal(t, 3, writeCount, "Alt clear should write the palette and the status row")
+
+	_, cleared := bank.CurrentPattern().EventAtStep(1, voice)
+	require.False(t, cleared, "Alt plus palette pad did not clear the current-step event")
+	_, kept := bank.CurrentPattern().EventAtStep(0, voice)
+	require.True(t, kept, "Alt plus palette pad cleared a different step")
 }
 
 // The pitch palette is four octaves from A1, twelve semitones to the row, so every row
 // starts on A and the four columns past G# carry no pitch.
 func TestChromaticPaletteLayout(t *testing.T) {
-	if got, _ := chromaticPaletteNote(0, 0, 0); got != 33 {
-		t.Fatalf("first palette note = %d (%s), want A1 at 33", got, midiNoteName(got))
-	}
-	if name := midiNoteName(33); name != "A1" {
-		t.Fatalf("MIDI 33 names as %q, want A1", name)
-	}
-	if chromaticPaletteColumns != 12 || chromaticStepColumns != 4 {
-		t.Fatalf("palette is %d columns with %d for steps, want 12 and 4", chromaticPaletteColumns, chromaticStepColumns)
-	}
-	if chromaticPaletteColumns+chromaticStepColumns != padColumns {
-		t.Fatalf("palette %d plus steps %d does not fill a %d column row",
-			chromaticPaletteColumns, chromaticStepColumns, padColumns)
-	}
-	if chromaticStepCells != maxPatternSteps {
-		t.Fatalf("step block has %d cells, want one per step", chromaticStepCells)
-	}
+	got, _ := chromaticPaletteNote(0, 0, 0)
+	require.Equal(t, 33, got, "the palette should start on A1 at 33")
+	require.Equal(t, "A1", midiNoteName(33), "MIDI 33 should name as A1")
+	require.Equal(t, 12, chromaticPaletteColumns)
+	require.Equal(t, 4, chromaticStepColumns)
+	require.Equal(t, padColumns, chromaticPaletteColumns+chromaticStepColumns,
+		"the palette and the step block together fill a pad row")
+	require.Equal(t, maxPatternSteps, chromaticStepCells, "one step cell per step")
+
 	for row := 0; row < chromaticPaletteRows; row++ {
 		first, ok := chromaticPaletteNote(row, 0, 0)
-		if !ok {
-			t.Fatalf("row %d has no first note", row)
-		}
-		if name := midiNoteName(first); name != fmt.Sprintf("A%d", row+1) {
-			t.Fatalf("row %d starts on %s, want A%d", row, name, row+1)
-		}
+		require.Truef(t, ok, "row %d has no first note", row)
+		require.Equalf(t, fmt.Sprintf("A%d", row+1), midiNoteName(first),
+			"row %d starts on", row)
 		last, ok := chromaticPaletteNote(row, chromaticPaletteColumns-1, 0)
-		if !ok {
-			t.Fatalf("row %d has no last note", row)
-		}
+		require.Truef(t, ok, "row %d has no last note", row)
 		// Twelve semitones from A is a major seventh, so the row ends on the G# above
 		// its starting A: row 0 runs A1 up to G#2.
-		if name := midiNoteName(last); name != fmt.Sprintf("G#%d", row+2) {
-			t.Fatalf("row %d ends on %s, want G#%d", row, name, row+2)
-		}
-		if last-first != 11 {
-			t.Fatalf("row %d spans %d semitones, want the 11 from A to G#", row, last-first)
-		}
+		require.Equalf(t, fmt.Sprintf("G#%d", row+2), midiNoteName(last),
+			"row %d ends on the G# above its A", row)
+		require.Equalf(t, 11, last-first, "row %d spans A to G# in semitones", row)
 		// The columns past the palette have no pitch at all.
 		for _, col := range []int{12, 13, 14, 15} {
-			if note, ok := chromaticPaletteNote(row, col, 0); ok {
-				t.Fatalf("row %d column %d has pitch %d, want none", row, col, note)
-			}
+			note, ok := chromaticPaletteNote(row, col, 0)
+			require.Falsef(t, ok, "row %d column %d carries pitch %d", row, col, note)
 		}
 	}
-	if _, ok := chromaticPaletteNote(-1, 0, 0); ok {
-		t.Fatal("a row above the palette reported a pitch")
-	}
-	if _, ok := chromaticPaletteNote(0, -1, 0); ok {
-		t.Fatal("a column left of the palette reported a pitch")
-	}
+	_, above := chromaticPaletteNote(-1, 0, 0)
+	require.False(t, above, "a row above the palette reported a pitch")
+	_, left := chromaticPaletteNote(0, -1, 0)
+	require.False(t, left, "a column left of the palette reported a pitch")
 }
 
 // paletteTestBank is a bank sitting in note-edit mode on a chromatic track, which is the
@@ -122,12 +87,8 @@ func TestChromaticPaletteLayout(t *testing.T) {
 func paletteTestBank(t *testing.T) (*PatternBank, *Voice, *fireSim) {
 	t.Helper()
 	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
 	return bank, kit.voices[0], sim
 }
 
@@ -142,21 +103,12 @@ func TestSelectKnobIgnoresAValueThatIsNotATurn(t *testing.T) {
 	bank, voice, _ := paletteTestBank(t)
 	voiceBefore := bank.trackVoice(1)
 
-	if err := bank.handleNoteEditPad(nil, 1, 3, pressVelocity); err != nil {
-		t.Fatal(err)
-	}
-	if err := processPatternEvent(nil, selectKnobCC(64)); err != nil {
-		t.Fatal(err)
-	}
-	if bank.paletteOctave != 0 {
-		t.Fatalf("palette octave = %d after a value that is not a turn, want 0", bank.paletteOctave)
-	}
-	if bank.trackVoice(1) != voiceBefore {
-		t.Fatal("a value that is not a turn moved the track's voice")
-	}
-	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); !ok {
-		t.Fatal("the note placed before the stray value is gone")
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
+	require.NoError(t, dispatch(bank, selectKnobCC(64)))
+	require.Equal(t, 0, bank.paletteOctave, "a value that is not a turn shifted the palette")
+	require.Equal(t, voiceBefore, bank.trackVoice(1), "a value that is not a turn moved the voice")
+	_, ok := bank.CurrentPattern().EventAtStep(0, voice)
+	require.True(t, ok, "the note placed before the stray value is gone")
 }
 
 // The SELECT knob is an octave transpose for the palette: it moves which pitches the pads
@@ -165,55 +117,33 @@ func TestSelectKnobShiftsPaletteByOctave(t *testing.T) {
 	bank, voice, _ := paletteTestBank(t)
 	voiceBefore := bank.trackVoice(1)
 
-	if err := bank.handleNoteEditPad(nil, 1, 3, pressVelocity); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
 	first, _ := chromaticPaletteNote(1, 3, 0)
-	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != first {
-		t.Fatalf("palette note = %d, want %d", event.ChromaticNote, first)
-	}
+	event, _ := bank.CurrentPattern().EventAtStep(0, voice)
+	require.Equal(t, first, event.ChromaticNote)
 
-	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
-		t.Fatal(err)
-	}
-	if bank.paletteOctave != 1 {
-		t.Fatalf("palette octave = %d after one detent, want 1", bank.paletteOctave)
-	}
-	if bank.trackVoice(1) != voiceBefore {
-		t.Fatal("the knob moved the track's voice instead of the palette")
-	}
-	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != first {
-		t.Fatalf("stored note = %d after the shift, want it left at %d", event.ChromaticNote, first)
-	}
+	require.NoError(t, dispatch(bank, selectKnobCC(EncoderRight)))
+	require.Equal(t, 1, bank.paletteOctave, "one detent up")
+	require.Equal(t, voiceBefore, bank.trackVoice(1), "the knob moved the voice instead of the palette")
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	require.Equal(t, first, event.ChromaticNote, "the stored note is left where it was")
 
 	// The same pad now reaches the pitch an octave up.
-	if err := bank.handleNoteEditPad(nil, 1, 3, pressVelocity); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
 	up, _ := chromaticPaletteNote(1, 3, bank.paletteOctave)
-	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != up {
-		t.Fatalf("note after shifting up = %d, want %d", event.ChromaticNote, up)
-	}
-	if up != first+chromaticOctaveShift {
-		t.Fatalf("shifted palette note = %d, want an octave above %d", up, first)
-	}
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	require.Equal(t, up, event.ChromaticNote, "the pad reached the shifted pitch")
+	require.Equal(t, first+chromaticOctaveShift, up, "the shift is an octave")
 
 	// And an octave down takes it back past where it started.
 	for range 2 {
-		if err := processPatternEvent(nil, selectKnobCC(EncoderLeft)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, selectKnobCC(EncoderLeft)))
 	}
-	if err := bank.handleNoteEditPad(nil, 1, 3, pressVelocity); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
 	down, _ := chromaticPaletteNote(1, 3, bank.paletteOctave)
-	if event, _ := bank.CurrentPattern().EventAtStep(0, voice); event.ChromaticNote != down {
-		t.Fatalf("note after shifting down = %d, want %d", event.ChromaticNote, down)
-	}
-	if down != first-chromaticOctaveShift {
-		t.Fatalf("lowered palette note = %d, want an octave below %d", down, first)
-	}
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	require.Equal(t, down, event.ChromaticNote, "the pad reached the lowered pitch")
+	require.Equal(t, first-chromaticOctaveShift, down, "the shift down is an octave")
 }
 
 // The palette has to say which octave it is offering, so every pad's colour travels with it
@@ -221,18 +151,12 @@ func TestSelectKnobShiftsPaletteByOctave(t *testing.T) {
 func TestPaletteShiftMovesColours(t *testing.T) {
 	bank, voice, sim := paletteTestBank(t)
 	bank.CurrentPattern().SetChromaticNote(3, voice, 40, pressVelocity)
-	if err := bank.setStepCursor(3); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.drawNotePalette(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.setStepCursor(3))
+	require.NoError(t, bank.drawNotePalette())
 	stepColour := stripCell(sim, 3)
 	before := paletteRegion(sim)
 
-	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, dispatch(bank, selectKnobCC(EncoderRight)))
 	after := paletteRegion(sim)
 	changed := 0
 	for i := range before {
@@ -242,19 +166,12 @@ func TestPaletteShiftMovesColours(t *testing.T) {
 			changed++
 		}
 		note, _ := chromaticPaletteNote(row, col, bank.paletteOctave)
-		if want := chromaticPaletteColor(note); sim.pads[index] != want {
-			t.Fatalf("palette pad row %d col %d = %v, want the shifted pitch colour %v",
-				row, col, sim.pads[index], want)
-		}
+		require.Equalf(t, chromaticPaletteColor(note), sim.pads[index],
+			"palette pad row %d col %d did not take the shifted pitch colour", row, col)
 	}
-	if changed != len(before) {
-		t.Fatalf("%d of %d palette pads changed colour, want the shift visible on all of them",
-			changed, len(before))
-	}
+	require.Equalf(t, len(before), changed, "the shift should be visible on every palette pad")
 	// A note already in the pattern keeps its own colour; only the palette moved.
-	if got := stripCell(sim, 3); got != stepColour {
-		t.Fatalf("step 3 cell = %v after the shift, want the note colour %v", got, stepColour)
-	}
+	require.Equal(t, stepColour, stripCell(sim, 3), "a note in the pattern keeps its own colour")
 }
 
 // A palette below the unshifted base must keep its colours apart instead of collapsing them
@@ -262,22 +179,15 @@ func TestPaletteShiftMovesColours(t *testing.T) {
 func TestPaletteBelowBaseKeepsDistinctColours(t *testing.T) {
 	bank, _, sim := paletteTestBank(t)
 	for range 2 {
-		if err := processPatternEvent(nil, selectKnobCC(EncoderLeft)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, selectKnobCC(EncoderLeft)))
 	}
-	if bank.paletteOctave >= 0 {
-		t.Fatalf("palette octave = %d, want the palette below its base", bank.paletteOctave)
-	}
+	require.Less(t, bank.paletteOctave, 0, "the palette should sit below its base")
 	for row := 0; row < chromaticPaletteRows; row++ {
 		seen := make(map[[3]int]bool, chromaticPaletteColumns)
 		for col := 0; col < chromaticPaletteColumns; col++ {
 			seen[sim.pads[row*padColumns+col]] = true
 		}
-		if len(seen) != chromaticPaletteColumns {
-			t.Fatalf("row %d has %d colours across %d pads, want one each",
-				row, len(seen), chromaticPaletteColumns)
-		}
+		require.Lenf(t, seen, chromaticPaletteColumns, "row %d collapsed two pads onto one colour", row)
 	}
 }
 
@@ -286,35 +196,26 @@ func TestPaletteBelowBaseKeepsDistinctColours(t *testing.T) {
 func TestPaletteOctaveStaysInsideMIDIRange(t *testing.T) {
 	bank, _, _ := paletteTestBank(t)
 	lowest, highest := chromaticOctaveBounds()
-	if lowest != -2 || highest != 3 {
-		t.Fatalf("octave bounds = %d to %d, want -2 to 3 for a palette from A1", lowest, highest)
-	}
+	require.Equal(t, -2, lowest, "a palette from A1 goes two octaves down")
+	require.Equal(t, 3, highest, "a palette from A1 goes three octaves up")
 
 	for _, direction := range []int{EncoderRight, EncoderLeft} {
 		for range 8 {
-			if err := processPatternEvent(nil, selectKnobCC(direction)); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, dispatch(bank, selectKnobCC(direction)))
 		}
 		octave := bank.paletteOctave
 		// Turning further must not move it, or the palette would leave the MIDI range.
-		if err := processPatternEvent(nil, selectKnobCC(direction)); err != nil {
-			t.Fatal(err)
-		}
-		if bank.paletteOctave != octave {
-			t.Fatalf("palette octave = %d after turning past the end, want it held at %d",
-				bank.paletteOctave, octave)
-		}
+		require.NoError(t, dispatch(bank, selectKnobCC(direction)))
+		require.Equalf(t, octave, bank.paletteOctave, "turning past the end moved the octave")
 		base := bank.paletteBase()
 		last, _ := chromaticPaletteNote(chromaticPaletteRows-1, chromaticPaletteColumns-1, octave)
-		if base < 0 || last > midiNoteMax {
-			t.Fatalf("palette spans %d to %d, outside the MIDI range", base, last)
+		require.Falsef(t, base < 0 || last > midiNoteMax,
+			"the palette spans %d to %d, outside the MIDI range", base, last)
+		if direction == EncoderRight {
+			require.Equalf(t, highest, octave, "the palette stopped short of the top")
 		}
-		if direction == EncoderRight && octave != highest {
-			t.Fatalf("palette stopped at octave %d, want the top %d", octave, highest)
-		}
-		if direction == EncoderLeft && octave != lowest {
-			t.Fatalf("palette stopped at octave %d, want the bottom %d", octave, lowest)
+		if direction == EncoderLeft {
+			require.Equalf(t, lowest, octave, "the palette stopped short of the bottom")
 		}
 	}
 }
@@ -322,54 +223,33 @@ func TestPaletteOctaveStaysInsideMIDIRange(t *testing.T) {
 // The erase key is wherever the palette starts, so it moves with the palette.
 func TestPaletteFirstPadErasesAfterShift(t *testing.T) {
 	bank, voice, _ := paletteTestBank(t)
-	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, dispatch(bank, selectKnobCC(EncoderRight)))
 	base := bank.paletteBase()
-	if base == chromaticBaseNote {
-		t.Fatalf("palette base = %d, want it shifted off A1", base)
-	}
+	require.NotEqual(t, chromaticBaseNote, base, "the test needs the palette shifted off A1")
 	// A pad an octave along places the shifted pitch.
-	if err := bank.handleNoteEditPad(nil, 1, 0, pressVelocity); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 0, pressVelocity, false))
 	placed, _ := chromaticPaletteNote(1, 0, bank.paletteOctave)
-	if placed == base {
-		t.Fatalf("the test needs a pad that is not the palette's first one: %d", placed)
-	}
-	if event, ok := bank.CurrentPattern().EventAtStep(0, voice); !ok || event.ChromaticNote != placed {
-		t.Fatalf("note = %d/%v, want the shifted palette pitch %d", event.ChromaticNote, ok, placed)
-	}
+	require.NotEqual(t, base, placed, "the test needs a pad that is not the palette's first one")
+	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+	require.True(t, ok, "the shifted pitch was not placed")
+	require.Equal(t, placed, event.ChromaticNote)
 	// The palette's first pad is the erase key wherever the palette has moved to. Placing
 	// the note above also lifted the guard on that pad, which doubles as the step-one pad.
-	if err := bank.handleNoteEditPad(nil, 0, 0, pressVelocity); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); ok {
-		t.Fatalf("the palette's first pad at %d did not erase", base)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, pressVelocity, false))
+	_, still := bank.CurrentPattern().EventAtStep(0, voice)
+	require.Falsef(t, still, "the palette's first pad at %d did not erase", base)
 }
 
 // Outside note-edit mode the knob is still what chooses the track's voice, and the palette
 // is left where the user put it.
 func TestSelectKnobJogsVoiceOutsideNoteEdit(t *testing.T) {
 	bank, _ := quietBank(t, trackWindowKit(8, 0))
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
 	before := bank.trackVoice(1)
-	if err := processPatternEvent(nil, selectKnobCC(EncoderRight)); err != nil {
-		t.Fatal(err)
-	}
-	if bank.trackVoice(1) == before {
-		t.Fatal("the knob did not jog the track's voice")
-	}
-	if bank.paletteOctave != 0 {
-		t.Fatalf("palette octave = %d outside note-edit mode, want it untouched", bank.paletteOctave)
-	}
-	if bank.NoteEditActive() {
-		t.Fatal("the knob entered note-edit mode")
-	}
+	require.NoError(t, dispatch(bank, selectKnobCC(EncoderRight)))
+	require.NotEqual(t, before, bank.trackVoice(1), "the knob did not jog the track's voice")
+	require.Equal(t, 0, bank.paletteOctave, "the palette is untouched outside note-edit mode")
+	require.False(t, bank.NoteEditActive(), "the knob entered note-edit mode")
 }
 
 // The right-hand block stands for the steps themselves: it reads in the same order as the
@@ -380,109 +260,66 @@ func TestChromaticStepBlockCoversEveryStep(t *testing.T) {
 		for offset := 0; offset < chromaticStepColumns; offset++ {
 			col := chromaticPaletteColumns + offset
 			step := chromaticStepAt(row, col)
-			if step != row*chromaticStepColumns+offset {
-				t.Fatalf("cell row %d offset %d = step %d", row, offset, step)
-			}
-			if step < 0 || step >= maxPatternSteps {
-				t.Fatalf("cell row %d offset %d maps outside the pattern: %d", row, offset, step)
-			}
-			if seen[step] {
-				t.Fatalf("step %d is shown by more than one cell", step)
-			}
+			require.Equalf(t, row*chromaticStepColumns+offset, step, "cell row %d offset %d", row, offset)
+			require.GreaterOrEqualf(t, step, 0, "cell row %d offset %d maps outside the pattern", row, offset)
+			require.Lessf(t, step, maxPatternSteps, "cell row %d offset %d maps outside the pattern", row, offset)
+			require.Falsef(t, seen[step], "step %d is shown by more than one cell", step)
 			seen[step] = true
 		}
 	}
-	if len(seen) != maxPatternSteps {
-		t.Fatalf("the block covers %d steps, want %d", len(seen), maxPatternSteps)
-	}
+	require.Lenf(t, seen, maxPatternSteps, "the block should cover every step exactly once")
 	// The palette side of the grid is not a step.
 	for col := 0; col < chromaticPaletteColumns; col++ {
-		if step := chromaticStepAt(0, col); step >= 0 {
-			t.Fatalf("palette column %d reports step %d", col, step)
-		}
+		require.Negativef(t, chromaticStepAt(0, col), "palette column %d reports a step", col)
 	}
 	for _, pad := range [][2]int{{-1, 12}, {0, -1}, {chromaticPaletteRows, 12}, {0, padColumns}} {
-		if step := chromaticStepAt(pad[0], pad[1]); step >= 0 {
-			t.Fatalf("pad %v reports step %d", pad, step)
-		}
+		require.Negativef(t, chromaticStepAt(pad[0], pad[1]), "pad %v reports a step", pad)
 	}
 }
 
 // Pressing a cell in the step block moves the edit there, and A1 clears the step's note.
 func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
 	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead", Channel: 1}}}})
-	bank := NewPatternBank(fire, voiceBank)
-	if err := bank.Jump(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
+	bank := useController(t, NewFire(func([]byte) error { return nil }), voiceBank).patbank
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
 	voice := voiceBank.voices[0]
 
 	// Put a note on step 5, then select step 5 from the block rather than the grid.
-	if err := bank.setStepCursor(5); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.handleNoteEditPad(nil, 2, 3, 100); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.setStepCursor(0); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.setStepCursor(5))
+	require.NoError(t, bank.handleNoteEditPad(nil, 2, 3, 100, false))
+	require.NoError(t, bank.setStepCursor(0))
 	row, col := 1, chromaticPaletteColumns+1 // step 5
-	if err := bank.handleNoteEditPad(nil, row, col, 100); err != nil {
-		t.Fatal(err)
-	}
-	if bank.StepCursor() != 5 {
-		t.Fatalf("cursor = %d after pressing the step block, want 5", bank.StepCursor())
-	}
-	if _, ok := bank.CurrentPattern().EventAtStep(5, voice); !ok {
-		t.Fatal("the note on step 5 disappeared")
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, row, col, 100, false))
+	require.Equal(t, 5, bank.StepCursor(), "pressing the step block moved the edit")
+	_, ok := bank.CurrentPattern().EventAtStep(5, voice)
+	require.True(t, ok, "the note on step 5 disappeared")
+
 	// Column 5 on the selected row is step 6 in step mode, so that pad is guarded until a
 	// note has been chosen at this step.
 	guarded, _ := bank.CurrentPattern().EventAtStep(5, voice)
-	if err := bank.handleNoteEditPad(nil, 0, 5, 100); err != nil {
-		t.Fatal(err)
-	}
-	if event, _ := bank.CurrentPattern().EventAtStep(5, voice); event.ChromaticNote != guarded.ChromaticNote {
-		t.Fatalf("the step's own pad changed the pitch to %d", event.ChromaticNote)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 5, 100, false))
+	event, _ := bank.CurrentPattern().EventAtStep(5, voice)
+	require.Equal(t, guarded.ChromaticNote, event.ChromaticNote, "the step's own pad rewrote the pitch")
+
 	// Choosing a note elsewhere lifts the guard, and a palette pad then edits step 5.
-	if err := bank.handleNoteEditPad(nil, 1, 3, 100); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, 100, false))
 	chosen, _ := chromaticPaletteNote(1, 3, 0)
-	if event, _ := bank.CurrentPattern().EventAtStep(5, voice); event.ChromaticNote != chosen {
-		t.Fatalf("step 5 pitch = %d, want %d", event.ChromaticNote, chosen)
-	}
-	if err := bank.handleNoteEditPad(nil, 0, 5, 100); err != nil {
-		t.Fatal(err)
-	}
-	event, ok := bank.CurrentPattern().EventAtStep(5, voice)
-	if !ok {
-		t.Fatal("a palette pad stopped editing the selected step")
-	}
+	event, _ = bank.CurrentPattern().EventAtStep(5, voice)
+	require.Equal(t, chosen, event.ChromaticNote, "step 5 pitch after choosing a note")
+
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 5, 100, false))
+	event, ok = bank.CurrentPattern().EventAtStep(5, voice)
+	require.True(t, ok, "a palette pad stopped editing the selected step")
 	want, _ := chromaticPaletteNote(0, 5, 0)
-	if event.ChromaticNote != want {
-		t.Fatalf("step 5 pitch = %d, want the lifted guard to allow %d", event.ChromaticNote, want)
-	}
+	require.Equal(t, want, event.ChromaticNote, "the lifted guard should let the pad through")
 
 	// A1 is the palette's first pad and means no note.
-	if err := bank.handleNoteEditPad(nil, 0, 0, 100); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := bank.CurrentPattern().EventAtStep(5, voice); ok {
-		t.Fatal("A1 did not remove the note")
-	}
-	if _, ok := bank.CurrentPattern().EventAtStep(0, voice); ok {
-		t.Fatal("A1 removed a note from the wrong step")
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, false))
+	_, stillThere := bank.CurrentPattern().EventAtStep(5, voice)
+	require.False(t, stillThere, "A1 did not remove the note")
+	_, elsewhere := bank.CurrentPattern().EventAtStep(0, voice)
+	require.False(t, elsewhere, "A1 removed a note from the wrong step")
 }
 
 // A step cell shows that step's note colour, dark when the step is empty.
@@ -491,28 +328,16 @@ func TestChromaticStepCellsShowNoteColours(t *testing.T) {
 	voice := kit.voices[0]
 	note, _ := chromaticPaletteNote(1, 4, 0)
 	bank.CurrentPattern().SetChromaticNote(6, voice, note, 100)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.setStepCursor(0); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.drawNotePalette(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.setStepCursor(0))
+	require.NoError(t, bank.ToggleNoteMode())
+	require.NoError(t, bank.drawNotePalette())
+
 	row, col := 1, chromaticPaletteColumns+2 // step 6
-	index := row*padColumns + col
-	if sim.pads[index] != chromaticPaletteColor(note) {
-		t.Fatalf("step 6 cell = %v, want the note colour %v", sim.pads[index], chromaticPaletteColor(note))
-	}
+	require.Equal(t, chromaticPaletteColor(note), sim.pads[row*padColumns+col], "the step cell")
 	// An empty step is dark.
 	emptyRow, emptyCol := 0, chromaticPaletteColumns // step 0
-	if sim.pads[emptyRow*padColumns+emptyCol] != [3]int{} {
-		t.Fatalf("empty step cell = %v, want dark", sim.pads[emptyRow*padColumns+emptyCol])
-	}
+	require.Equal(t, [3]int{}, sim.pads[emptyRow*padColumns+emptyCol], "an empty step cell is dark")
 }
 
 // A grid pad is a step selector in step mode and a pitch pad in note-edit mode. Pressing
@@ -523,49 +348,36 @@ func TestPalettePadThatSelectedTheStepIsRefused(t *testing.T) {
 	pattern := bank.CurrentPattern()
 	original := 40 // E2, which the palette pad below would not choose
 	pattern.SetChromaticNote(6, voice, original, 100)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
 	press := func(row, col, vel int) {
-		if err := processPatternEvent(nil, padMessage(54+row*16+col, vel)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, padMessage(54+row*16+col, vel)))
 	}
 	row, col := 0, 6 // the pad that means "step 7" in step mode
 	paletteNote, _ := chromaticPaletteNote(row, col, 0)
-	if paletteNote == original {
-		t.Fatalf("the test needs a palette pad whose pitch differs from %d", original)
-	}
+	require.NotEqual(t, original, paletteNote, "the test needs a pad whose pitch differs")
 
 	// Select the step with that pad in step mode, then release it.
 	press(row, col, 100)
 	press(row, col, 0)
-	if bank.StepCursor() != 6 || bank.NoteEditActive() {
-		t.Fatalf("after the step press: cursor=%d noteEdit=%v", bank.StepCursor(), bank.NoteEditActive())
-	}
+	require.Equal(t, 6, bank.StepCursor(), "the step press moved the cursor")
+	require.False(t, bank.NoteEditActive(), "the step press entered note-edit mode")
+
 	// Enter note selection. The step's note must survive the same pad being pressed.
-	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, dispatch(bank, padMessage(NoteMode, 100)))
 	press(row, col, 100)
 	press(row, col, 0)
 	event, ok := pattern.EventAtStep(6, voice)
-	if !ok || event.ChromaticNote != original {
-		t.Fatalf("note = %d/%v, want the guarded pad to leave it at %d", event.ChromaticNote, ok, original)
-	}
+	require.True(t, ok, "the guarded pad removed the note")
+	require.Equal(t, original, event.ChromaticNote, "the guarded pad rewrote the pitch")
 
 	// Choosing a note lifts the guard, so the same pad is a pitch pad again.
 	press(1, 3, 100)
 	press(1, 3, 0)
 	chosen, _ := pattern.EventAtStep(6, voice)
-	if chosen.ChromaticNote == original {
-		t.Fatal("choosing a note on another pad did nothing")
-	}
+	require.NotEqual(t, original, chosen.ChromaticNote, "choosing a note on another pad did nothing")
 	press(row, col, 100)
 	event, _ = pattern.EventAtStep(6, voice)
-	if event.ChromaticNote != paletteNote {
-		t.Fatalf("note = %d, want the lifted guard to allow the palette pitch %d", event.ChromaticNote, paletteNote)
-	}
+	require.Equal(t, paletteNote, event.ChromaticNote, "the lifted guard should let the palette pitch through")
 }
 
 // The guard belongs to the step it was armed on: moving the cursor lifts it.
@@ -573,39 +385,29 @@ func TestPaletteGuardLiftsWhenTheCursorMoves(t *testing.T) {
 	bank, voice := chromaBank(t)
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(6, voice, 40, 100)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
 	press := func(row, col, vel int) {
-		if err := processPatternEvent(nil, padMessage(54+row*16+col, vel)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, padMessage(54+row*16+col, vel)))
 	}
 	row, col := 0, 6
 	paletteNote, _ := chromaticPaletteNote(row, col, 0)
 
 	press(row, col, 100)
 	press(row, col, 0)
-	if err := processPatternEvent(nil, padMessage(NoteMode, 100)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, dispatch(bank, padMessage(NoteMode, 100)))
 	// The guard holds while the cursor stays on step 7.
 	press(row, col, 100)
 	press(row, col, 0)
-	if event, _ := pattern.EventAtStep(6, voice); event.ChromaticNote != 40 {
-		t.Fatalf("note = %d while the guard should hold, want 40", event.ChromaticNote)
-	}
+	event, _ := pattern.EventAtStep(6, voice)
+	require.Equal(t, 40, event.ChromaticNote, "the guard did not hold while the cursor stayed")
+
 	// Moving to another step lifts it, so the pad is a pitch pad again.
-	if err := bank.MoveStepCursor(2); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.MoveStepCursor(2))
 	press(row, col, 100)
-	if event, _ := pattern.EventAtStep(8, voice); event.ChromaticNote != paletteNote {
-		t.Fatalf("note on the newly selected step = %d, want %d", event.ChromaticNote, paletteNote)
-	}
-	if event, _ := pattern.EventAtStep(6, voice); event.ChromaticNote != 40 {
-		t.Fatalf("the note left behind changed to %d", event.ChromaticNote)
-	}
+	event, _ = pattern.EventAtStep(8, voice)
+	require.Equal(t, paletteNote, event.ChromaticNote, "the newly selected step took the palette pitch")
+	event, _ = pattern.EventAtStep(6, voice)
+	require.Equal(t, 40, event.ChromaticNote, "the note left behind changed")
 }
 
 // The pad standing for step 1 is also A1, the erase key, so the guard has to run before
@@ -614,27 +416,18 @@ func TestStepOnePadDoesNotEraseTheNote(t *testing.T) {
 	bank, voice := chromaBank(t)
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 43, 100) // G2 on step 1
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
 	// The step pad for step 1 is palette (0,0), which is A1.
-	if err := bank.handleNoteEditPad(nil, 0, 0, 100); err != nil {
-		t.Fatal(err)
-	}
-	if event, ok := pattern.EventAtStep(0, voice); !ok || event.ChromaticNote != 43 {
-		t.Fatalf("note = %d/%v, want the step's own pad to leave it at 43", event.ChromaticNote, ok)
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, false))
+	event, ok := pattern.EventAtStep(0, voice)
+	require.True(t, ok, "the step's own pad removed the note")
+	require.Equal(t, 43, event.ChromaticNote, "the step's own pad rewrote the note")
+
 	// Alt on the same pad is a request about the step, so it clears.
-	altOn = true
-	if err := bank.handleNoteEditPad(nil, 0, 0, 100); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := pattern.EventAtStep(0, voice); ok {
-		t.Fatal("Alt on the step pad did not clear the note")
-	}
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, true))
+	_, cleared := pattern.EventAtStep(0, voice)
+	require.False(t, cleared, "Alt on the step pad did not clear the note")
 }
 
 // paletteRegion is the pitch palette as the unit holds it, excluding the step strip.
@@ -665,26 +458,18 @@ func TestNoteEditPlayheadLeavesThePaletteAlone(t *testing.T) {
 	for _, step := range []int{1, 3, 7} {
 		bank.CurrentPattern().SetChromaticNote(step, voice, 36+step, 100)
 	}
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
-	if err := processPatternEvent(nil, padMessage(NotePlay, 100)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
+	require.NoError(t, dispatch(bank, padMessage(NotePlay, 100)))
+
 	before := paletteRegion(sim)
 	for step := 0; step < maxPatternSteps; step++ {
-		if err := patbank.playback.updatePads(stepBeat(step)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, bank.playback.updatePads(stepBeat(step)))
 	}
 	for i, want := range before {
 		row, col := i/chromaticPaletteColumns, i%chromaticPaletteColumns
-		if got := sim.pads[row*padColumns+col]; got != want {
-			t.Fatalf("palette pad row %d col %d changed from %v to %v during playback", row, col, want, got)
-		}
+		require.Equalf(t, want, sim.pads[row*padColumns+col],
+			"palette pad row %d col %d changed during playback", row, col)
 	}
 }
 
@@ -694,38 +479,20 @@ func TestNoteEditPlayheadLightsTheStepStrip(t *testing.T) {
 	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
 	voice := kit.voices[0]
 	bank.CurrentPattern().SetChromaticNote(5, voice, 40, 100)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
-	if err := processPatternEvent(nil, padMessage(NotePlay, 100)); err != nil {
-		t.Fatal(err)
-	}
-	if got := stripCell(sim, 5); got == oledWhite {
-		t.Fatalf("step 5 cell = %v before the playhead arrived, want its note colour", got)
-	}
-	if err := patbank.playback.updatePads(stepBeat(5)); err != nil {
-		t.Fatal(err)
-	}
-	if got := stripCell(sim, 5); got != oledWhite {
-		t.Fatalf("step 5 cell = %v while the playhead is there, want white", got)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
+	require.NoError(t, dispatch(bank, padMessage(NotePlay, 100)))
+
+	require.NotEqual(t, oledWhite, stripCell(sim, 5), "step 5 was lit before the playhead arrived")
+	require.NoError(t, bank.playback.updatePads(stepBeat(5)))
+	require.Equal(t, oledWhite, stripCell(sim, 5), "step 5 while the playhead is there")
+
 	// The step the note is on keeps its colour apart from the playhead.
 	noteColor := chromaticPaletteColor(40)
-	if err := patbank.playback.updatePads(stepBeat(6)); err != nil {
-		t.Fatal(err)
-	}
-	if got := stripCell(sim, 6); got != oledWhite {
-		t.Fatalf("step 6 cell = %v while the playhead is there, want white", got)
-	}
-	if got := stripCell(sim, 5); got == oledWhite {
-		t.Fatal("the cell the playhead left is still lit")
-	}
-	if got := stripCell(sim, 5); got != noteColor {
-		t.Fatalf("step 5 cell = %v after the playhead left, want the note colour %v", got, noteColor)
-	}
+	require.NoError(t, bank.playback.updatePads(stepBeat(6)))
+	require.Equal(t, oledWhite, stripCell(sim, 6), "step 6 while the playhead is there")
+	require.NotEqual(t, oledWhite, stripCell(sim, 5), "the cell the playhead left is still lit")
+	require.Equal(t, noteColor, stripCell(sim, 5), "step 5 after the playhead left")
 }
 
 // Stopping must put the strip back, or a lit cell outlives the playback that put it there.
@@ -733,30 +500,15 @@ func TestNoteEditPlayheadClearsOnStop(t *testing.T) {
 	bank, kit, sim := recordedBank(t, trackWindowKit(8, 0))
 	voice := kit.voices[0]
 	bank.CurrentPattern().SetChromaticNote(5, voice, 40, 100)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
-	if err := processPatternEvent(nil, padMessage(NotePlay, 100)); err != nil {
-		t.Fatal(err)
-	}
-	if err := patbank.playback.updatePads(stepBeat(5)); err != nil {
-		t.Fatal(err)
-	}
-	if got := stripCell(sim, 5); got != oledWhite {
-		t.Fatalf("step 5 cell = %v, want white while playing", got)
-	}
-	if err := stopPlayback(); err != nil {
-		t.Fatal(err)
-	}
-	if got := stripCell(sim, 5); got == oledWhite {
-		t.Fatal("stopping left a strip cell lit")
-	}
-	if got := stripCell(sim, 5); got != chromaticPaletteColor(40) {
-		t.Fatalf("step 5 cell = %v after stopping, want the note colour", got)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
+	require.NoError(t, dispatch(bank, padMessage(NotePlay, 100)))
+	require.NoError(t, bank.playback.updatePads(stepBeat(5)))
+	require.Equal(t, oledWhite, stripCell(sim, 5), "step 5 while playing")
+
+	require.NoError(t, bank.controller.stopPlayback())
+	require.NotEqual(t, oledWhite, stripCell(sim, 5), "stopping left a strip cell lit")
+	require.Equal(t, chromaticPaletteColor(40), stripCell(sim, 5), "step 5 after stopping")
 }
 
 // playheadTestKit is one chromatic voice followed by one percussive voice, so the two
@@ -781,26 +533,14 @@ func TestPlayheadKeepsChromaticPitchColour(t *testing.T) {
 	pitch := chromaticPaletteColor(40)
 	drum := chromaticEventColor(Event{Voice: percussive})
 
-	if err := bank.drawPadColumnInvert(3); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := sim.pads[3], invertColor(pitch); got != want {
-		t.Fatalf("inverted chromatic step = %v, want the inverted pitch colour %v", got, want)
-	}
-	if got, want := sim.pads[3+padColumns], invertColor(drum); got != want {
-		t.Fatalf("inverted percussive step = %v, want %v", got, want)
-	}
+	require.NoError(t, bank.drawPadColumnInvert(3))
+	require.Equal(t, invertColor(pitch), sim.pads[3], "the inverted chromatic step")
+	require.Equal(t, invertColor(drum), sim.pads[3+padColumns], "the inverted percussive step")
 
 	// The column the playhead leaves goes back to the real colours.
-	if err := bank.drawPadColumn(3); err != nil {
-		t.Fatal(err)
-	}
-	if got := sim.pads[3]; got != pitch {
-		t.Fatalf("restored chromatic step = %v, want the pitch colour %v", got, pitch)
-	}
-	if got := sim.pads[3+padColumns]; got != drum {
-		t.Fatalf("restored percussive step = %v, want %v", got, drum)
-	}
+	require.NoError(t, bank.drawPadColumn(3))
+	require.Equal(t, pitch, sim.pads[3], "the restored chromatic step")
+	require.Equal(t, drum, sim.pads[3+padColumns], "the restored percussive step")
 }
 
 // A tie is marked by pushing the colour away from the playhead, which means lifting it
@@ -813,22 +553,14 @@ func TestPlayheadMarksTiesBothWays(t *testing.T) {
 	pattern.SetChromaticNote(5, voice, 43, 100)
 	pattern.TieEventsAtSteps(3, 5, voice)
 
-	if err := bank.drawPadColumn(3); err != nil {
-		t.Fatal(err)
-	}
-	lifted := markTieColor(chromaticPaletteColor(40), false)
-	if got := sim.pads[3]; got != lifted {
-		t.Fatalf("tied step behind the playhead = %v, want the lifted colour %v", got, lifted)
-	}
-	if err := bank.drawPadColumnInvert(3); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.drawPadColumn(3))
+	require.Equal(t, markTieColor(chromaticPaletteColor(40), false), sim.pads[3],
+		"a tied step behind the playhead")
+
+	require.NoError(t, bank.drawPadColumnInvert(3))
 	lowered := markTieColor(invertColor(chromaticPaletteColor(40)), true)
-	if got := sim.pads[3]; got != lowered {
-		t.Fatalf("tied step under the playhead = %v, want the lowered colour %v", got, lowered)
-	}
+	require.Equal(t, lowered, sim.pads[3], "a tied step under the playhead")
 	// The mark has to differ from the unmarked colour in both directions.
-	if lowered == invertColor(chromaticPaletteColor(40)) {
-		t.Fatal("a tie under the playhead is not distinguishable")
-	}
+	require.NotEqual(t, invertColor(chromaticPaletteColor(40)), lowered,
+		"a tie under the playhead is not distinguishable")
 }

@@ -23,10 +23,7 @@ func perfKit() *VoiceBank {
 // on its first step.
 func perfBank(b *testing.B) *PatternBank {
 	b.Helper()
-	bank := NewPatternBank(NewFire(func([]byte) error { return nil }), perfKit())
-	if err := bank.Jump(1); err != nil {
-		b.Fatal(err)
-	}
+	bank := useController(b, NewFire(func([]byte) error { return nil }), perfKit()).patbank
 	pattern := bank.CurrentPattern()
 	for step := 0; step < maxPatternSteps; step++ {
 		for _, voice := range bank.visibleTrackVoices() {

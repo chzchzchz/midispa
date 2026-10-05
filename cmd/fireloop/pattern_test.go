@@ -3,6 +3,8 @@ package main
 import (
 	"sort"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestFindBeat(t *testing.T) {
@@ -19,27 +21,20 @@ func TestFindBeat(t *testing.T) {
 	}{
 		{0, 4}, {1, 4}, {2, 3}, {3, 2}, {4, 1}, {4.1, 0},
 	} {
-		if v := len(p.FindBeat(tt.beat)); v != tt.evs {
-			t.Errorf("test#%d: expected %d, got %d", i, tt.evs, v)
-		}
+		require.Lenf(t, p.FindBeat(tt.beat), tt.evs, "test#%d", i)
 	}
 }
 
 func TestFindBeatReturnsSnapshot(t *testing.T) {
 	p := Pattern{Events: []Event{{Beat: 1, Velocity: 10}}}
 	found := p.FindBeat(0)
-	if len(found) != 1 {
-		t.Fatalf("expected one event, got %d", len(found))
-	}
+	require.Len(t, found, 1)
 	found[0].Beat = 2
 	found[0].Velocity = 20
-	if p.Events[0].Beat != 1 || p.Events[0].Velocity != 10 {
-		t.Fatalf("editing result changed pattern: %+v", p.Events[0])
-	}
+	require.EqualValues(t, 1, p.Events[0].Beat, "editing the result changed the pattern")
+	require.Equal(t, 10, p.Events[0].Velocity, "editing the result changed the pattern")
 	p.ToggleEvent(Event{Beat: 1})
-	if len(found) != 1 {
-		t.Fatalf("editing pattern changed result length: %d", len(found))
-	}
+	require.Len(t, found, 1, "editing the pattern changed the length of the earlier result")
 }
 
 // FindBeat binary searches Events rather than sorting a copy of it, so keeping Events in
@@ -62,9 +57,8 @@ func TestEventsStayInBeatOrder(t *testing.T) {
 		pattern.ToggleEvent(Event{Voice: lead, Beat: stepBeat(step), Velocity: 90})
 	}
 	pattern.ToggleEvent(Event{Voice: snare, Beat: stepBeat(5), Velocity: 90})
-	if _, ok := pattern.SetChromaticNote(7, lead, 60, 90); !ok {
-		t.Fatal("expected step 7 to take the note it just got")
-	}
+	_, took := pattern.SetChromaticNote(7, lead, 60, 90)
+	require.True(t, took, "expected step 7 to take the note it just got")
 	pattern.SetVelocity(7, lead, 100)
 	pattern.RemoveEventAtStep(3, lead)
 	pattern.SetLengthSteps(8)
@@ -82,9 +76,7 @@ func TestEventsStayInBeatOrder(t *testing.T) {
 		{Voice: 0, Step: 7, Note: 60, Velocity: 90},
 		{Voice: 1, Step: 0, Velocity: 90},
 	}}, kit)
-	if dropped != 0 {
-		t.Fatalf("loading dropped %d events, want 0", dropped)
-	}
+	require.Zero(t, dropped, "loading dropped events")
 	assertEventsInBeatOrder(t, "loaded from a file", fromFile)
 
 	bank, _ := quietBank(t, kit)
@@ -93,9 +85,7 @@ func TestEventsStayInBeatOrder(t *testing.T) {
 		{Voice: snare, Beat: stepBeat(2), Velocity: 90},
 		{Voice: lead, Beat: stepBeat(4), Velocity: 90},
 	}}
-	if err := bank.SetPattern(scrambled); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SetPattern(scrambled))
 	assertEventsInBeatOrder(t, "restored into the bank", bank.CurrentPattern())
 }
 
@@ -106,9 +96,8 @@ func assertEventsInBeatOrder(t *testing.T, what string, p *Pattern) {
 	t.Helper()
 	events, _ := p.snapshot()
 	for i := 1; i < len(events); i++ {
-		if events[i].Beat < events[i-1].Beat {
-			t.Fatalf("%s: event %d is at beat %v, after the beat %v of the event before it", what, i, events[i].Beat, events[i-1].Beat)
-		}
+		require.GreaterOrEqualf(t, events[i].Beat, events[i-1].Beat,
+			"%s: event %d sits after the beat of the event before it", what, i)
 	}
 	sorted := append([]Event(nil), events...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Beat < sorted[j].Beat })
@@ -120,14 +109,10 @@ func assertEventsInBeatOrder(t *testing.T, what string, p *Pattern) {
 			}
 		}
 		got := p.FindBeat(beat)
-		if len(got) != len(want) {
-			t.Fatalf("%s: FindBeat(%v) returned %d events, want %d", what, beat, len(got), len(want))
-		}
+		require.Lenf(t, got, len(want), "%s: FindBeat(%v)", what, beat)
 		for i := range got {
-			if got[i].Beat != want[i].Beat || got[i].Voice != want[i].Voice {
-				t.Fatalf("%s: FindBeat(%v) event %d is beat %v voice %v, want beat %v voice %v",
-					what, beat, i, got[i].Beat, got[i].Voice, want[i].Beat, want[i].Voice)
-			}
+			require.Equalf(t, want[i].Beat, got[i].Beat, "%s: FindBeat(%v) event %d", what, beat, i)
+			require.Equalf(t, want[i].Voice, got[i].Voice, "%s: FindBeat(%v) event %d", what, beat, i)
 		}
 	}
 }
@@ -140,30 +125,14 @@ func TestPatternLength(t *testing.T) {
 		{Beat: 3.75},
 		{Beat: 4},
 	}}
-	if got := pattern.LengthSteps(); got != defaultPatternSteps {
-		t.Fatalf("default length = %d, want %d", got, defaultPatternSteps)
-	}
-	if got := pattern.SetLengthSteps(4); got != 4 {
-		t.Fatalf("set length = %d, want 4", got)
-	}
-	if got := pattern.LengthSteps(); got != 4 {
-		t.Fatalf("stored length = %d, want 4", got)
-	}
-	if got := pattern.Beats(); got != 1 {
-		t.Fatalf("length in beats = %v, want 1", got)
-	}
-	if got := len(pattern.Events); got != 2 {
-		t.Fatalf("events after shortening = %d, want 2", got)
-	}
-	if pattern.ToggleEvent(Event{Beat: 1}) {
-		t.Fatal("event at the pattern boundary was accepted")
-	}
-	if got := pattern.SetLengthSteps(0); got != 1 {
-		t.Fatalf("minimum length = %d, want 1", got)
-	}
-	if got := pattern.SetLengthSteps(17); got != maxPatternSteps {
-		t.Fatalf("maximum length = %d, want %d", got, maxPatternSteps)
-	}
+	require.Equal(t, defaultPatternSteps, pattern.LengthSteps())
+	require.Equal(t, 4, pattern.SetLengthSteps(4))
+	require.Equal(t, 4, pattern.LengthSteps())
+	require.EqualValues(t, 1, pattern.Beats())
+	require.Len(t, pattern.Events, 2, "events after shortening")
+	require.False(t, pattern.ToggleEvent(Event{Beat: 1}), "event at the pattern boundary was accepted")
+	require.Equal(t, 1, pattern.SetLengthSteps(0), "the shortest pattern")
+	require.Equal(t, maxPatternSteps, pattern.SetLengthSteps(17), "the longest pattern")
 }
 
 func TestSongUsesVariablePatternLengths(t *testing.T) {
@@ -174,12 +143,10 @@ func TestSongUsesVariablePatternLengths(t *testing.T) {
 	song := &Song{}
 	song.SetPattern(first, 0)
 	song.SetPattern(second, 1)
-	if got := song.IndexToBeat(1); got != 1 {
-		t.Fatalf("second pattern starts at %v beats, want 1", got)
-	}
-	if got, index := song.BeatToPattern(1.25); got != second || index != 1 {
-		t.Fatalf("beat 1.25 resolved to %p/%d, want second/1", got, index)
-	}
+	require.EqualValues(t, 1, song.IndexToBeat(1), "where the second pattern starts, in beats")
+	got, index := song.BeatToPattern(1.25)
+	require.Same(t, second, got)
+	require.Equal(t, 1, index)
 }
 
 func TestSetPatternCopiesEvents(t *testing.T) {
@@ -187,63 +154,44 @@ func TestSetPatternCopiesEvents(t *testing.T) {
 		Channel: 1,
 		Voices:  []Voice{{Name: "voice", Note: testNote(60), Channel: 1}},
 	}})
-	pb := NewPatternBank(NewFire(func([]byte) error { return nil }), vb)
-	if err := pb.Jump(1); err != nil {
-		t.Fatal(err)
-	}
+	pb := useController(t, NewFire(func([]byte) error { return nil }), vb).patbank
 	source := &Pattern{Events: []Event{{Beat: 1}}}
 	source.SetLengthSteps(8)
-	if err := pb.SetPattern(source); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, pb.SetPattern(source))
 	source.Events[0].Beat = 2
 	source.SetLengthSteps(4)
-	if got := pb.Patterns[1].Events[0].Beat; got != 1 {
-		t.Fatalf("pasted pattern changed with source: %v", got)
-	}
-	if got := pb.Patterns[1].LengthSteps(); got != 8 {
-		t.Fatalf("pasted pattern length = %d, want 8", got)
-	}
+	require.EqualValues(t, 1, pb.Patterns[1].Events[0].Beat, "the pasted pattern changed with the source")
+	require.Equal(t, 8, pb.Patterns[1].LengthSteps(), "the pasted pattern length")
 }
 
 func TestChromaticPatternEditingAndTieInvariants(t *testing.T) {
 	voice, _ := chromaticTestVoice(t, nil)
 	pattern := &Pattern{}
 	first, ok := pattern.SetChromaticNote(0, voice, 60, 90)
-	if !ok || first.ChromaticNote != 60 || first.Velocity != 90 {
-		t.Fatalf("first chromatic edit = %+v/%v", first, ok)
-	}
+	require.True(t, ok, "the first chromatic edit reported no event")
+	require.Equal(t, 60, first.ChromaticNote)
+	require.Equal(t, 90, first.Velocity)
 	pattern.SetChromaticNote(1, voice, 62, 91)
 	pattern.SetChromaticNote(2, voice, 64, 92)
-	if pattern.TieEventsAtSteps(0, 2, voice) {
-		t.Fatal("tie crossed an intervening event")
-	}
-	if !pattern.TieEventsAtSteps(1, 0, voice) {
-		t.Fatal("reversed two-pad arrival did not create a tie")
-	}
+	require.False(t, pattern.TieEventsAtSteps(0, 2, voice), "a tie crossed an intervening event")
+	require.True(t, pattern.TieEventsAtSteps(1, 0, voice), "a reversed two-pad arrival did not create a tie")
 	firstEvent, _ := pattern.EventAtStep(0, voice)
-	if !firstEvent.Tie {
-		t.Fatal("tie was not stored on the earlier event")
-	}
+	require.True(t, firstEvent.Tie, "the tie was not stored on the earlier event")
 	pattern.SetChromaticNote(0, voice, 67, 90)
 	firstEvent, _ = pattern.EventAtStep(0, voice)
-	if !firstEvent.Tie || firstEvent.ChromaticNote != 67 {
-		t.Fatalf("pitch edit lost tie: %+v", firstEvent)
-	}
+	require.True(t, firstEvent.Tie, "a pitch edit lost the tie")
+	require.Equal(t, 67, firstEvent.ChromaticNote)
 	copyPattern := pattern.Copy()
 	copyPattern.SetChromaticNote(0, voice, 69, 90)
-	if firstEvent, _ := pattern.EventAtStep(0, voice); firstEvent.ChromaticNote != 67 || !firstEvent.Tie {
-		t.Fatalf("copy shared chromatic state: %+v", firstEvent)
-	}
+	firstEvent, _ = pattern.EventAtStep(0, voice)
+	require.Equal(t, 67, firstEvent.ChromaticNote, "the copy shared its chromatic state")
+	require.True(t, firstEvent.Tie, "the copy shared its chromatic state")
 	pattern.RemoveEventAtStep(1, voice)
 	firstEvent, _ = pattern.EventAtStep(0, voice)
-	if firstEvent.Tie {
-		t.Fatal("removing the target left a dangling tie")
-	}
+	require.False(t, firstEvent.Tie, "removing the target left a dangling tie")
 	pattern.SetChromaticNote(1, voice, 62, 91)
 	pattern.TieEventsAtSteps(0, 1, voice)
 	pattern.SetLengthSteps(1)
-	if firstEvent, _ := pattern.EventAtStep(0, voice); firstEvent.Tie {
-		t.Fatal("shortening left a tie crossing the new end")
-	}
+	firstEvent, _ = pattern.EventAtStep(0, voice)
+	require.False(t, firstEvent.Tie, "shortening left a tie crossing the new end")
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBeatDuration(t *testing.T) {
@@ -21,9 +22,7 @@ func TestBeatDuration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := beatDuration(tt.bpm); got != tt.want {
-				t.Fatalf("beatDuration(%d) = %s, want %s", tt.bpm, got, tt.want)
-			}
+			require.Equal(t, tt.want, beatDuration(tt.bpm), "beatDuration(%d)", tt.bpm)
 		})
 	}
 }
@@ -47,9 +46,7 @@ func TestPlaybackStopReturnsRunError(t *testing.T) {
 	expected := errors.New("start failed")
 	playback := &Playback{}
 	stop := playback.start(&failingSequencerWriter{portErr: expected})
-	if err := stop(); !errors.Is(err, expected) {
-		t.Fatalf("stop error = %v, want %v", err, expected)
-	}
+	require.ErrorIs(t, stop(), expected)
 }
 
 func TestPlaybackReturnsEventErrorAndStops(t *testing.T) {
@@ -60,12 +57,10 @@ func TestPlaybackReturnsEventErrorAndStops(t *testing.T) {
 	writer := &failingSequencerWriter{err: expected}
 	playback := &Playback{nextPattern: func(float32) *Pattern { return pattern }}
 	stop := playback.start(writer)
-	if err := stop(); !errors.Is(err, expected) {
-		t.Fatalf("stop error = %v, want %v", err, expected)
-	}
-	if len(writer.port) != 2 || writer.port[0].Data[0] != midi.Start || writer.port[1].Data[0] != midi.Stop {
-		t.Fatalf("sync messages = %v, want Start then Stop", writer.port)
-	}
+	require.ErrorIs(t, stop(), expected)
+	require.Len(t, writer.port, 2, "the sync port takes a Start and a Stop")
+	require.Equal(t, byte(midi.Start), writer.port[0].Data[0])
+	require.Equal(t, byte(midi.Stop), writer.port[1].Data[0])
 }
 
 func TestBPMAtomicAccess(t *testing.T) {
@@ -84,9 +79,7 @@ func TestBPMAtomicAccess(t *testing.T) {
 		_ = currentBPM()
 	}
 	<-done
-	if got := currentBPM(); got != 120 {
-		t.Fatalf("BPM = %d, want 120", got)
-	}
+	require.Equal(t, 120, currentBPM())
 }
 
 func TestPatternDuration(t *testing.T) {
@@ -94,12 +87,8 @@ func TestPatternDuration(t *testing.T) {
 	short.SetLengthSteps(4)
 	long := &Pattern{}
 	long.SetLengthSteps(8)
-	if got := patternDuration(short, 120); got != 500*time.Millisecond {
-		t.Fatalf("one-beat pattern duration = %s, want 500ms", got)
-	}
-	if got := patternDuration(long, 120); got != time.Second {
-		t.Fatalf("two-beat pattern duration = %s, want 1s", got)
-	}
+	require.Equal(t, 500*time.Millisecond, patternDuration(short, 120), "one-beat pattern duration")
+	require.Equal(t, time.Second, patternDuration(long, 120), "two-beat pattern duration")
 }
 
 // A percussive step plays back with the dynamics it holds, which is the whole point of
@@ -113,15 +102,13 @@ func TestPercussionPlaybackHonoursTheStoredVelocity(t *testing.T) {
 	writer := &captureMidiWriter{}
 	playback := &Playback{}
 	playback.setPosition(0, 0)
-	if _, err := playback.playBeat(writer, pattern); err != nil {
-		t.Fatal(err)
-	}
+	_, err := playback.playBeat(writer, pattern)
+	require.NoError(t, err)
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), byte(note), 40})
 	writer.events = nil
 	playback.setPosition(stepBeat(4), stepBeat(4))
-	if _, err := playback.playBeat(writer, pattern); err != nil {
-		t.Fatal(err)
-	}
+	_, err = playback.playBeat(writer, pattern)
+	require.NoError(t, err)
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), byte(note), 100})
 }
 
@@ -130,44 +117,26 @@ func TestChromaticMIDIOrderingAndCleanup(t *testing.T) {
 	writer := &captureMidiWriter{}
 	playback := &Playback{}
 	first := Event{Voice: voice, ChromaticNote: 60, Velocity: 77, Tie: true}
-	if err := playback.playChromaticEvent(writer, first); err != nil {
-		t.Fatal(err)
-	}
-	if len(writer.events) != 1 {
-		t.Fatalf("first event wrote %d messages, want 1", len(writer.events))
-	}
+	require.NoError(t, playback.playChromaticEvent(writer, first))
+	require.Len(t, writer.events, 1)
 	assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 60, 77})
 	second := Event{Voice: voice, ChromaticNote: 60, Velocity: 78, Tie: true}
-	if err := playback.playChromaticEvent(writer, second); err != nil {
-		t.Fatal(err)
-	}
-	if len(writer.events) != 1 {
-		t.Fatalf("same-pitch tie wrote %d messages, want 1", len(writer.events))
-	}
+	require.NoError(t, playback.playChromaticEvent(writer, second))
+	require.Len(t, writer.events, 1, "a same-pitch tie writes nothing more")
 	third := Event{Voice: voice, ChromaticNote: 62, Velocity: 79, Tie: true}
-	if err := playback.playChromaticEvent(writer, third); err != nil {
-		t.Fatal(err)
-	}
-	if len(writer.events) != 3 {
-		t.Fatalf("different-pitch tie wrote %d messages, want 3", len(writer.events))
-	}
+	require.NoError(t, playback.playChromaticEvent(writer, third))
+	require.Len(t, writer.events, 3, "a different-pitch tie retriggers")
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), 62, 79})
 	assertMidiData(t, writer.events[2], []byte{midi.MakeNoteOff(0), 60, 0})
-	if err := playback.releaseAll(writer); err != nil {
-		t.Fatal(err)
-	}
-	if len(writer.events) != 4 {
-		t.Fatalf("cleanup wrote %d messages, want 4", len(writer.events))
-	}
+	require.NoError(t, playback.releaseAll(writer))
+	require.Len(t, writer.events, 4, "cleanup releases the note left sounding")
 	assertMidiData(t, writer.events[3], []byte{midi.MakeNoteOff(0), 62, 0})
 
 	percussionNote := 60
 	percussion, _ := chromaticTestVoice(t, &percussionNote)
 	percussionEvent := Event{Voice: percussion, Velocity: 55}
 	messages := percussionEvent.ToMidi()
-	if len(messages) != 2 {
-		t.Fatalf("percussion ToMidi returned %d messages, want 2", len(messages))
-	}
+	require.Len(t, messages, 2, "a percussive event is a note-off and a note-on")
 	assertMidiData(t, alsa.SeqEvent{Data: messages[0]}, []byte{midi.MakeNoteOff(0), 60, 55})
 	assertMidiData(t, alsa.SeqEvent{Data: messages[1]}, []byte{midi.MakeNoteOn(0), 60, 55})
 }
@@ -191,12 +160,9 @@ func TestMixedPercussiveAndChromaticPlayback(t *testing.T) {
 	writer := &captureMidiWriter{}
 	playback := &Playback{}
 	playback.setPosition(0, 0)
-	if _, err := playback.playBeat(writer, pattern); err != nil {
-		t.Fatal(err)
-	}
-	if len(writer.events) != 3 {
-		t.Fatalf("mixed pattern wrote %d messages, want 3", len(writer.events))
-	}
+	_, err := playback.playBeat(writer, pattern)
+	require.NoError(t, err)
+	require.Len(t, writer.events, 3)
 	var chromaticOn, percussionOff, percussionOn bool
 	for _, event := range writer.events {
 		switch midi.Message(event.Data[0]) {
@@ -210,32 +176,21 @@ func TestMixedPercussiveAndChromaticPlayback(t *testing.T) {
 			percussionOff = true
 		}
 	}
-	if !chromaticOn || !percussionOff || !percussionOn {
-		t.Fatalf("mixed MIDI types missing: chromatic=%v off=%v on=%v", chromaticOn, percussionOff, percussionOn)
-	}
+	require.True(t, chromaticOn, "the chromatic note-on is missing")
+	require.True(t, percussionOff, "the percussive note-off is missing")
+	require.True(t, percussionOn, "the percussive note-on is missing")
 }
 
 func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 	voice, _ := chromaticTestVoice(t, nil)
 	writer := &captureMidiWriter{}
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
-	if err := playback.playChromaticEvent(writer, Event{Voice: voice, ChromaticNote: 72, Velocity: 88}); err != nil {
-		t.Fatal(err)
-	}
-	previousPatbank, previousSongbank, previousCancel := patbank, songbank, playbackStop
-	t.Cleanup(func() {
-		patbank, songbank, playbackStop = previousPatbank, previousSongbank, previousCancel
-	})
-	patbank = &PatternBank{playback: playback}
-	songbank = nil
-	playbackStop = nil
-	stopPlayback()
-	if playback.activeNoteCount() != 0 {
-		t.Fatal("stop left an active chromatic note")
-	}
-	if len(writer.events) != 2 {
-		t.Fatalf("stop wrote %d messages, want note-on and note-off", len(writer.events))
-	}
+	require.NoError(t, playback.playChromaticEvent(writer, Event{Voice: voice, ChromaticNote: 72, Velocity: 88}))
+	controller := useController(t, NewFire(func([]byte) error { return nil }), stateKit())
+	controller.patbank.playback = playback
+	controller.stopPlayback()
+	require.Zero(t, playback.activeNoteCount(), "stop left an active chromatic note")
+	require.Len(t, writer.events, 2, "stop writes a note-on and a note-off")
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOff(0), 72, 0})
 }
 
@@ -261,10 +216,8 @@ func TestNextEventBeat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := nextEventBeat(tt.patBeat, tt.nextBeat, tt.patternBeats); got != tt.want {
-				t.Fatalf("nextEventBeat(%v, %v, %v) = %v, want %v",
-					tt.patBeat, tt.nextBeat, tt.patternBeats, got, tt.want)
-			}
+			require.Equal(t, tt.want, nextEventBeat(tt.patBeat, tt.nextBeat, tt.patternBeats),
+				"nextEventBeat(%v, %v, %v)", tt.patBeat, tt.nextBeat, tt.patternBeats)
 		})
 	}
 }

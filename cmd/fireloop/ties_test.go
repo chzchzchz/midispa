@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChromaticPadGesturesAndReleases(t *testing.T) {
@@ -14,79 +15,57 @@ func TestChromaticPadGesturesAndReleases(t *testing.T) {
 		writeCount++
 		return nil
 	})
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 100)
 	pattern.SetChromaticNote(1, voice, 62, 100)
 	pattern.SetChromaticNote(2, voice, 64, 100)
-	if handled, err := bank.handleChromaticStepPress(0, 0); !handled || err != nil {
-		t.Fatalf("first pad press = %v/%v", handled, err)
-	}
+	handled, err := bank.handleChromaticStepPress(0, 0)
+	require.NoErrorf(t, err, "the first pad press failed (handled=%v)", handled)
+	require.True(t, handled, "the first pad press was not handled")
 	writeCount = 0
-	if handled, err := bank.handleChromaticStepPress(0, 1); !handled || err != nil {
-		t.Fatalf("second pad press = %v/%v", handled, err)
-	}
-	if writeCount != 6 {
-		t.Fatalf("tie gesture wrote %d Fire messages, want row and status redraws", writeCount)
-	}
-	if event, _ := pattern.EventAtStep(0, voice); !event.Tie {
-		t.Fatal("two held pads did not tie adjacent events")
-	}
+	handled, err = bank.handleChromaticStepPress(0, 1)
+	require.NoErrorf(t, err, "the second pad press failed (handled=%v)", handled)
+	require.True(t, handled, "the second pad press was not handled")
+	require.Equal(t, 6, writeCount, "a tie gesture should write the row and status redraws")
+	event, _ := pattern.EventAtStep(0, voice)
+	require.True(t, event.Tie, "two held pads did not tie adjacent events")
 	bank.releasePad(0, 0)
 	bank.releasePad(0, 1)
-	if bank.pressedPads != 0 || bank.rowPadMasks[0] != 0 {
-		t.Fatalf("pad state did not clear on release: held=%x row=%x", bank.pressedPads, bank.rowPadMasks[0])
-	}
+	require.Zero(t, bank.pressedPads, "a release should clear the held pads")
+	require.Zero(t, bank.rowPadMasks[0], "a release should clear the row mask")
 
 	bank.clearPadState()
 	pattern.UntieEventsAtSteps(0, 1, voice)
-	if handled, _ := bank.handleChromaticStepPress(0, 0); !handled {
-		t.Fatal("selected chromatic row was not handled")
-	}
-	if handled, _ := bank.handleChromaticStepPress(1, 1); !handled {
-		t.Fatal("cross-row gesture was not handled as a gesture")
-	}
-	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
-		t.Fatal("cross-row gesture created a tie")
-	}
+	handled, _ = bank.handleChromaticStepPress(0, 0)
+	require.True(t, handled, "the selected chromatic row was not handled")
+	handled, _ = bank.handleChromaticStepPress(1, 1)
+	require.True(t, handled, "a cross-row gesture was not handled as a gesture")
+	event, _ = pattern.EventAtStep(0, voice)
+	require.False(t, event.Tie, "a cross-row gesture created a tie")
 	pattern.TieEventsAtSteps(0, 1, voice)
 	bank.clearPadState()
-	if handled, _ := bank.handleChromaticStepPress(0, 2); !handled {
-		t.Fatal("third selected-row pad was not handled")
-	}
-	if event, _ := pattern.EventAtStep(0, voice); !event.Tie {
-		t.Fatal("third held pad removed the completed tie")
-	}
+	handled, _ = bank.handleChromaticStepPress(0, 2)
+	require.True(t, handled, "the third selected-row pad was not handled")
+	event, _ = pattern.EventAtStep(0, voice)
+	require.True(t, event.Tie, "a third held pad removed the completed tie")
 
 	bank.clearPadState()
 	empty := &Pattern{}
 	bank.Patterns[bank.selPatIdx] = empty
 	bank.handleChromaticStepPress(0, 0)
 	bank.handleChromaticStepPress(0, 1)
-	if len(empty.Events) != 0 {
-		t.Fatal("empty chromatic steps created events")
-	}
+	require.Empty(t, empty.Events, "empty chromatic steps created events")
 
 	bank.clearPadState()
 	bank.handleChromaticStepPress(0, 0)
-	previousPatbank := patbank
-	patbank = bank
-	t.Cleanup(func() { patbank = previousPatbank })
-	if err := processPatternEvent(nil, releaseMessage(54)); err != nil {
-		t.Fatal(err)
-	}
-	if bank.pressedPads != 0 || bank.rowPadMasks[0] != 0 {
-		t.Fatal("NoteOff was not treated as a release")
-	}
+	require.NoError(t, dispatch(bank, releaseMessage(54)))
+	require.Zero(t, bank.pressedPads, "NoteOff was not treated as a release")
+	require.Zero(t, bank.rowPadMasks[0], "NoteOff was not treated as a release")
 	bank.handleChromaticStepPress(0, 0)
-	if err := processPatternEvent(nil, padMessage(54, 0)); err != nil {
-		t.Fatal(err)
-	}
-	if bank.pressedPads != 0 || bank.rowPadMasks[0] != 0 {
-		t.Fatal("NoteOn velocity zero was not treated as a release")
-	}
+	require.NoError(t, dispatch(bank, padMessage(54, 0)))
+	require.Zero(t, bank.pressedPads, "a NoteOn of velocity zero was not treated as a release")
+	require.Zero(t, bank.rowPadMasks[0], "a NoteOn of velocity zero was not treated as a release")
 }
 
 // stepCellPad is the grid pad note of the strip cell standing for a step, which is where the
@@ -107,59 +86,40 @@ func TestNoteEditStepCellsTieSteps(t *testing.T) {
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, voice, 60, 100)
 	pattern.SetChromaticNote(3, voice, 64, 100)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
 	// Hold the cell for step 1, then press the cell for step 4 without letting go.
 	press := func(step, velocity int) {
-		if err := processPatternEvent(nil, padMessage(stepCellPad(step), velocity)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, padMessage(stepCellPad(step), velocity)))
 	}
 	press(0, 100)
 	press(3, 100)
 	first, _ := pattern.EventAtStep(0, voice)
 	second, _ := pattern.EventAtStep(3, voice)
-	if !first.Tie {
-		t.Fatalf("two held cells did not tie step 1 to step 4: %+v", first)
-	}
-	if second.Tie {
-		t.Fatal("the tie landed on the later event as well")
-	}
+	require.Truef(t, first.Tie, "two held cells did not tie step 1 to step 4: %+v", first)
+	require.False(t, second.Tie, "the tie landed on the later event as well")
 	// The edit stays on the step it came from, which is what a tie is holding.
-	if bank.StepCursor() != 0 {
-		t.Fatalf("the tie moved the edit to step %d", bank.StepCursor()+1)
-	}
+	require.Equal(t, 0, bank.StepCursor(), "the tie moved the edit")
 	// Letting go of both ends the gesture.
 	press(0, 0)
 	press(3, 0)
-	if bank.noteEditHeldStep != noHeldStep {
-		t.Fatalf("held step = %d after releasing the cells", bank.noteEditHeldStep)
-	}
+	require.Equalf(t, noHeldStep, bank.noteEditHeldStep, "held step after releasing the cells")
 
 	// The tie is what the pattern plays back: the first note sounds until the tied step.
 	writer := &captureMidiWriter{}
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	for step := 0; step < 5; step++ {
 		playback.setPosition(stepBeat(step), stepBeat(step))
-		if _, err := playback.playBeat(writer, pattern); err != nil {
-			t.Fatal(err)
-		}
+		_, err := playback.playBeat(writer, pattern)
+		require.NoError(t, err)
 		switch step {
 		case 0:
 			// The tie starts the note and nothing releases it afterwards on its own.
 			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 60, 100})
-			if len(writer.events) != 1 {
-				t.Fatalf("step 1 wrote %d messages, want only the note-on", len(writer.events))
-			}
+			require.Lenf(t, writer.events, 1, "step 1 should write only the note-on")
 		case 1, 2:
 			// The gap the tie covers: silence on the wire, not a note-off.
-			if len(writer.events) != 0 {
-				t.Fatalf("step %d wrote %d messages, want none while the note is held", step+1, len(writer.events))
-			}
+			require.Lenf(t, writer.events, 0, "step %d should write nothing while the note is held", step+1)
 		case 3:
 			// Legato into the tied step: the next note starts before the first stops.
 			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 64, 100})
@@ -180,56 +140,39 @@ func TestNoteEditTieGestureRefusesWhenItCannotTie(t *testing.T) {
 	pattern.SetChromaticNote(0, voice, 60, 100)
 	pattern.SetChromaticNote(4, voice, 64, 100)
 	pattern.SetChromaticNote(6, voice, 65, 100)
-	if err := bank.SelectTrackRow(1); err != nil {
-		t.Fatal(err)
-	}
-	if err := bank.ToggleNoteMode(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
 	press := func(step, velocity int) {
-		if err := processPatternEvent(nil, padMessage(stepCellPad(step), velocity)); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, dispatch(bank, padMessage(stepCellPad(step), velocity)))
 	}
 
 	// A cell on its own just moves the edit.
 	press(0, 100)
-	if bank.StepCursor() != 0 {
-		t.Fatalf("the first cell press moved the edit to step %d", bank.StepCursor()+1)
-	}
-	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
-		t.Fatal("one cell press tied a step")
-	}
+	require.Equal(t, 0, bank.StepCursor(), "the first cell press moved the edit")
+	event, _ := pattern.EventAtStep(0, voice)
+	require.False(t, event.Tie, "one cell press tied a step")
 	// Step 3 holds no note, so there is nothing for step 1 to hold on to.
 	press(3, 100)
-	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
-		t.Fatal("a step with no note was tied")
-	}
-	if bank.StepCursor() != 0 {
-		t.Fatalf("a refused tie moved the edit to step %d", bank.StepCursor()+1)
-	}
+	event, _ = pattern.EventAtStep(0, voice)
+	require.False(t, event.Tie, "a step with no note was tied")
+	require.Equal(t, 0, bank.StepCursor(), "a refused tie moved the edit")
 	// Step 5 would tie step 1 to step 7, but step 5's own note sits between them, and
 	// tying across it would make that note unreachable. Refused, so the edit stays put.
 	press(0, 0)
 	press(6, 100)
-	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
-		t.Fatal("a tie crossed an intervening note")
-	}
-	if bank.StepCursor() != 0 {
-		t.Fatalf("a refused tie moved the edit to step %d", bank.StepCursor()+1)
-	}
-	if event, _ := pattern.EventAtStep(4, voice); event.Tie {
-		t.Fatal("a refused tie landed on the wrong event")
-	}
+	event, _ = pattern.EventAtStep(0, voice)
+	require.False(t, event.Tie, "a tie crossed an intervening note")
+	require.Equal(t, 0, bank.StepCursor(), "a refused tie moved the edit")
+	event, _ = pattern.EventAtStep(4, voice)
+	require.False(t, event.Tie, "a refused tie landed on the wrong event")
 	// Releasing between presses ends the gesture, so two separate presses never tie.
 	press(4, 0)
 	press(0, 100)
 	press(1, 100)
 	press(1, 0)
 	press(0, 0)
-	if event, _ := pattern.EventAtStep(0, voice); event.Tie {
-		t.Fatal("a released cell still took part in the gesture")
-	}
+	event, _ = pattern.EventAtStep(0, voice)
+	require.False(t, event.Tie, "a released cell still took part in the gesture")
 }
 
 // A tie between two notes of the same pitch reuses the sounding note, so the tied step sends
@@ -242,12 +185,8 @@ func TestSamePitchTieSendsOneNoteOnAcrossTheChain(t *testing.T) {
 	for _, step := range []int{0, 3, 6} {
 		pattern.SetChromaticNote(step, voice, 60, 100)
 	}
-	if !pattern.TieEventsAtSteps(0, 3, voice) {
-		t.Fatal("tie 1-4 refused")
-	}
-	if !pattern.TieEventsAtSteps(3, 6, voice) {
-		t.Fatal("tie 4-7 refused")
-	}
+	require.True(t, pattern.TieEventsAtSteps(0, 3, voice), "tie 1-4 refused")
+	require.True(t, pattern.TieEventsAtSteps(3, 6, voice), "tie 4-7 refused")
 	// Each tied step extends the note by one more step, so the chain covers steps 1 to 7 and
 	// the note stops at step 8.
 	want := map[int][]string{
@@ -289,9 +228,8 @@ func assertChromaticSteps(t *testing.T, voice *Voice, pattern *Pattern, want map
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	for step := 0; step < len(want); step++ {
 		playback.setPosition(stepBeat(step), stepBeat(step))
-		if _, err := playback.playBeat(writer, pattern); err != nil {
-			t.Fatal(err)
-		}
+		_, err := playback.playBeat(writer, pattern)
+		require.NoError(t, err)
 		var got []string
 		for _, event := range writer.events {
 			kind := "on"
@@ -300,10 +238,8 @@ func assertChromaticSteps(t *testing.T, voice *Voice, pattern *Pattern, want map
 			}
 			got = append(got, fmt.Sprintf("%s %d", kind, event.Data[1]))
 		}
-		if strings.Join(got, ", ") != strings.Join(want[step], ", ") {
-			t.Fatalf("step %d wrote [%s], want [%s]", step+1,
-				strings.Join(got, ", "), strings.Join(want[step], ", "))
-		}
+		require.Equalf(t, strings.Join(want[step], ", "), strings.Join(got, ", "),
+			"step %d wrote the wrong messages", step+1)
 		writer.events = nil
 	}
 }
@@ -316,33 +252,24 @@ func TestSamePitchTieKeepsTheFirstVelocity(t *testing.T) {
 	pattern := &Pattern{}
 	pattern.SetChromaticNote(0, voice, 60, 40)
 	pattern.SetChromaticNote(3, voice, 60, midi.DataMax)
-	if !pattern.TieEventsAtSteps(0, 3, voice) {
-		t.Fatal("tie 1-4 refused")
-	}
+	require.True(t, pattern.TieEventsAtSteps(0, 3, voice), "tie 1-4 refused")
 	writer := &captureMidiWriter{}
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	for step := 0; step <= 4; step++ {
 		playback.setPosition(stepBeat(step), stepBeat(step))
-		if _, err := playback.playBeat(writer, pattern); err != nil {
-			t.Fatal(err)
-		}
+		_, err := playback.playBeat(writer, pattern)
+		require.NoError(t, err)
 		switch step {
 		case 0:
 			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOn(0), 60, 40})
-			if len(writer.events) != 1 {
-				t.Fatalf("step 1 wrote %d messages, want only the note-on", len(writer.events))
-			}
+			require.Len(t, writer.events, 1, "step 1 should write only the note-on")
 		case 3:
 			// The tied step is silent on the wire, so its velocity cannot be applied.
-			if len(writer.events) != 0 {
-				t.Fatalf("step 4 wrote %d messages, want none from a same-pitch tie", len(writer.events))
-			}
+			require.Len(t, writer.events, 0, "step 4 should write nothing from a same-pitch tie")
 		case 4:
 			assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), 60, 0})
 		default:
-			if len(writer.events) != 0 {
-				t.Fatalf("step %d wrote %d messages, want none while the note is held", step+1, len(writer.events))
-			}
+			require.Lenf(t, writer.events, 0, "step %d should write nothing while the note is held", step+1)
 		}
 		writer.events = nil
 	}

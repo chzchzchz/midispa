@@ -32,6 +32,10 @@ type PatternBank struct {
 	screen   textScreen
 	vb       *VoiceBank
 	playback *Playback
+	// controller is the owner of this bank, set when the controller takes it. A bank built
+	// on its own, as a test builds one, has none: nothing is playing, so there is nothing
+	// to ask and no event to route.
+	controller *Controller
 	// playheadStep is the strip cell the note-edit playhead is lighting, or
 	// noPlayheadStep when it is not lighting one.
 	playheadStep int
@@ -304,12 +308,18 @@ func patternIndexMap(patterns map[int]*Pattern) map[*Pattern]int {
 	return ret
 }
 
+// askStop stops whatever is playing on behalf of an edit that rewrites what the worker
+// reads. The controller is always there because it is what builds the bank.
+func (p *PatternBank) askStop() error {
+	return p.controller.stopPlayback()
+}
+
 func (p *PatternBank) SetPattern(pat *Pattern) error {
 	// Don't swap out pointer since song may already be using it.
 	if pat == nil {
 		return nil
 	}
-	if err := stopPlayback(); err != nil {
+	if err := p.askStop(); err != nil {
 		return err
 	}
 	oldPat, ok := p.Patterns[p.selPatIdx]
@@ -336,7 +346,7 @@ func (p *PatternBank) Jump(n int) error {
 	}
 	changed := newIdx != p.selPatIdx
 	if changed {
-		if err := stopPlayback(); err != nil {
+		if err := p.askStop(); err != nil {
 			return err
 		}
 	}
@@ -388,7 +398,7 @@ func (p *PatternBank) ClearTrackRow(row int) error {
 	if p.trackForPadRow(row) == 0 {
 		return nil
 	}
-	if err := stopPlayback(); err != nil {
+	if err := p.askStop(); err != nil {
 		return err
 	}
 	voice := p.trackVoice(row)
@@ -507,7 +517,7 @@ func (p *PatternBank) JogSelect(n int) error {
 	if track == 0 {
 		return nil
 	}
-	if err := stopPlayback(); err != nil {
+	if err := p.askStop(); err != nil {
 		return err
 	}
 	if err := p.leaveNoteEdit(); err != nil {
