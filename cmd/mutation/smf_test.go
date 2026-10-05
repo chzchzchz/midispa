@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/chzchzchz/midispa/midi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gitlab.com/gomidi/midi/midimessage/channel"
 	"gitlab.com/gomidi/midi/smf"
 	"gitlab.com/gomidi/midi/smf/smfwriter"
@@ -19,42 +19,26 @@ func TestPatchSMFRoundTrip(t *testing.T) {
 		source.genes[index].value = 20 + index
 	}
 	path := filepath.Join(t.TempDir(), "patch.mid")
-	if err := writePatchSMFForChannel(path, source, defaultMIDIChannelNumber); err != nil {
-		t.Fatalf("writePatchSMF: %v", err)
-	}
+	require.NoError(t, writePatchSMFForChannel(path, source, defaultMIDIChannelNumber), "writePatchSMF")
 
 	loaded := newTestPatch(t, "Sound Controller")
-	if err := loadSeedPatch(path, loaded); err != nil {
-		t.Fatalf("loadSeedPatch: %v", err)
-	}
+	require.NoError(t, loadSeedPatch(path, loaded), "loadSeedPatch")
 	for index := range source.genes {
-		if got, want := loaded.genes[index].value, source.genes[index].value; got != want {
-			t.Fatalf("gene %d is %d, want %d", index, got, want)
-		}
+		assert.Equal(t, source.genes[index].value, loaded.genes[index].value, "gene %d", index)
 	}
 }
 
 func TestPatchSMFUsesConfiguredChannel(t *testing.T) {
 	patch := newTestPatch(t, "Sound Controller")
 	path := filepath.Join(t.TempDir(), "patch.mid")
-	if err := writePatchSMFForChannel(path, patch, 10); err != nil {
-		t.Fatalf("writePatchSMFForChannel: %v", err)
-	}
+	require.NoError(t, writePatchSMFForChannel(path, patch, 10), "writePatchSMFForChannel")
 	messages, err := readPatchSMF(path)
-	if err != nil {
-		t.Fatalf("readPatchSMF: %v", err)
-	}
+	require.NoError(t, err, "readPatchSMF")
 	for index, message := range messages {
-		if channel := midi.Channel(message[0]); channel != 9 {
-			t.Fatalf("message %d uses MIDI channel %d, want 10", index, channel+1)
-		}
+		assert.Equal(t, 9, midi.Channel(message[0]), "message %d does not use MIDI channel 10", index)
 	}
-	if err := writePatchSMFForChannel(path, patch, 0); err == nil {
-		t.Fatal("accepted MIDI channel below 1")
-	}
-	if err := writePatchSMFForChannel(path, patch, 17); err == nil {
-		t.Fatal("accepted MIDI channel above 16")
-	}
+	assert.Error(t, writePatchSMFForChannel(path, patch, 0), "accepted MIDI channel below 1")
+	assert.Error(t, writePatchSMFForChannel(path, patch, 17), "accepted MIDI channel above 16")
 }
 
 func TestWriteGenerationKeepsNumberedAndLatestOutputs(t *testing.T) {
@@ -64,22 +48,13 @@ func TestWriteGenerationKeepsNumberedAndLatestOutputs(t *testing.T) {
 	}
 	outputPath := filepath.Join(t.TempDir(), "best.mid")
 	store := smfPatchStore{outputPath: outputPath, midiChannel: defaultMIDIChannelNumber}
-	if err := store.save(patch, 3); err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	require.NoError(t, store.save(patch, 3), "save")
 
-	generationPath := outputPath + ".0003"
-	generationData, err := os.ReadFile(generationPath)
-	if err != nil {
-		t.Fatalf("read generation: %v", err)
-	}
+	generationData, err := os.ReadFile(outputPath + ".0003")
+	require.NoError(t, err, "read generation")
 	latestData, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("read latest: %v", err)
-	}
-	if !bytes.Equal(generationData, latestData) {
-		t.Fatal("latest output differs from numbered generation")
-	}
+	require.NoError(t, err, "read latest")
+	assert.Equal(t, generationData, latestData, "latest output differs from numbered generation")
 }
 
 func TestLoadSeedPatchRejectsUnrelatedModel(t *testing.T) {
@@ -88,24 +63,16 @@ func TestLoadSeedPatchRejectsUnrelatedModel(t *testing.T) {
 		source.genes[index].value = index
 	}
 	path := filepath.Join(t.TempDir(), "patch.mid")
-	if err := writePatchSMFForChannel(path, source, defaultMIDIChannelNumber); err != nil {
-		t.Fatalf("writePatchSMF: %v", err)
-	}
+	require.NoError(t, writePatchSMFForChannel(path, source, defaultMIDIChannelNumber), "writePatchSMF")
 
 	target := newTestPatch(t, "Volca Bass")
-	if err := loadSeedPatch(path, target); err == nil {
-		t.Fatal("accepted a seed with no matching CC values")
-	}
+	assert.Error(t, loadSeedPatch(path, target), "accepted a seed with no matching CC values")
 }
 
 func TestPatchStoreRejectsInvalidArguments(t *testing.T) {
 	patch := newTestPatch(t, "Volca Bass")
-	if err := (smfPatchStore{}).save(patch, 0); err == nil {
-		t.Fatal("accepted an empty output path")
-	}
-	if err := (smfPatchStore{outputPath: "best.mid"}).save(patch, -1); err == nil {
-		t.Fatal("accepted a negative generation")
-	}
+	assert.Error(t, (smfPatchStore{}).save(patch, 0), "accepted an empty output path")
+	assert.Error(t, (smfPatchStore{outputPath: "best.mid"}).save(patch, -1), "accepted a negative generation")
 }
 
 // writePartialSeedSMF writes a seed carrying only the given controller values.
@@ -123,10 +90,8 @@ func writePartialSeedSMF(t *testing.T, path string, messages [][]byte) {
 			}
 		}
 	}, smfwriter.NumTracks(1), smfwriter.TimeFormat(smf.MetricTicks(patchTicksPerQuarter)))
-	if writeErr != nil {
-		t.Fatalf("write partial seed: %v", writeErr)
-	}
-	if err != nil && !errors.Is(err, smf.ErrFinished) {
-		t.Fatalf("write partial seed: %v", err)
+	require.NoError(t, writeErr, "write partial seed")
+	if err != nil {
+		require.ErrorIs(t, err, smf.ErrFinished, "write partial seed")
 	}
 }

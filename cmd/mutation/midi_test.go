@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/chzchzchz/midispa/midi"
 	"github.com/chzchzchz/midispa/track"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type recordingMIDIWriter struct {
@@ -60,9 +61,7 @@ func newFakeMIDIPlayerForChannel(writer *recordingMIDIWriter, channelNumber int)
 func TestMIDIPlayerPlaysProbeDurations(t *testing.T) {
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, sleeps := newFakeMIDIPlayer(writer)
-	if err := player.playProbeNotes(context.Background()); err != nil {
-		t.Fatalf("playProbeNotes: %v", err)
-	}
+	require.NoError(t, player.playProbeNotes(context.Background()), "playProbeNotes")
 
 	wantSleeps := []time.Duration{
 		10 * time.Millisecond,
@@ -71,9 +70,7 @@ func TestMIDIPlayerPlaysProbeDurations(t *testing.T) {
 		500 * time.Millisecond,
 		time.Second,
 	}
-	if !reflect.DeepEqual(*sleeps, wantSleeps) {
-		t.Fatalf("sleeps are %v, want %v", *sleeps, wantSleeps)
-	}
+	assert.Equal(t, wantSleeps, *sleeps)
 	wantMessages := [][]byte{
 		{0x90, probeNote, probeVelocity},
 		{0x80, probeNote, 0},
@@ -82,9 +79,7 @@ func TestMIDIPlayerPlaysProbeDurations(t *testing.T) {
 		{0x90, probeNote, probeVelocity},
 		{0x80, probeNote, 0},
 	}
-	if !reflect.DeepEqual(writer.messages, wantMessages) {
-		t.Fatalf("messages are %v, want %v", writer.messages, wantMessages)
-	}
+	assert.Equal(t, wantMessages, writer.messages)
 }
 
 func TestMIDIPlayerSchedulesPlaybackFile(t *testing.T) {
@@ -98,16 +93,11 @@ func TestMIDIPlayerSchedulesPlaybackFile(t *testing.T) {
 			{Raw: []byte{0x80, 60, 0}, Tick: 2},
 		},
 	}
-	if err := player.playPattern(context.Background(), pattern); err != nil {
-		t.Fatalf("playPattern: %v", err)
-	}
-	wantSleeps := []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
-	if !reflect.DeepEqual(*sleeps, wantSleeps) {
-		t.Fatalf("sleeps are %v, want %v", *sleeps, wantSleeps)
-	}
-	if len(writer.messages) != 2 || !reflect.DeepEqual(writer.messages[0], pattern.Msgs[0].Raw) || !reflect.DeepEqual(writer.messages[1], pattern.Msgs[1].Raw) {
-		t.Fatalf("unexpected played messages: %v", writer.messages)
-	}
+	require.NoError(t, player.playPattern(context.Background(), pattern), "playPattern")
+	assert.Equal(t, []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, *sleeps)
+	require.Len(t, writer.messages, 2, "unexpected played messages")
+	assert.Equal(t, pattern.Msgs[0].Raw, writer.messages[0], "unexpected played messages")
+	assert.Equal(t, pattern.Msgs[1].Raw, writer.messages[1], "unexpected played messages")
 }
 
 func TestMIDIPlayerSendsPatchBeforeProbe(t *testing.T) {
@@ -117,37 +107,24 @@ func TestMIDIPlayerSendsPatchBeforeProbe(t *testing.T) {
 	}
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, _ := newFakeMIDIPlayer(writer)
-	if err := player.audition(context.Background(), patch, nil); err != nil {
-		t.Fatalf("audition: %v", err)
-	}
-	if len(writer.messages) != len(patch.genes)+10 {
-		t.Fatalf("sent %d messages, want %d", len(writer.messages), len(patch.genes)+10)
-	}
+	require.NoError(t, player.audition(context.Background(), patch, nil), "audition")
+	require.Len(t, writer.messages, len(patch.genes)+10, "audition sent the wrong number of messages")
 	for index, message := range writer.messages[2 : 2+len(patch.genes)] {
-		if !midi.IsCC(message[0]) {
-			t.Fatalf("message %d is not CC: %v", index, message)
-		}
+		assert.True(t, midi.IsCC(message[0]), "message %d is not CC: %v", index, message)
 	}
-	if !midi.IsNoteOn(writer.messages[2+len(patch.genes)][0]) {
-		t.Fatal("probe note did not follow patch CCs")
-	}
+	assert.True(t, midi.IsNoteOn(writer.messages[2+len(patch.genes)][0]), "probe note did not follow patch CCs")
 	cleanup := [][]byte{{0xb0, sustainController, 0}, {0xb0, midi.AllNotesOff, 0}}
-	if !reflect.DeepEqual(writer.messages[:2], cleanup) || !reflect.DeepEqual(writer.messages[len(writer.messages)-2:], cleanup) {
-		t.Fatalf("audition was not safely reset: %v", writer.messages)
-	}
+	assert.Equal(t, cleanup, writer.messages[:2], "audition did not start from a safe state")
+	assert.Equal(t, cleanup, writer.messages[len(writer.messages)-2:], "audition was not safely reset")
 }
 
 func TestMIDIPlayerUsesConfiguredChannel(t *testing.T) {
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, _ := newFakeMIDIPlayerForChannel(writer, 10)
 	patch := newTestPatch(t, "Sound Controller")
-	if err := player.audition(context.Background(), patch, nil); err != nil {
-		t.Fatalf("audition: %v", err)
-	}
+	require.NoError(t, player.audition(context.Background(), patch, nil), "audition")
 	for index, message := range writer.messages {
-		if channel := midi.Channel(message[0]); channel != 9 {
-			t.Fatalf("message %d uses MIDI channel %d, want 10", index, channel+1)
-		}
+		assert.Equal(t, 9, midi.Channel(message[0]), "message %d does not use MIDI channel 10", index)
 	}
 }
 
@@ -158,24 +135,17 @@ func TestMIDIPlayerCleansUpAfterProbeFailure(t *testing.T) {
 		failOnce: true,
 	}
 	player, _, _ := newFakeMIDIPlayer(writer)
-	if err := player.audition(context.Background(), patch, nil); err == nil {
-		t.Fatal("audition ignored note-off write failure")
-	}
+	assert.Error(t, player.audition(context.Background(), patch, nil), "audition ignored note-off write failure")
 	cleanup := [][]byte{{0xb0, sustainController, 0}, {0xb0, midi.AllNotesOff, 0}}
-	if len(writer.messages) < len(cleanup) || !reflect.DeepEqual(writer.messages[len(writer.messages)-len(cleanup):], cleanup) {
-		t.Fatalf("failed audition was not cleaned up: %v", writer.messages)
-	}
+	require.GreaterOrEqual(t, len(writer.messages), len(cleanup), "failed audition was not cleaned up")
+	assert.Equal(t, cleanup, writer.messages[len(writer.messages)-len(cleanup):], "failed audition was not cleaned up")
 }
 
 func TestMIDIPlayerAttemptsEveryCleanupMessageAfterFailure(t *testing.T) {
 	writer := &alwaysFailingMIDIWriter{}
 	player := newMIDIPlayerForChannel(writer, 1)
-	if err := player.resetChannels([]int{0, 15}); err == nil {
-		t.Fatal("resetChannels ignored write failures")
-	}
-	if writer.writes != 4 {
-		t.Fatalf("cleanup attempted %d writes, want 4", writer.writes)
-	}
+	assert.Error(t, player.resetChannels([]int{0, 15}), "resetChannels ignored write failures")
+	assert.Equal(t, 4, writer.writes, "cleanup did not attempt every message")
 }
 
 func TestMIDIPlayerWaitCanBeCanceled(t *testing.T) {
@@ -188,11 +158,9 @@ func TestMIDIPlayerWaitCanBeCanceled(t *testing.T) {
 	cancel()
 	select {
 	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("wait returned %v, want context cancellation", err)
-		}
+		require.ErrorIs(t, err, context.Canceled, "wait did not stop after cancellation")
 	case <-time.After(time.Second):
-		t.Fatal("wait did not stop after cancellation")
+		require.Fail(t, "wait did not stop after cancellation")
 	}
 }
 
@@ -203,27 +171,20 @@ func TestMIDIPlayerCleansPlaybackChannels(t *testing.T) {
 		{Raw: []byte{0x85, 60, 0}},
 		{Raw: []byte{0xb6, 1, 2}},
 	}}
-	if got, want := player.auditionChannels(playback), []int{0, 5}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("audition channels are %v, want %v", got, want)
-	}
+	assert.Equal(t, []int{0, 5}, player.auditionChannels(playback))
 }
 
 func TestMIDIPlayerRejectsInvalidPatternTiming(t *testing.T) {
 	player, _, _ := newFakeMIDIPlayer(&recordingMIDIWriter{})
-	if err := player.playPattern(context.Background(), &track.Pattern{}); err == nil {
-		t.Fatal("accepted playback without timing metadata")
-	}
+	assert.Error(t, player.playPattern(context.Background(), &track.Pattern{}), "accepted playback without timing metadata")
 }
 
 func TestMIDIPlayerPropagatesWriteError(t *testing.T) {
 	player, _, _ := newFakeMIDIPlayer(&recordingMIDIWriter{failAt: 0})
-	if err := player.playProbeNotes(context.Background()); err == nil {
-		t.Fatal("ignored MIDI output error")
-	}
+	assert.Error(t, player.playProbeNotes(context.Background()), "ignored MIDI output error")
 }
 
 func TestOpenMIDIOutputRejectsEmptyPort(t *testing.T) {
-	if _, _, err := openMIDIOutput(""); err == nil {
-		t.Fatal("accepted an empty port name")
-	}
+	_, _, err := openMIDIOutput("")
+	assert.Error(t, err, "accepted an empty port name")
 }

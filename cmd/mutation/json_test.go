@@ -5,31 +5,24 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPatchModelJSONUsesModelFieldNames(t *testing.T) {
 	patch := newTestPatch(t, "Sound Controller")
 	patch.genes[1].value = 42
 	path := filepath.Join(t.TempDir(), "patch.json")
-	if err := writePatchJSON(path, patch); err != nil {
-		t.Fatalf("writePatchJSON: %v", err)
-	}
+	require.NoError(t, writePatchJSON(path, patch), "writePatchJSON")
 
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read JSON: %v", err)
-	}
+	require.NoError(t, err, "read JSON")
 	var model map[string]any
-	if err := json.Unmarshal(data, &model); err != nil {
-		t.Fatalf("decode JSON: %v", err)
-	}
+	require.NoError(t, json.Unmarshal(data, &model), "decode JSON")
 	value, ok := model["SoundController2"].(float64)
-	if !ok {
-		t.Fatalf("JSON does not contain model field SoundController2: %s", data)
-	}
-	if int(value) != 42 {
-		t.Fatalf("SoundController2 is %v, want 42", value)
-	}
+	require.True(t, ok, "JSON does not contain model field SoundController2: %s", data)
+	assert.Equal(t, 42, int(value), "SoundController2")
 }
 
 func TestPatchStoreWritesJSONSidecars(t *testing.T) {
@@ -40,12 +33,8 @@ func TestPatchStoreWritesJSONSidecars(t *testing.T) {
 		midiChannel: defaultMIDIChannelNumber,
 		jsonOutput:  true,
 	}
-	if err := store.save(patch, 3); err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	require.NoError(t, store.save(patch, 3), "save")
 	for _, path := range []string{outputPath + ".0003.json", outputPath + ".json"} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("stat %s: %v", path, err)
-		}
+		assert.FileExists(t, path, "no JSON sidecar was written")
 	}
 }

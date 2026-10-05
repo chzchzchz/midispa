@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type testWriteCloser struct{}
@@ -22,9 +24,7 @@ func TestRunMutationWithFactoryUsesInjectedOutput(t *testing.T) {
 	factoryCalled := false
 	factory := func(port string) (io.Writer, io.Closer, error) {
 		factoryCalled = true
-		if port != "test" {
-			t.Fatalf("factory received port %q, want test", port)
-		}
+		assert.Equal(t, "test", port, "factory received the wrong port")
 		return writer, testWriteCloser{}, nil
 	}
 	config := configuration{
@@ -36,15 +36,9 @@ func TestRunMutationWithFactoryUsesInjectedOutput(t *testing.T) {
 		settings:    defaultEvolutionSettings(),
 	}
 	err := runMutationWithFactory(ctx, config, strings.NewReader(""), io.Discard, factory)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("got error %v, want context cancellation", err)
-	}
-	if !factoryCalled {
-		t.Fatal("MIDI output factory was not called")
-	}
-	if len(writer.messages) == 0 {
-		t.Fatal("injected output received no cleanup messages")
-	}
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, factoryCalled, "MIDI output factory was not called")
+	assert.NotEmpty(t, writer.messages, "injected output received no cleanup messages")
 }
 
 type recordingAuditioner struct {
@@ -85,13 +79,9 @@ func TestMutationRunnerUsesHardwareIndependentInterfaces(t *testing.T) {
 		input:      strings.NewReader("9 8 7"),
 		output:     io.Discard,
 	}
-	if err := runner.run(context.Background()); err != nil {
-		t.Fatalf("runner: %v", err)
-	}
-	if len(auditioner.patches) < settings.roundSize {
-		t.Fatalf("auditioned %d candidates, want at least %d", len(auditioner.patches), settings.roundSize)
-	}
-	if len(store.patches) != 1 || len(store.generations) != 1 || store.generations[0] != 0 {
-		t.Fatalf("unexpected saves: patches=%d generations=%v", len(store.patches), store.generations)
-	}
+	require.NoError(t, runner.run(context.Background()), "runner")
+	assert.GreaterOrEqual(t, len(auditioner.patches), settings.roundSize, "auditioned candidates")
+	require.Len(t, store.patches, 1, "unexpected number of saves")
+	require.Len(t, store.generations, 1, "unexpected number of saves")
+	assert.Equal(t, 0, store.generations[0], "saved generation")
 }

@@ -7,14 +7,14 @@ import (
 	"testing"
 
 	"github.com/chzchzchz/midispa/cc"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestPatch(t *testing.T, modelName string) *Patch {
 	t.Helper()
 	patch, err := newPatchWithSemantics(modelName, nil)
-	if err != nil {
-		t.Fatalf("newPatchWithSemantics(%q): %v", modelName, err)
-	}
+	require.NoError(t, err, "newPatchWithSemantics(%q)", modelName)
 	return patch
 }
 
@@ -22,24 +22,17 @@ func TestPatchUsesCCModelMetadata(t *testing.T) {
 	for _, modelName := range cc.ModelNames() {
 		t.Run(modelName, func(t *testing.T) {
 			patch := newTestPatch(t, modelName)
-			if len(patch.genes) == 0 {
-				t.Fatal("patch has no genes")
-			}
+			assert.NotEmpty(t, patch.genes, "patch has no genes")
 			messages, err := patch.encode(0)
-			if err != nil {
-				t.Fatalf("encode: %v", err)
-			}
-			if len(messages) != len(patch.genes) {
-				t.Fatalf("got %d messages for %d genes", len(messages), len(patch.genes))
-			}
+			require.NoError(t, err, "encode")
+			assert.Len(t, messages, len(patch.genes), "got %d messages for %d genes", len(messages), len(patch.genes))
 		})
 	}
 }
 
 func TestPatchRejectsUnknownModel(t *testing.T) {
-	if _, err := newPatchWithSemantics("unknown synth", nil); err == nil {
-		t.Fatal("accepted an unknown model")
-	}
+	_, err := newPatchWithSemantics("unknown synth", nil)
+	assert.Error(t, err, "accepted an unknown model")
 }
 
 func TestPatchAppliesSeedMessages(t *testing.T) {
@@ -50,23 +43,17 @@ func TestPatchAppliesSeedMessages(t *testing.T) {
 		{0xb0, 70, 99},
 		{0xb0, 127, 1},
 	})
-	if applied != 2 {
-		t.Fatalf("applied %d seed values, want 2", applied)
-	}
-	if got := patch.genes[0].value; got != 99 {
-		t.Fatalf("first gene is %d, want 99", got)
-	}
+	assert.Equal(t, 2, applied, "applied seed values")
+	assert.Equal(t, 99, patch.genes[0].value, "first gene")
 }
 
 func TestPatchAppliesDuplicateModelCCs(t *testing.T) {
 	patch := newTestPatch(t, "WorldeEasyControl9")
 	applied := patch.applyCCMessages([][]byte{{0xb0, 9, 55}})
-	if applied != 2 {
-		t.Fatalf("applied %d values for duplicate CC, want 2", applied)
-	}
+	assert.Equal(t, 2, applied, "applied values for duplicate CC")
 	for _, gene := range patch.genes {
-		if patch.controllers[gene.name] == 9 && gene.value != 55 {
-			t.Fatalf("duplicate CC 9 is %d, want 55", gene.value)
+		if patch.controllers[gene.name] == 9 {
+			assert.Equal(t, 55, gene.value, "duplicate CC 9")
 		}
 	}
 }
@@ -80,20 +67,16 @@ func TestMutationChangesOnlyCopiedGenes(t *testing.T) {
 	mutation := mutationEngine.mutatePatch(parent, false)
 	changed := 0
 	for index := range parent.genes {
-		if parent.genes[index].value != 0 {
-			t.Fatalf("parent gene %d changed", index)
-		}
+		assert.Zero(t, parent.genes[index].value, "parent gene %d changed", index)
 		value := geneValues(t, mutation)[index].value
-		if value < 0 || value > maxMIDIValue {
-			t.Fatalf("gene %d is outside MIDI range: %d", index, value)
-		}
+		assert.GreaterOrEqual(t, value, 0, "gene %d is below the MIDI range", index)
+		assert.LessOrEqual(t, value, maxMIDIValue, "gene %d is above the MIDI range", index)
 		if value != 0 {
 			changed++
 		}
 	}
-	if changed < 1 || changed > maxMutatedGenes {
-		t.Fatalf("changed %d genes, want 1-%d", changed, maxMutatedGenes)
-	}
+	assert.GreaterOrEqual(t, changed, 1, "changed genes, want 1-%d", maxMutatedGenes)
+	assert.LessOrEqual(t, changed, maxMutatedGenes, "changed genes, want 1-%d", maxMutatedGenes)
 }
 
 func TestMutationRateCanKeepCandidateUnchanged(t *testing.T) {
@@ -107,9 +90,7 @@ func TestMutationRateCanKeepCandidateUnchanged(t *testing.T) {
 	mutation := mutationEngine.mutatePatch(parent, false)
 	values := geneValues(t, mutation)
 	for index := range parent.genes {
-		if got, want := values[index].value, parent.genes[index].value; got != want {
-			t.Fatalf("unchanged gene %d is %d, want %d", index, got, want)
-		}
+		assert.Equal(t, parent.genes[index].value, values[index].value, "unchanged gene %d", index)
 	}
 }
 
@@ -129,16 +110,12 @@ func TestMutatedGenesControlsExactCount(t *testing.T) {
 			changed++
 		}
 	}
-	if changed != settings.mutatedGenes {
-		t.Fatalf("changed %d genes, want %d", changed, settings.mutatedGenes)
-	}
+	assert.Equal(t, settings.mutatedGenes, changed, "changed genes")
 }
 
 func TestEvolutionSettingsValidation(t *testing.T) {
 	valid := defaultEvolutionSettings()
-	if err := valid.validateForModel(10); err != nil {
-		t.Fatalf("valid settings: %v", err)
-	}
+	assert.NoError(t, valid.validateForModel(10), "valid settings")
 
 	tests := []struct {
 		name   string
@@ -163,9 +140,7 @@ func TestEvolutionSettingsValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			settings := defaultEvolutionSettings()
 			test.update(&settings)
-			if err := settings.validateForModel(3); err == nil {
-				t.Fatal("accepted invalid evolution settings")
-			}
+			assert.Error(t, settings.validateForModel(3), "accepted invalid evolution settings")
 		})
 	}
 }
@@ -179,28 +154,24 @@ func TestPatchChangesFromParent(t *testing.T) {
 	mutation.genes[0].value = 17
 	mutation.genes[1].value = 6
 	changes, err := geneChanges(mutation, parent)
-	if err != nil {
-		t.Fatalf("geneChanges: %v", err)
-	}
-	if len(changes) != 2 {
-		t.Fatalf("got %d changes, want 2", len(changes))
-	}
-	if changes[0].name != mutation.genes[0].name || changes[0].before != 10 || changes[0].after != 17 || changes[0].delta != 7 {
-		t.Fatalf("unexpected positive change: %+v", changes[0])
-	}
-	if changes[1].name != mutation.genes[1].name || changes[1].before != 10 || changes[1].after != 6 || changes[1].delta != -4 {
-		t.Fatalf("unexpected negative change: %+v", changes[1])
-	}
+	require.NoError(t, err, "geneChanges")
+	require.Len(t, changes, 2, "got %d changes, want 2", len(changes))
+	assert.Equal(t, mutation.genes[0].name, changes[0].name, "unexpected positive change: %+v", changes[0])
+	assert.Equal(t, 10, changes[0].before, "unexpected positive change: %+v", changes[0])
+	assert.Equal(t, 17, changes[0].after, "unexpected positive change: %+v", changes[0])
+	assert.Equal(t, 7, changes[0].delta, "unexpected positive change: %+v", changes[0])
+	assert.Equal(t, mutation.genes[1].name, changes[1].name, "unexpected negative change: %+v", changes[1])
+	assert.Equal(t, 10, changes[1].before, "unexpected negative change: %+v", changes[1])
+	assert.Equal(t, 6, changes[1].after, "unexpected negative change: %+v", changes[1])
+	assert.Equal(t, -4, changes[1].delta, "unexpected negative change: %+v", changes[1])
 }
 
 func TestRandomizeUsesMIDIValues(t *testing.T) {
 	patch := newTestPatch(t, "Pro VS Mini")
 	patch.randomize(rand.New(rand.NewSource(2)))
 	for index, gene := range patch.genes {
-		value := gene.value
-		if value < 0 || value > maxMIDIValue {
-			t.Fatalf("gene %d is outside MIDI range: %d", index, value)
-		}
+		assert.GreaterOrEqual(t, gene.value, 0, "gene %d is below the MIDI range", index)
+		assert.LessOrEqual(t, gene.value, maxMIDIValue, "gene %d is above the MIDI range", index)
 	}
 }
 
@@ -213,23 +184,17 @@ func TestMutationSelectsHighestScore(t *testing.T) {
 		{patch: second, score: 8},
 		{patch: third, score: 5},
 	})
-	if err != nil {
-		t.Fatalf("rankPatches: %v", err)
-	}
-	patch, score := ranked[0].patch, ranked[0].score
-	if patch != second || score != 8 {
-		t.Fatalf("selected score %d from %p, want score 8", score, patch)
-	}
+	require.NoError(t, err, "rankPatches")
+	assert.Same(t, second, ranked[0].patch, "selected patch")
+	assert.Equal(t, 8, ranked[0].score, "selected score")
 }
 
 func TestMutationSelectionRejectsInvalidScores(t *testing.T) {
 	patch := newTestPatch(t, "Volca Bass")
-	if _, err := rankPatches([]scoredPatch{{patch: patch, score: 10}}); err == nil {
-		t.Fatal("accepted score outside 0-9")
-	}
-	if _, err := rankPatches(nil); err == nil {
-		t.Fatal("accepted an empty population")
-	}
+	_, err := rankPatches([]scoredPatch{{patch: patch, score: 10}})
+	assert.Error(t, err, "accepted score outside 0-9")
+	_, err = rankPatches(nil)
+	assert.Error(t, err, "accepted an empty population")
 }
 
 func TestPartialSeedKeepsARandomBaseline(t *testing.T) {
@@ -242,13 +207,10 @@ func TestPartialSeedKeepsARandomBaseline(t *testing.T) {
 	writePartialSeedSMF(t, seedPath, [][]byte{{0xb0, byte(controller), 42}})
 
 	engine, err := newMutation(newTestCCFactory(model), defaultEvolutionSettings(), rand.New(rand.NewSource(21)), nil, seedPath)
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
+	require.NoError(t, err, "newMutation")
 	genes := geneValues(t, engine.parent)
-	if genes[0].value != 42 {
-		t.Fatalf("seeded gene is %d, want 42", genes[0].value)
-	}
+	require.NotEmpty(t, genes, "no genes after seeding")
+	assert.Equal(t, 42, genes[0].value, "seeded gene")
 	defaults := newTestPatch(t, model)
 	exploring := 0
 	for index, gene := range genes {
@@ -256,7 +218,5 @@ func TestPartialSeedKeepsARandomBaseline(t *testing.T) {
 			exploring++
 		}
 	}
-	if exploring == 0 {
-		t.Fatal("a partial seed left every other gene at its model default")
-	}
+	assert.NotZero(t, exploring, "a partial seed left every other gene at its model default")
 }

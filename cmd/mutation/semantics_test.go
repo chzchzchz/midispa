@@ -4,16 +4,16 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func writeSemanticsFile(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "semantics.json")
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write semantics: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600), "write semantics")
 	return path
 }
 
@@ -24,35 +24,31 @@ func TestLoadGeneSemantics(t *testing.T) {
 		{"SoundController3":{"policy":"fixed"}}
 	]`)
 	semantics, err := loadGeneSemantics(path)
-	if err != nil {
-		t.Fatalf("loadGeneSemantics: %v", err)
+	require.NoError(t, err, "loadGeneSemantics")
+	require.Len(t, semantics, 3, "loaded semantics")
+	assert.Equal(t, "exclude", semantics["SoundController1"].Policy, "unexpected exclude rule")
+	if assert.NotNil(t, semantics["SoundController2"].Value, "unexpected fixed value") {
+		assert.Equal(t, 40, *semantics["SoundController2"].Value, "unexpected fixed value")
 	}
-	if len(semantics) != 3 {
-		t.Fatalf("loaded %d semantics, want 3", len(semantics))
-	}
-	if semantics["SoundController1"].Policy != "exclude" {
-		t.Fatalf("unexpected exclude rule: %+v", semantics["SoundController1"])
-	}
-	if semantics["SoundController2"].Value == nil || *semantics["SoundController2"].Value != 40 {
-		t.Fatalf("unexpected fixed value: %+v", semantics["SoundController2"])
-	}
-	if semantics["SoundController3"].Value != nil {
-		t.Fatalf("fixed rule unexpectedly has a value: %+v", semantics["SoundController3"])
-	}
+	assert.Nil(t, semantics["SoundController3"].Value, "fixed rule unexpectedly has a value")
 }
 
 func TestLoadGeneSemanticsRejectsInvalidRules(t *testing.T) {
-	tests := []string{
-		`[{"SoundController1":{"policy":"unknown"}}]`,
-		`[{"SoundController1":{"policy":"exclude","value":1}}]`,
-		`[{"SoundController1":{"policy":"exclude"}},{"SoundController1":{"policy":"fixed"}}]`,
-		`[{"SoundController1":{"policy":"exclude"},"SoundController2":{"policy":"fixed"}}]`,
-		`not-json`,
+	tests := []struct {
+		name     string
+		contents string
+	}{
+		{name: "unknown policy", contents: `[{"SoundController1":{"policy":"unknown"}}]`},
+		{name: "exclude with a value", contents: `[{"SoundController1":{"policy":"exclude","value":1}}]`},
+		{name: "repeated gene", contents: `[{"SoundController1":{"policy":"exclude"}},{"SoundController1":{"policy":"fixed"}}]`},
+		{name: "several rules at once", contents: `[{"SoundController1":{"policy":"exclude"},"SoundController2":{"policy":"fixed"}}]`},
+		{name: "not json", contents: `not-json`},
 	}
-	for _, contents := range tests {
-		if _, err := loadGeneSemantics(writeSemanticsFile(t, contents)); err == nil {
-			t.Fatalf("accepted invalid semantics: %s", contents)
-		}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := loadGeneSemantics(writeSemanticsFile(t, test.contents))
+			assert.Error(t, err, "accepted invalid semantics: %s", test.contents)
+		})
 	}
 }
 
@@ -63,50 +59,39 @@ func TestPatchGeneSemanticsExcludeAndFix(t *testing.T) {
 		"SoundController2": {Policy: "fixed", Value: &fixedValue},
 	}
 	patch, err := newPatchWithSemantics("Sound Controller", semantics)
-	if err != nil {
-		t.Fatalf("newPatchWithSemantics: %v", err)
-	}
+	require.NoError(t, err, "newPatchWithSemantics")
 	for _, gene := range patch.genes {
 		switch gene.name {
 		case "SoundController1":
-			t.Fatal("excluded gene remains in patch")
+			require.Fail(t, "excluded gene remains in patch")
 		case "SoundController2":
-			if gene.value != 40 || gene.policy != genePolicyFixed {
-				t.Fatalf("fixed gene is %+v", gene)
-			}
+			assert.Equal(t, 40, gene.value, "fixed gene value")
+			assert.Equal(t, genePolicyFixed, gene.policy, "fixed gene policy")
 		}
 	}
 
 	mutation := &Mutation{settings: defaultEvolutionSettings(), random: rand.New(rand.NewSource(1))}
 	child := mutation.mutatePatch(patch, true)
 	for _, gene := range geneValues(t, child) {
-		if gene.name == "SoundController2" && gene.value != 40 {
-			t.Fatalf("fixed gene mutated to %d", gene.value)
+		if gene.name == "SoundController2" {
+			assert.Equal(t, 40, gene.value, "fixed gene mutated")
 		}
 	}
 	messages, err := child.encode(0)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
+	require.NoError(t, err, "encode")
 	for _, message := range messages {
-		if message[1] == 70 {
-			t.Fatal("excluded gene was emitted")
-		}
-		if message[1] == 71 && message[2] != 40 {
-			t.Fatalf("fixed gene emitted as %d", message[2])
+		assert.NotEqual(t, byte(70), message[1], "excluded gene was emitted")
+		if message[1] == 71 {
+			assert.Equal(t, byte(40), message[2], "fixed gene emitted as %d", message[2])
 		}
 	}
 	outputPath := filepath.Join(t.TempDir(), "semantic-patch.mid")
-	if err := writePatchSMFForChannel(outputPath, child.(*Patch), 1); err != nil {
-		t.Fatalf("write semantic patch: %v", err)
-	}
+	require.NoError(t, writePatchSMFForChannel(outputPath, child.(*Patch), 1), "write semantic patch")
 	writtenMessages, err := readPatchSMF(outputPath)
-	if err != nil {
-		t.Fatalf("read semantic patch: %v", err)
-	}
+	require.NoError(t, err, "read semantic patch")
 	for _, message := range writtenMessages {
 		if message[1] == 70 || (message[1] == 71 && message[2] != 40) {
-			t.Fatalf("SMF output violated gene semantics: %v", message)
+			assert.Fail(t, "SMF output violated gene semantics", "%v", message)
 		}
 	}
 }
@@ -115,40 +100,32 @@ func TestFixedGeneUsesSeedValue(t *testing.T) {
 	seedPatch := newTestPatch(t, "Sound Controller")
 	seedPatch.genes[0].value = 40
 	seedPath := filepath.Join(t.TempDir(), "seed.mid")
-	if err := writePatchSMFForChannel(seedPath, seedPatch, 1); err != nil {
-		t.Fatalf("write seed: %v", err)
-	}
+	require.NoError(t, writePatchSMFForChannel(seedPath, seedPatch, 1), "write seed")
 	semantics := map[string]geneSemantic{
 		"SoundController1": {Policy: "fixed"},
 	}
 	mutation, err := newMutation(newTestCCFactory("Sound Controller"), defaultEvolutionSettings(), rand.New(rand.NewSource(2)), semantics, seedPath)
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
+	require.NoError(t, err, "newMutation")
 	genes := geneValues(t, mutation.parent)
-	if len(genes) == 0 || genes[0].value != 40 || genes[0].policy != genePolicyFixed {
-		t.Fatalf("fixed seed value was not preserved: %+v", genes[0])
-	}
+	require.NotEmpty(t, genes, "fixed seed value was not preserved")
+	assert.Equal(t, 40, genes[0].value, "fixed seed value was not preserved")
+	assert.Equal(t, genePolicyFixed, genes[0].policy, "fixed seed value was not preserved")
 }
 
 func TestExplicitFixedValueOverridesSeed(t *testing.T) {
 	seedPatch := newTestPatch(t, "Sound Controller")
 	seedPatch.genes[0].value = 90
 	seedPath := filepath.Join(t.TempDir(), "seed.mid")
-	if err := writePatchSMFForChannel(seedPath, seedPatch, 1); err != nil {
-		t.Fatalf("write seed: %v", err)
-	}
+	require.NoError(t, writePatchSMFForChannel(seedPath, seedPatch, 1), "write seed")
 	fixedValue := 40
 	semantics := map[string]geneSemantic{
 		"SoundController1": {Policy: "fixed", Value: &fixedValue},
 	}
 	mutation, err := newMutation(newTestCCFactory("Sound Controller"), defaultEvolutionSettings(), rand.New(rand.NewSource(4)), semantics, seedPath)
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
-	if geneValues(t, mutation.parent)[0].value != 40 {
-		t.Fatalf("seed overrode explicit fixed value: %d", geneValues(t, mutation.parent)[0].value)
-	}
+	require.NoError(t, err, "newMutation")
+	genes := geneValues(t, mutation.parent)
+	require.NotEmpty(t, genes, "seed overrode explicit fixed value")
+	assert.Equal(t, 40, genes[0].value, "seed overrode explicit fixed value")
 }
 
 func TestFixedGeneWithoutValueOrSeedFails(t *testing.T) {
@@ -156,16 +133,13 @@ func TestFixedGeneWithoutValueOrSeedFails(t *testing.T) {
 		"SoundController1": {Policy: "fixed"},
 	}
 	_, err := newMutation(newTestCCFactory("Sound Controller"), defaultEvolutionSettings(), rand.New(rand.NewSource(3)), semantics, "")
-	if err == nil || !strings.Contains(err.Error(), "requires an explicit value or a seed value") {
-		t.Fatalf("got error %v", err)
-	}
+	assert.ErrorContains(t, err, "requires an explicit value or a seed value")
 }
 
 func TestPatchGeneSemanticsRejectsUnknownGene(t *testing.T) {
 	semantics := map[string]geneSemantic{
 		"NotAGene": {Policy: "exclude"},
 	}
-	if _, err := newPatchWithSemantics("Sound Controller", semantics); err == nil {
-		t.Fatal("accepted semantics for an unknown gene")
-	}
+	_, err := newPatchWithSemantics("Sound Controller", semantics)
+	assert.Error(t, err, "accepted semantics for an unknown gene")
 }

@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestJudgeMutationAcceptsRank(t *testing.T) {
@@ -16,12 +19,9 @@ func TestJudgeMutationAcceptsRank(t *testing.T) {
 		auditions++
 		return nil
 	}, newJudgeInput(strings.NewReader("7")), &output)
-	if err != nil {
-		t.Fatalf("judgeMutation: %v", err)
-	}
-	if score != 7 || auditions != 1 {
-		t.Fatalf("score %d after %d auditions, want 7 after 1", score, auditions)
-	}
+	require.NoError(t, err, "judgeMutation")
+	assert.Equal(t, 7, score)
+	assert.Equal(t, 1, auditions)
 }
 
 func TestJudgeMutationReplaysWholeMutation(t *testing.T) {
@@ -31,15 +31,10 @@ func TestJudgeMutationReplaysWholeMutation(t *testing.T) {
 		auditions++
 		return nil
 	}, newJudgeInput(strings.NewReader("r\n8")), &output)
-	if err != nil {
-		t.Fatalf("judgeMutation: %v", err)
-	}
-	if score != 8 || auditions != 2 {
-		t.Fatalf("score %d after %d auditions, want 8 after 2", score, auditions)
-	}
-	if !strings.Contains(output.String(), "replaying") {
-		t.Fatalf("missing replay confirmation in %q", output.String())
-	}
+	require.NoError(t, err, "judgeMutation")
+	assert.Equal(t, 8, score)
+	assert.Equal(t, 2, auditions)
+	assert.Contains(t, output.String(), "replaying", "missing replay confirmation")
 }
 
 func TestJudgeMutationIgnoresInvalidKeysWithoutReplay(t *testing.T) {
@@ -49,12 +44,9 @@ func TestJudgeMutationIgnoresInvalidKeysWithoutReplay(t *testing.T) {
 		auditions++
 		return nil
 	}, newJudgeInput(strings.NewReader("x 4")), &output)
-	if err != nil {
-		t.Fatalf("judgeMutation: %v", err)
-	}
-	if score != 4 || auditions != 1 {
-		t.Fatalf("score %d after %d auditions, want 4 after 1", score, auditions)
-	}
+	require.NoError(t, err, "judgeMutation")
+	assert.Equal(t, 4, score)
+	assert.Equal(t, 1, auditions)
 }
 
 func TestJudgeMutationPropagatesAuditionError(t *testing.T) {
@@ -62,18 +54,14 @@ func TestJudgeMutationPropagatesAuditionError(t *testing.T) {
 	_, err := judgeMutation(context.Background(), func() error {
 		return auditionErr
 	}, newJudgeInput(strings.NewReader("1")), io.Discard)
-	if !errors.Is(err, auditionErr) {
-		t.Fatalf("got error %v, want %v", err, auditionErr)
-	}
+	assert.ErrorIs(t, err, auditionErr)
 }
 
 func TestJudgeMutationReturnsInputEOF(t *testing.T) {
 	_, err := judgeMutation(context.Background(), func() error {
 		return nil
 	}, newJudgeInput(strings.NewReader("")), io.Discard)
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("got error %v, want EOF", err)
-	}
+	assert.ErrorIs(t, err, io.EOF)
 }
 
 func TestJudgeMutationStopsWaitingForInputOnCancellation(t *testing.T) {
@@ -90,11 +78,9 @@ func TestJudgeMutationStopsWaitingForInputOnCancellation(t *testing.T) {
 	cancel()
 	select {
 	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("got error %v, want context cancellation", err)
-		}
+		require.ErrorIs(t, err, context.Canceled, "judge did not stop waiting for input")
 	case <-time.After(time.Second):
-		t.Fatal("judge did not stop waiting for input")
+		require.Fail(t, "judge did not stop waiting for input")
 	}
 	inputWriter.Close()
 }

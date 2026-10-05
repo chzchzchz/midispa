@@ -9,6 +9,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestMutation(parent patch, settings evolutionSettings, randomSeed int64) *Mutation {
@@ -25,9 +28,7 @@ func newTestMutation(parent patch, settings evolutionSettings, randomSeed int64)
 // patch interface, which is what the engine produces after breeding.
 func geneValues(t *testing.T, candidate patch) []gene {
 	t.Helper()
-	if candidate == nil {
-		t.Fatal("candidate is nil")
-	}
+	require.NotNil(t, candidate, "candidate is nil")
 	return candidate.geneStore().genes
 }
 
@@ -58,37 +59,24 @@ func TestMutationSelectsHighestRankAndWritesGenerationZero(t *testing.T) {
 	var output strings.Builder
 	outputPath := filepath.Join(t.TempDir(), "best.mid")
 	mutation := newTestMutation(parent, defaultEvolutionSettings(), 7)
-	if err := runTestMutation(
+	require.NoError(t, runTestMutation(
 		context.Background(),
 		mutation,
 		player,
 		outputPath,
 		strings.NewReader("9 0 8 7"),
 		&output,
-	); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if !strings.Contains(output.String(), "selected candidate with rank 9") {
-		t.Fatalf("missing selected score in %q", output.String())
-	}
-	if !strings.Contains(output.String(), "SoundController") || !strings.Contains(output.String(), "delta ") {
-		t.Fatalf("missing mutation change report in %q", output.String())
-	}
-	if _, err := os.Stat(outputPath + ".0000"); err != nil {
-		t.Fatalf("stat generation zero: %v", err)
-	}
+	), "run")
+	assert.Contains(t, output.String(), "selected candidate with rank 9", "missing selected score")
+	assert.Contains(t, output.String(), "SoundController", "missing mutation change report")
+	assert.Contains(t, output.String(), "delta ", "missing mutation change report")
+	assert.FileExists(t, outputPath+".0000", "generation zero was not written")
 
 	written := newTestPatch(t, "Sound Controller")
-	if err := loadSeedPatch(outputPath, written); err != nil {
-		t.Fatalf("load selected patch: %v", err)
-	}
+	require.NoError(t, loadSeedPatch(outputPath, written), "load selected patch")
 	expectedGenes := geneValues(t, expectedPatches[0].patch)
 	for index := range expectedGenes {
-		got := written.genes[index].value
-		want := expectedGenes[index].value
-		if got != want {
-			t.Fatalf("selected gene %d is %d, want %d", index, got, want)
-		}
+		assert.Equal(t, expectedGenes[index].value, written.genes[index].value, "selected gene %d", index)
 	}
 }
 
@@ -108,12 +96,9 @@ func TestMutationUsesConfiguredRoundSize(t *testing.T) {
 		strings.NewReader("9 8 7 6"),
 		&output,
 	)
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if !strings.Contains(output.String(), "candidate 3/3") || !strings.Contains(output.String(), "generation 0001") {
-		t.Fatalf("population did not continue into a second generation: %q", output.String())
-	}
+	require.NoError(t, err, "run")
+	assert.Contains(t, output.String(), "candidate 3/3", "population did not continue into a second generation")
+	assert.Contains(t, output.String(), "generation 0001", "population did not continue into a second generation")
 }
 
 func TestTerminationErrorExitCode(t *testing.T) {
@@ -128,10 +113,7 @@ func TestTerminationErrorExitCode(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := terminationError{signal: test.signal}
-			if got := err.exitCode(); got != test.want {
-				t.Fatalf("exit code is %d, want %d", got, test.want)
-			}
+			assert.Equal(t, test.want, terminationError{signal: test.signal}.exitCode())
 		})
 	}
 }
@@ -147,15 +129,16 @@ func TestParseConfiguration(t *testing.T) {
 		"--rng-seed", "1234",
 		"--json",
 	}, io.Discard)
-	if err != nil {
-		t.Fatalf("parseConfiguration: %v", err)
-	}
-	if config.modelName != "Volca Bass" || config.portName != "MIDI Out" || config.output != "best.mid" {
-		t.Fatalf("unexpected configuration: %+v", config)
-	}
-	if config.settings.roundSize != 6 || config.settings.mutationRate != 0.8 || config.settings.parentDecay != 0.25 || config.midiChannel != defaultMIDIChannelNumber || config.rngSeed != 1234 || !config.jsonOutput {
-		t.Fatalf("unexpected evolution settings: %+v", config.settings)
-	}
+	require.NoError(t, err, "parseConfiguration")
+	assert.Equal(t, "Volca Bass", config.modelName, "unexpected configuration: %+v", config)
+	assert.Equal(t, "MIDI Out", config.portName, "unexpected configuration: %+v", config)
+	assert.Equal(t, "best.mid", config.output, "unexpected configuration: %+v", config)
+	assert.Equal(t, 6, config.settings.roundSize, "unexpected evolution settings: %+v", config.settings)
+	assert.Equal(t, 0.8, config.settings.mutationRate, "unexpected evolution settings: %+v", config.settings)
+	assert.Equal(t, 0.25, config.settings.parentDecay, "unexpected evolution settings: %+v", config.settings)
+	assert.Equal(t, defaultMIDIChannelNumber, config.midiChannel, "unexpected evolution settings: %+v", config.settings)
+	assert.Equal(t, int64(1234), config.rngSeed, "unexpected evolution settings: %+v", config.settings)
+	assert.True(t, config.jsonOutput, "unexpected evolution settings: %+v", config.settings)
 }
 
 func TestParseConfigurationDefaultsRNGSeed(t *testing.T) {
@@ -164,18 +147,13 @@ func TestParseConfigurationDefaultsRNGSeed(t *testing.T) {
 		"--port", "MIDI Out",
 		"--output", "best.mid",
 	}, io.Discard)
-	if err != nil {
-		t.Fatalf("parseConfiguration: %v", err)
-	}
-	if config.rngSeed != unsetRNGSeed {
-		t.Fatalf("default RNG seed is %d, want unset", config.rngSeed)
-	}
+	require.NoError(t, err, "parseConfiguration")
+	assert.Equal(t, unsetRNGSeed, config.rngSeed, "default RNG seed is not unset")
 }
 
 func TestParseConfigurationRejectsPositionalArguments(t *testing.T) {
-	if _, err := parseConfiguration([]string{"unexpected"}, io.Discard); err == nil {
-		t.Fatal("accepted positional arguments")
-	}
+	_, err := parseConfiguration([]string{"unexpected"}, io.Discard)
+	assert.Error(t, err, "accepted positional arguments")
 }
 
 func TestValidateConfiguration(t *testing.T) {
@@ -187,9 +165,8 @@ func TestValidateConfiguration(t *testing.T) {
 		midiChannel: defaultMIDIChannelNumber,
 		settings:    defaultEvolutionSettings(),
 	}
-	if err := validateConfiguration(valid); err != nil {
-		t.Fatalf("valid configuration: %v", err)
-	}
+	assert.NoError(t, validateConfiguration(valid), "rejected a valid CC configuration")
+
 	sysex := configuration{
 		format:      dx7SingleFormatName,
 		portName:    "MIDI Out",
@@ -198,9 +175,7 @@ func TestValidateConfiguration(t *testing.T) {
 		midiChannel: defaultMIDIChannelNumber,
 		settings:    defaultEvolutionSettings(),
 	}
-	if err := validateConfiguration(sysex); err != nil {
-		t.Fatalf("valid SysEx configuration: %v", err)
-	}
+	assert.NoError(t, validateConfiguration(sysex), "rejected a valid SysEx configuration")
 
 	tests := []struct {
 		name   string
@@ -214,10 +189,7 @@ func TestValidateConfiguration(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := validateConfiguration(test.config); err == nil {
-				t.Fatal("accepted incomplete configuration")
-			}
+			assert.Error(t, validateConfiguration(test.config), "accepted incomplete configuration")
 		})
 	}
-
 }

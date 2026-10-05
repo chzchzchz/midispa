@@ -4,28 +4,21 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewMutationInitializesParentAndRound(t *testing.T) {
 	settings := defaultEvolutionSettings()
 	settings.roundSize = 3
 	mutation, err := newMutation(newTestCCFactory("Volca Bass"), settings, rand.New(rand.NewSource(5)), nil, "")
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
-	if mutation.parent == nil {
-		t.Fatal("mutation has no parent patch")
-	}
-	if mutation.parentScore == nil || *mutation.parentScore != 0 {
-		t.Fatalf("initial parent score is %v, want 0", mutation.parentScore)
-	}
-	if mutation.generation != 0 {
-		t.Fatalf("initial generation is %d, want 0", mutation.generation)
-	}
-	patches := mutation.nextRound()
-	if len(patches) != settings.roundSize {
-		t.Fatalf("round has %d patches, want %d", len(patches), settings.roundSize)
-	}
+	require.NoError(t, err, "newMutation")
+	assert.NotNil(t, mutation.parent, "mutation has no parent patch")
+	require.NotNil(t, mutation.parentScore, "mutation has no parent score")
+	assert.Zero(t, *mutation.parentScore, "initial parent score")
+	assert.Zero(t, mutation.generation, "initial generation")
+	assert.Len(t, mutation.nextRound(), settings.roundSize, "round size")
 }
 
 func TestMutationBreedsPopulationFromMultipleParents(t *testing.T) {
@@ -50,21 +43,15 @@ func TestMutationBreedsPopulationFromMultipleParents(t *testing.T) {
 		{patch: other, score: 8},
 		{patch: parent, score: 7},
 	})
-	if err != nil {
-		t.Fatalf("breedPopulation: %v", err)
-	}
-	if len(population) != settings.roundSize {
-		t.Fatalf("population has %d patches, want %d", len(population), settings.roundSize)
-	}
+	require.NoError(t, err, "breedPopulation")
+	require.Len(t, population, settings.roundSize, "population size")
 	elites := geneValues(t, population[0].patch)
-	if elites[0].value != 10 || geneValues(t, population[1].patch)[0].value != 100 {
-		t.Fatalf("elites were not preserved: %d, %d", elites[0].value, geneValues(t, population[1].patch)[0].value)
-	}
+	assert.Equal(t, 10, elites[0].value, "first elite was not preserved")
+	assert.Equal(t, 100, geneValues(t, population[1].patch)[0].value, "second elite was not preserved")
 	for index := 2; index < len(population); index++ {
 		for geneIndex, gene := range geneValues(t, population[index].patch) {
-			if gene.value != 10 && gene.value != 100 {
-				t.Fatalf("population candidate %d gene %d came from neither parent: %d", index, geneIndex, gene.value)
-			}
+			assert.Contains(t, []int{10, 100}, gene.value,
+				"population candidate %d gene %d came from neither parent", index, geneIndex)
 		}
 	}
 }
@@ -83,9 +70,7 @@ func TestRankWeightedSelectionFavorsHigherRanks(t *testing.T) {
 			highSelections++
 		}
 	}
-	if highSelections < 800 {
-		t.Fatalf("higher-ranked patch selected %d/1000 times, want at least 800", highSelections)
-	}
+	assert.GreaterOrEqual(t, highSelections, 800, "higher-ranked patch selected times out of 1000")
 }
 
 func TestParentDecayAllowsAgedChampionReplacement(t *testing.T) {
@@ -98,25 +83,17 @@ func TestParentDecayAllowsAgedChampionReplacement(t *testing.T) {
 		parentScore: &parentScore,
 	}
 
-	if _, _, improved := mutation.advanceRanked([]scoredPatch{{patch: candidate, score: 8}}); improved {
-		t.Fatal("fresh rank-9 parent was replaced by rank 8")
-	}
-	if mutation.parentAge != 1 {
-		t.Fatalf("parent age is %d after one stale round, want 1", mutation.parentAge)
-	}
-	if _, _, improved := mutation.advanceRanked([]scoredPatch{{patch: candidate, score: 8}}); improved {
-		t.Fatal("one-generation-old rank-9 parent was replaced by rank 8")
-	}
+	_, _, improved := mutation.advanceRanked([]scoredPatch{{patch: candidate, score: 8}})
+	assert.False(t, improved, "fresh rank-9 parent was replaced by rank 8")
+	assert.Equal(t, 1, mutation.parentAge, "parent age after one stale round")
+	_, _, improved = mutation.advanceRanked([]scoredPatch{{patch: candidate, score: 8}})
+	assert.False(t, improved, "one-generation-old rank-9 parent was replaced by rank 8")
 	selected, score, improved := mutation.advanceRanked([]scoredPatch{{patch: candidate, score: 8}})
-	if !improved || selected != candidate || score != 8 {
-		t.Fatalf("aged parent was not replaced: selected=%p score=%d improved=%t", selected, score, improved)
-	}
-	if mutation.parentAge != 0 {
-		t.Fatalf("parent age is %d after replacement, want 0", mutation.parentAge)
-	}
-	if got, want := mutation.parentSelectionWeight(), 9.0; got != want {
-		t.Fatalf("new parent selection weight is %v, want %v", got, want)
-	}
+	assert.True(t, improved, "aged parent was not replaced")
+	assert.Same(t, candidate, selected, "aged parent was not replaced")
+	assert.Equal(t, 8, score, "aged parent was not replaced")
+	assert.Zero(t, mutation.parentAge, "parent age after replacement")
+	assert.Equal(t, 9.0, mutation.parentSelectionWeight(), "new parent selection weight")
 }
 
 func TestMutationCrossoverMixesGenes(t *testing.T) {
@@ -128,13 +105,9 @@ func TestMutationCrossoverMixesGenes(t *testing.T) {
 		parentB.genes[index].value = 100
 	}
 	child, err := mutation.crossover(parentA, parentB, true)
-	if err != nil {
-		t.Fatalf("crossover: %v", err)
-	}
+	require.NoError(t, err, "crossover")
 	for index, gene := range geneValues(t, child) {
-		if gene.value != 10 && gene.value != 100 {
-			t.Fatalf("gene %d came from neither parent: %d", index, gene.value)
-		}
+		assert.Contains(t, []int{10, 100}, gene.value, "gene %d came from neither parent", index)
 	}
 }
 
@@ -142,9 +115,8 @@ func TestCrossoverRejectsAnotherFormat(t *testing.T) {
 	mutation := &Mutation{settings: defaultEvolutionSettings(), random: rand.New(rand.NewSource(10))}
 	ccPatch := newTestPatch(t, "Sound Controller")
 	sysexPatch := newTestSysexPatch(t)
-	if _, err := mutation.crossover(ccPatch, sysexPatch, true); err == nil {
-		t.Fatal("combined genes from two formats")
-	}
+	_, err := mutation.crossover(ccPatch, sysexPatch, true)
+	assert.Error(t, err, "combined genes from two formats")
 }
 
 func TestGaussianMutationStaysInMIDIRange(t *testing.T) {
@@ -159,16 +131,13 @@ func TestGaussianMutationStaysInMIDIRange(t *testing.T) {
 	child := mutation.mutatePatch(parent, true)
 	changed := 0
 	for index, gene := range geneValues(t, child) {
-		if gene.value < 0 || gene.value > maxMIDIValue {
-			t.Fatalf("gene %d is outside MIDI range: %d", index, gene.value)
-		}
+		assert.GreaterOrEqual(t, gene.value, 0, "gene %d is below the MIDI range", index)
+		assert.LessOrEqual(t, gene.value, maxMIDIValue, "gene %d is above the MIDI range", index)
 		if gene.value != parent.genes[index].value {
 			changed++
 		}
 	}
-	if changed != settings.mutatedGenes {
-		t.Fatalf("changed %d genes, want %d", changed, settings.mutatedGenes)
-	}
+	assert.Equal(t, settings.mutatedGenes, changed, "changed genes")
 }
 
 func TestMutationWriteChanges(t *testing.T) {
@@ -177,21 +146,13 @@ func TestMutationWriteChanges(t *testing.T) {
 	candidate.genes[0].value = parent.genes[0].value + 20
 	var output strings.Builder
 	runner := mutationRunner{engine: &Mutation{parent: parent}, output: &output}
-	if err := runner.writeChanges(candidate, parent); err != nil {
-		t.Fatalf("writeChanges: %v", err)
-	}
+	require.NoError(t, runner.writeChanges(candidate, parent), "writeChanges")
 	want := "  " + candidate.genes[0].name + ": 0 -> 20 (delta +20)\n"
-	if output.String() != want {
-		t.Fatalf("change report is %q, want %q", output.String(), want)
-	}
+	assert.Equal(t, want, output.String(), "change report")
 
 	output.Reset()
-	if err := runner.writeChanges(parent.clone(), parent); err != nil {
-		t.Fatalf("writeChanges: %v", err)
-	}
-	if output.String() != "  changed genes: none (unchanged parent)\n" {
-		t.Fatalf("unchanged report is %q", output.String())
-	}
+	require.NoError(t, runner.writeChanges(parent.clone(), parent), "writeChanges")
+	assert.Equal(t, "  changed genes: none (unchanged parent)\n", output.String(), "unchanged report")
 }
 
 func TestMutationAdvancePreventsRegression(t *testing.T) {
@@ -210,49 +171,39 @@ func TestMutationAdvancePreventsRegression(t *testing.T) {
 	}
 
 	selected, score, improved, err := advance(better, 6)
-	if err != nil {
-		t.Fatalf("advance: %v", err)
-	}
-	if selected != parent || score != 7 || improved {
-		t.Fatalf("worse round replaced parent: selected=%p score=%d improved=%t", selected, score, improved)
-	}
+	require.NoError(t, err, "advance")
+	assert.Same(t, parent, selected, "worse round replaced parent")
+	assert.Equal(t, 7, score, "worse round replaced parent")
+	assert.False(t, improved, "worse round replaced parent")
 
 	selected, score, improved, err = advance(better, 8)
-	if err != nil {
-		t.Fatalf("advance: %v", err)
-	}
-	if selected != better || score != 8 || !improved {
-		t.Fatalf("better round did not replace parent: selected=%p score=%d improved=%t", selected, score, improved)
-	}
+	require.NoError(t, err, "advance")
+	assert.Same(t, better, selected, "better round did not replace parent")
+	assert.Equal(t, 8, score, "better round did not replace parent")
+	assert.True(t, improved, "better round did not replace parent")
 
 	selected, score, improved, err = advance(equal, 8)
-	if err != nil {
-		t.Fatalf("advance: %v", err)
-	}
-	if selected != better || score != 8 || improved {
-		t.Fatalf("tie replaced earlier parent: selected=%p score=%d improved=%t", selected, score, improved)
-	}
+	require.NoError(t, err, "advance")
+	assert.Same(t, better, selected, "tie replaced earlier parent")
+	assert.Equal(t, 8, score, "tie replaced earlier parent")
+	assert.False(t, improved, "tie replaced earlier parent")
 }
 
 func TestNewMutationRejectsInvalidState(t *testing.T) {
-	if _, err := newMutation(newTestCCFactory("Volca Bass"), defaultEvolutionSettings(), nil, nil, ""); err == nil {
-		t.Fatal("accepted a nil random source")
-	}
+	_, err := newMutation(newTestCCFactory("Volca Bass"), defaultEvolutionSettings(), nil, nil, "")
+	assert.Error(t, err, "accepted a nil random source")
 
 	settings := defaultEvolutionSettings()
 	model := newTestPatch(t, "Sound Controller")
 	settings.mutatedGenes = len(model.genes) + 1
-	if _, err := newMutation(newTestCCFactory(model.model), settings, rand.New(rand.NewSource(6)), nil, ""); err == nil {
-		t.Fatal("accepted more mutated genes than the model has")
-	}
+	_, err = newMutation(newTestCCFactory(model.model), settings, rand.New(rand.NewSource(6)), nil, "")
+	assert.Error(t, err, "accepted more mutated genes than the model has")
 	for _, roundSize := range []int{1, 2} {
 		settings := defaultEvolutionSettings()
 		settings.roundSize = roundSize
-		if _, err := newMutation(newTestCCFactory(model.model), settings, rand.New(rand.NewSource(7)), nil, ""); err == nil {
-			t.Fatalf("accepted round size %d without room for offspring", roundSize)
-		}
+		_, err = newMutation(newTestCCFactory(model.model), settings, rand.New(rand.NewSource(7)), nil, "")
+		assert.Error(t, err, "accepted round size %d without room for offspring", roundSize)
 	}
-	if _, err := newMutation(sysexPatchFactory{format: newDX7Format(0)}, defaultEvolutionSettings(), rand.New(rand.NewSource(8)), nil, ""); err == nil {
-		t.Fatal("started a SysEx run without a seed")
-	}
+	_, err = newMutation(sysexPatchFactory{format: newDX7Format(0)}, defaultEvolutionSettings(), rand.New(rand.NewSource(8)), nil, "")
+	assert.Error(t, err, "started a SysEx run without a seed")
 }

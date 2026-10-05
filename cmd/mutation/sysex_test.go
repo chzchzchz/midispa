@@ -5,13 +5,14 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/chzchzchz/midispa/midi"
 	dx7 "github.com/chzchzchz/midispa/sysex/yamaha/dx7"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // testSingleVoice is a valid one-voice program with a few non-default values,
@@ -31,9 +32,7 @@ func testSingleVoiceMessage(t *testing.T, channel int) []byte {
 	voice := testSingleVoice()
 	voice.Channel = channel
 	message, err := voice.MarshalBinary()
-	if err != nil {
-		t.Fatalf("marshal test voice: %v", err)
-	}
+	require.NoError(t, err, "marshal test voice")
 	return message
 }
 
@@ -46,43 +45,29 @@ func newTestSysexPatchFrom(t *testing.T, message []byte, semantics map[string]ge
 	t.Helper()
 	format := newDX7Format(0)
 	candidate, err := newSysexPatch(format, format.NewRoot(), semantics)
-	if err != nil {
-		t.Fatalf("newSysexPatch: %v", err)
-	}
-	if err := candidate.loadMessage(message); err != nil {
-		t.Fatalf("loadMessage: %v", err)
-	}
+	require.NoError(t, err, "newSysexPatch")
+	require.NoError(t, candidate.loadMessage(message), "loadMessage")
 	return candidate
 }
 
 func writeTestSeed(t *testing.T, message []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "voice.syx")
-	if err := os.WriteFile(path, message, 0o600); err != nil {
-		t.Fatalf("write seed: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, message, 0o600), "write seed")
 	return path
 }
 
 func TestSysexPatchReadsEveryTaggedVoiceField(t *testing.T) {
 	candidate := newTestSysexPatch(t)
-	if len(candidate.genes) < 100 {
-		t.Fatalf("catalog has %d genes, want the whole voice", len(candidate.genes))
-	}
-	if candidate.formatID() != dx7SingleFormatName {
-		t.Fatalf("format is %q, want %q", candidate.formatID(), dx7SingleFormatName)
-	}
+	assert.GreaterOrEqual(t, len(candidate.genes), 100, "catalog has %d genes, want the whole voice", len(candidate.genes))
+	assert.Equal(t, dx7SingleFormatName, candidate.formatID(), "format")
 	// The seed supplies the values, so every gene starts from the file.
 	byName := make(map[string]gene, len(candidate.genes))
 	for _, gene := range candidate.genes {
 		byName[gene.name] = gene
 	}
-	if got := byName["Osc[0].EgRate[1]"]; got.value != 20 {
-		t.Fatalf("Osc[0].EgRate[1] seeded as %d, want 20", got.value)
-	}
-	if got := byName["Transpose"]; got.value != 12 {
-		t.Fatalf("Transpose seeded as %d, want 12", got.value)
-	}
+	assert.Equal(t, 20, byName["Osc[0].EgRate[1]"].value, "Osc[0].EgRate[1] seeded, want 20")
+	assert.Equal(t, 12, byName["Transpose"].value, "Transpose seeded, want 12")
 }
 
 // A field the record marks as not a sound parameter is not in the catalog at
@@ -91,16 +76,12 @@ func TestSysexPatchReadsEveryTaggedVoiceField(t *testing.T) {
 func TestSysexPatchOmitsMetadata(t *testing.T) {
 	candidate := newTestSysexPatch(t)
 	for _, gene := range candidate.genes {
-		if gene.name == "Channel" || strings.HasPrefix(gene.name, "VoiceName[") {
-			t.Fatalf("%s is not a sound parameter and must not be a gene", gene.name)
-		}
-		if gene.policy != genePolicyMutable {
-			t.Fatalf("%s is %v, want mutable", gene.name, gene.policy)
-		}
+		assert.NotEqual(t, "Channel", gene.name, "%s is not a sound parameter and must not be a gene", gene.name)
+		assert.False(t, strings.HasPrefix(gene.name, "VoiceName["),
+			"%s is not a sound parameter and must not be a gene", gene.name)
+		assert.Equal(t, genePolicyMutable, gene.policy, "%s policy", gene.name)
 	}
-	if candidate.mutableGeneCount() != len(candidate.genes) {
-		t.Fatal("every catalogued gene should be mutable")
-	}
+	assert.Equal(t, len(candidate.genes), candidate.mutableGeneCount(), "every catalogued gene should be mutable")
 }
 
 func TestSysexEncodeRoundTripsThroughTheCodec(t *testing.T) {
@@ -112,19 +93,11 @@ func TestSysexEncodeRoundTripsThroughTheCodec(t *testing.T) {
 	for generation := 0; generation < 20; generation++ {
 		child := engine.mutatePatch(candidate, generation%2 == 0)
 		messages, err := child.encode(0)
-		if err != nil {
-			t.Fatalf("encode generation %d: %v", generation, err)
-		}
-		if len(messages) != 1 {
-			t.Fatalf("generation %d emitted %d messages, want 1", generation, len(messages))
-		}
-		if len(messages[0]) != 163 {
-			t.Fatalf("generation %d emitted %d bytes, want 163", generation, len(messages[0]))
-		}
+		require.NoError(t, err, "encode generation %d", generation)
+		require.Len(t, messages, 1, "generation %d emitted %d messages, want 1", generation, len(messages))
+		assert.Len(t, messages[0], 163, "generation %d emitted %d bytes, want 163", generation, len(messages[0]))
 		var decoded dx7.SingleVoice
-		if err := decoded.UnmarshalBinary(messages[0]); err != nil {
-			t.Fatalf("decode generation %d: %v", generation, err)
-		}
+		assert.NoError(t, decoded.UnmarshalBinary(messages[0]), "decode generation %d", generation)
 	}
 }
 
@@ -136,27 +109,18 @@ func TestSysexEncodeRejectsAnOutOfDomainValue(t *testing.T) {
 			candidate.genes[index].value = 120
 		}
 	}
-	if _, err := candidate.encode(0); err == nil {
-		t.Fatal("encoded a value the instrument would clamp")
-	}
+	_, err := candidate.encode(0)
+	assert.Error(t, err, "encoded a value the instrument would clamp")
 }
 
 func TestSysexEncodeAppliesTheConfiguredChannel(t *testing.T) {
 	format := newDX7Format(9)
 	candidate, err := newSysexPatch(format, format.NewRoot(), nil)
-	if err != nil {
-		t.Fatalf("newSysexPatch: %v", err)
-	}
-	if err := candidate.loadMessage(testSingleVoiceMessage(t, 0)); err != nil {
-		t.Fatalf("loadMessage: %v", err)
-	}
+	require.NoError(t, err, "newSysexPatch")
+	require.NoError(t, candidate.loadMessage(testSingleVoiceMessage(t, 0)), "loadMessage")
 	messages, err := candidate.encode(0)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	if got := messages[0][2]; got != 9 {
-		t.Fatalf("emitted channel %d, want 9", got)
-	}
+	require.NoError(t, err, "encode")
+	assert.Equal(t, byte(9), messages[0][2], "emitted channel")
 }
 
 func TestSysexPatchClonesWithoutSharingGenes(t *testing.T) {
@@ -167,16 +131,10 @@ func TestSysexPatchClonesWithoutSharingGenes(t *testing.T) {
 			child.genes[index].value = 7
 		}
 	}
-	if parent.genes[0].value == 7 {
-		t.Fatal("a clone changed its parent's genes")
-	}
+	assert.NotEqual(t, 7, parent.genes[0].value, "a clone changed its parent's genes")
 	changes, err := geneChanges(child, parent)
-	if err != nil {
-		t.Fatalf("geneChanges: %v", err)
-	}
-	if len(changes) == 0 {
-		t.Fatal("a modified clone reported no changes")
-	}
+	require.NoError(t, err, "geneChanges")
+	assert.NotEmpty(t, changes, "a modified clone reported no changes")
 }
 
 func TestSysexSeedRejectsUnusableDumps(t *testing.T) {
@@ -204,9 +162,7 @@ func TestSysexSeedRejectsUnusableDumps(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			path := writeTestSeed(t, test.message)
 			format := sysexPatchFactory{format: newDX7Format(0)}
-			if err := format.loadSeed(path, newTestSysexPatch(t)); err == nil {
-				t.Fatal("accepted an unusable seed file")
-			}
+			assert.Error(t, format.loadSeed(path, newTestSysexPatch(t)), "accepted an unusable seed file")
 		})
 	}
 }
@@ -221,23 +177,18 @@ func TestSysexSeedAcceptsANonPrintableVoiceName(t *testing.T) {
 		voice.VoiceName[index] = 0
 	}
 	message, err := voice.MarshalBinary()
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err, "marshal")
 	candidate := newTestSysexPatchFrom(t, message, nil)
-	if _, err := candidate.encode(0); err != nil {
-		t.Fatalf("encode a name the seed carried: %v", err)
-	}
+	_, err = candidate.encode(0)
+	assert.NoError(t, err, "encode a name the seed carried")
 	seedPath := writeTestSeed(t, message)
 	settings := defaultEvolutionSettings()
 	settings.roundSize = minimumRoundSize
 	engine, err := newMutation(sysexPatchFactory{format: newDX7Format(0)}, settings, rand.New(rand.NewSource(41)), nil, seedPath)
-	if err != nil {
-		t.Fatalf("a seed with a padded voice name was rejected: %v", err)
-	}
+	require.NoError(t, err, "a seed with a padded voice name was rejected")
 	for _, gene := range geneValues(t, engine.parent) {
-		if gene.name == "VoiceName[0]" && gene.value != 0 {
-			t.Fatalf("padded voice name became %d", gene.value)
+		if gene.name == "VoiceName[0]" {
+			assert.Equal(t, 0, gene.value, "padded voice name became %d", gene.value)
 		}
 	}
 }
@@ -252,16 +203,13 @@ func TestSysexGeneSemanticsUseReflectedNames(t *testing.T) {
 	for _, gene := range candidate.genes {
 		switch gene.name {
 		case "Osc[0].EgRate[0]":
-			t.Fatal("excluded gene remains in the catalog")
+			require.Fail(t, "excluded gene remains in the catalog")
 		case "Osc[0].EgRate[1]":
-			if gene.value != 42 || gene.policy != genePolicyFixed {
-				t.Fatalf("fixed gene is %+v", gene)
-			}
+			assert.Equal(t, 42, gene.value, "fixed gene value")
+			assert.Equal(t, genePolicyFixed, gene.policy, "fixed gene policy")
 		}
 	}
-	if err := candidate.validateFixedValues(); err != nil {
-		t.Fatalf("validateFixedValues: %v", err)
-	}
+	assert.NoError(t, candidate.validateFixedValues(), "validateFixedValues")
 }
 
 func TestSysexFixedValueMustFitItsOwnField(t *testing.T) {
@@ -271,9 +219,7 @@ func TestSysexFixedValueMustFitItsOwnField(t *testing.T) {
 	candidate := newTestSysexPatchFrom(t, testSingleVoiceMessage(t, 0), map[string]geneSemantic{
 		"Transpose": {Policy: "fixed", Value: &outOfRange},
 	})
-	if err := candidate.validateFixedValues(); err == nil {
-		t.Fatal("accepted a fixed value outside its field")
-	}
+	assert.Error(t, candidate.validateFixedValues(), "accepted a fixed value outside its field")
 }
 
 func TestSysexRuleCannotNameASkippedField(t *testing.T) {
@@ -282,108 +228,79 @@ func TestSysexRuleCannotNameASkippedField(t *testing.T) {
 	_, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), map[string]geneSemantic{
 		"VoiceName[0]": {Policy: "fixed"},
 	})
-	if err == nil {
-		t.Fatal("accepted a rule for a field that is not a gene")
-	}
+	assert.Error(t, err, "accepted a rule for a field that is not a gene")
 }
 
 func TestSysexPatchRejectsAnUnknownGeneName(t *testing.T) {
 	semantics := map[string]geneSemantic{"NotAField": {Policy: "exclude"}}
-	if _, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), semantics); err == nil {
-		t.Fatal("accepted semantics for a field that does not exist")
-	}
+	_, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), semantics)
+	assert.Error(t, err, "accepted semantics for a field that does not exist")
 }
 
 func TestSysexStoreWritesDecodableDumps(t *testing.T) {
 	candidate := newTestSysexPatch(t)
 	outputPath := filepath.Join(t.TempDir(), "best.syx")
 	store := sysexPatchStore{outputPath: outputPath}
-	if store.path() != outputPath {
-		t.Fatalf("store path is %q, want %q", store.path(), outputPath)
-	}
-	if err := store.save(candidate, 3); err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	assert.Equal(t, outputPath, store.path(), "store path")
+	require.NoError(t, store.save(candidate, 3), "save")
 	for _, path := range []string{outputPath, outputPath + ".0003"} {
 		written, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
+		require.NoError(t, err, "read %s", path)
 		var decoded dx7.SingleVoice
-		if err := decoded.UnmarshalBinary(written); err != nil {
-			t.Fatalf("decode %s: %v", path, err)
-		}
+		assert.NoError(t, decoded.UnmarshalBinary(written), "decode %s", path)
 	}
 }
 
 func TestSysexStoreRejectsAnotherFormat(t *testing.T) {
 	store := sysexPatchStore{outputPath: filepath.Join(t.TempDir(), "best.syx")}
-	if err := store.save(newTestPatch(t, "Sound Controller"), 0); err == nil {
-		t.Fatal("wrote a CC patch as a SysEx dump")
-	}
+	assert.Error(t, store.save(newTestPatch(t, "Sound Controller"), 0), "wrote a CC patch as a SysEx dump")
 	ccStore := smfPatchStore{outputPath: filepath.Join(t.TempDir(), "best.mid")}
-	if err := ccStore.save(newTestSysexPatch(t), 0); err == nil {
-		t.Fatal("wrote a SysEx patch as an SMF")
-	}
+	assert.Error(t, ccStore.save(newTestSysexPatch(t), 0), "wrote a SysEx patch as an SMF")
 }
 
 func TestSysexAuditionSendsOneMessageAndSettles(t *testing.T) {
 	candidate := newTestSysexPatch(t)
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, sleeps := newFakeMIDIPlayer(writer)
-	if err := player.audition(context.Background(), candidate, nil); err != nil {
-		t.Fatalf("audition: %v", err)
-	}
+	require.NoError(t, player.audition(context.Background(), candidate, nil), "audition")
 	// Two cleanup messages, the patch, then the probe; the settle wait lands
 	// between the patch and the probe.
-	if len(*sleeps) == 0 || (*sleeps)[0] != defaultSysexSettle {
-		t.Fatalf("first wait is %v, want the SysEx settle %v", (*sleeps)[0], defaultSysexSettle)
-	}
-	if writer.messages[2][0] != 0xf0 {
-		t.Fatalf("third message is not a SysEx message: %v", writer.messages[2])
-	}
-	if writer.messages[3][0] != 0x90 {
-		t.Fatalf("probe note did not follow the dump: %v", writer.messages[3])
-	}
+	require.NotEmpty(t, *sleeps, "the audition never waited")
+	assert.Equal(t, defaultSysexSettle, (*sleeps)[0], "first wait")
+	require.GreaterOrEqual(t, len(writer.messages), 4, "the audition sent too few messages")
+	assert.Equal(t, byte(0xf0), writer.messages[2][0], "third message is not a SysEx message")
+	assert.Equal(t, byte(0x90), writer.messages[3][0], "probe note did not follow the dump")
 }
 
 func TestSysexAuditionHonoursTheSettleFlag(t *testing.T) {
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, sleeps := newFakeMIDIPlayer(writer)
 	player.sysexSettle = 250 * time.Millisecond
-	if err := player.audition(context.Background(), newTestSysexPatch(t), nil); err != nil {
-		t.Fatalf("audition: %v", err)
-	}
-	if got := (*sleeps)[0]; got != 250*time.Millisecond {
-		t.Fatalf("settled for %v, want 250ms", got)
-	}
+	require.NoError(t, player.audition(context.Background(), newTestSysexPatch(t), nil), "audition")
+	require.NotEmpty(t, *sleeps, "the audition never waited")
+	assert.Equal(t, 250*time.Millisecond, (*sleeps)[0], "settled for the wrong duration")
 }
 
 func TestCCAuditionDoesNotSettle(t *testing.T) {
 	player, _, sleeps := newFakeMIDIPlayer(&recordingMIDIWriter{failAt: -1})
-	if err := player.audition(context.Background(), newTestPatch(t, "Sound Controller"), nil); err != nil {
-		t.Fatalf("audition: %v", err)
-	}
-	if len(*sleeps) == 0 || (*sleeps)[0] == defaultSysexSettle {
-		t.Fatalf("a CC patch waited for a SysEx settle: %v", *sleeps)
-	}
+	require.NoError(t, player.audition(context.Background(), newTestPatch(t, "Sound Controller"), nil), "audition")
+	// The original check failed on an empty wait list as well as on a settle
+	// wait, so an audition that never waited did not pass this either.
+	require.NotEmpty(t, *sleeps, "a CC audition recorded no waits at all")
+	assert.NotEqual(t, defaultSysexSettle, (*sleeps)[0], "a CC patch waited for a SysEx settle")
 }
 
 func TestSysexFormatSelection(t *testing.T) {
-	if _, err := newPatchFactory(configuration{format: ccFormatName, modelName: "Volca Bass", output: "best.mid", midiChannel: 1}); err != nil {
-		t.Fatalf("cc format: %v", err)
-	}
-	if _, err := newPatchFactory(configuration{format: dx7SingleFormatName, output: "best.syx", midiChannel: 1}); err != nil {
-		t.Fatalf("dx7-single format: %v", err)
-	}
-	if _, err := newPatchFactory(configuration{format: "dx7-bulk", output: "best.syx", midiChannel: 1}); err == nil {
-		t.Fatal("accepted a format that does not exist")
-	}
+	_, err := newPatchFactory(configuration{format: ccFormatName, modelName: "Volca Bass", output: "best.mid", midiChannel: 1})
+	assert.NoError(t, err, "cc format")
+	_, err = newPatchFactory(configuration{format: dx7SingleFormatName, output: "best.syx", midiChannel: 1})
+	assert.NoError(t, err, "dx7-single format")
+	_, err = newPatchFactory(configuration{format: "dx7-bulk", output: "best.syx", midiChannel: 1})
+	assert.Error(t, err, "accepted a format that does not exist")
 	// A CC run is defined by a model, so the format requires the name rather
 	// than the flag parser guessing it from --format.
-	if _, err := newPatchFactory(configuration{format: ccFormatName, output: "best.mid", midiChannel: 1}); err == nil {
-		t.Fatal("started a CC run without a model")
-	}
+	_, err = newPatchFactory(configuration{format: ccFormatName, output: "best.mid", midiChannel: 1})
+	assert.Error(t, err, "started a CC run without a model")
 }
 
 // The output suffix is a property of the selected format, so a run is rejected
@@ -404,12 +321,9 @@ func TestOutputExtensionComesFromTheFormat(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := validateConfiguration(test.config); err != nil {
-				t.Fatalf("flag validation rejected a well-formed configuration: %v", err)
-			}
-			if _, err := newPatchFactory(test.config); err == nil {
-				t.Fatal("accepted an output path the format would not write")
-			}
+			assert.NoError(t, validateConfiguration(test.config), "flag validation rejected a well-formed configuration")
+			_, err := newPatchFactory(test.config)
+			assert.Error(t, err, "accepted an output path the format would not write")
 		})
 	}
 }
@@ -424,9 +338,7 @@ func TestSysexRunWritesDecodableGenerations(t *testing.T) {
 	settings := defaultEvolutionSettings()
 	settings.roundSize = 3
 	engine, err := newMutation(sysexPatchFactory{format: newDX7Format(seedChannel - 1)}, settings, rand.New(rand.NewSource(11)), nil, seedPath)
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
+	require.NoError(t, err, "newMutation")
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, sleeps := newFakeMIDIPlayerForChannel(writer, seedChannel)
 	var output strings.Builder
@@ -439,23 +351,13 @@ func TestSysexRunWritesDecodableGenerations(t *testing.T) {
 		input:  strings.NewReader("1 9 2"),
 		output: &output,
 	}
-	if err := runner.run(context.Background()); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if !strings.Contains(output.String(), "selected candidate with rank 9") {
-		t.Fatalf("missing selection in %q", output.String())
-	}
+	require.NoError(t, runner.run(context.Background()), "run")
+	assert.Contains(t, output.String(), "selected candidate with rank 9", "missing selection")
 	written, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("read output: %v", err)
-	}
+	require.NoError(t, err, "read output")
 	var decoded dx7.SingleVoice
-	if err := decoded.UnmarshalBinary(written); err != nil {
-		t.Fatalf("decode output: %v", err)
-	}
-	if reflect.DeepEqual(decoded, *testSingleVoice()) {
-		t.Fatal("the champion is identical to the seed")
-	}
+	require.NoError(t, decoded.UnmarshalBinary(written), "decode output")
+	assert.NotEqual(t, *testSingleVoice(), decoded, "the champion is identical to the seed")
 	// Every candidate is a complete dump, and the probe note follows one once
 	// the settle delay has passed.
 	dumps := 0
@@ -464,27 +366,21 @@ func TestSysexRunWritesDecodableGenerations(t *testing.T) {
 			continue
 		}
 		dumps++
-		if message[2] != byte(seedChannel-1) {
-			t.Fatalf("dump %d targets channel %d, want %d", index, message[2], seedChannel-1)
+		assert.Equal(t, byte(seedChannel-1), message[2], "dump %d targets the wrong channel", index)
+		if index+1 >= len(writer.messages) {
+			require.Fail(t, "message %d was not followed by a probe note", index)
 		}
-		if index+1 >= len(writer.messages) || !midi.IsNoteOn(writer.messages[index+1][0]) {
-			t.Fatalf("message %d was not followed by a probe note", index)
-			continue
-		}
+		assert.True(t, midi.IsNoteOn(writer.messages[index+1][0]), "message %d was not followed by a probe note", index)
 		// The patch and the notes that audition it must agree, or the probe
 		// sounds whatever the instrument still had loaded.
-		if note := midi.Channel(writer.messages[index+1][0]); note != int(message[2]) {
-			t.Fatalf("probe note on channel %d follows a dump for channel %d", note, message[2])
-		}
+		assert.Equal(t, int(message[2]), midi.Channel(writer.messages[index+1][0]),
+			"probe note after dump %d plays on a different channel", index)
 	}
 	// The run continues into a second generation before the judge input runs
 	// out, so there are at least as many dumps as there were candidates.
-	if dumps < settings.roundSize {
-		t.Fatalf("sent %d dumps, want at least one per candidate (%d)", dumps, settings.roundSize)
-	}
-	if len(*sleeps) == 0 || (*sleeps)[0] != defaultSysexSettle {
-		t.Fatalf("first wait is %v, want the settle %v", (*sleeps)[0], defaultSysexSettle)
-	}
+	assert.GreaterOrEqual(t, dumps, settings.roundSize, "sent %d dumps, want at least one per candidate (%d)", dumps, settings.roundSize)
+	require.NotEmpty(t, *sleeps, "the run never waited before sending the dump")
+	assert.Equal(t, defaultSysexSettle, (*sleeps)[0], "first wait")
 }
 
 func TestSysexRunRejectsInvalidCombinations(t *testing.T) {
@@ -514,12 +410,9 @@ func TestSysexRunRejectsInvalidCombinations(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := validateConfiguration(test.config); err != nil {
-				t.Fatalf("flag validation rejected a well-formed configuration: %v", err)
-			}
-			if _, err := newPatchFactory(test.config); err == nil {
-				t.Fatal("accepted an incompatible combination")
-			}
+			assert.NoError(t, validateConfiguration(test.config), "flag validation rejected a well-formed configuration")
+			_, err := newPatchFactory(test.config)
+			assert.Error(t, err, "accepted an incompatible combination")
 		})
 	}
 }

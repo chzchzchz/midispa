@@ -2,10 +2,11 @@ package main
 
 import (
 	"math/rand"
-	"strings"
 	"testing"
 
 	"github.com/chzchzchz/midispa/sysex"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValueDomainDrawsInsideItsBounds(t *testing.T) {
@@ -13,9 +14,7 @@ func TestValueDomainDrawsInsideItsBounds(t *testing.T) {
 	random := rand.New(rand.NewSource(1))
 	for sample := 0; sample < 100; sample++ {
 		value := domain.draw(random)
-		if !domain.contains(value) {
-			t.Fatalf("drew %d, outside %s", value, domain)
-		}
+		assert.True(t, domain.contains(value), "drew %d, outside %s", value, domain)
 	}
 }
 
@@ -29,9 +28,8 @@ func TestValueDomainNeverRedrawsTheSameValue(t *testing.T) {
 	for _, domain := range domains {
 		for _, current := range allowedValues(domain) {
 			for sample := 0; sample < 50; sample++ {
-				if value := domain.drawDifferentFrom(random, current); value == current {
-					t.Fatalf("%s redrew the current value %d", domain, current)
-				}
+				value := domain.drawDifferentFrom(random, current)
+				assert.NotEqual(t, current, value, "%s redrew the current value", domain)
 			}
 		}
 	}
@@ -42,12 +40,9 @@ func TestValueDomainKeepsASingleValuedGene(t *testing.T) {
 	// must leave the gene alone instead of drawing until it differs.
 	domain := newValueDomain(sysex.Domain{Minimum: 3, Maximum: 3})
 	random := rand.New(rand.NewSource(3))
-	if value := domain.drawDifferentFrom(random, 3); value != 3 {
-		t.Fatalf("single-valued domain produced %d", value)
-	}
-	if _, ok := domain.nudge(3, random); ok {
-		t.Fatal("single-valued domain offered a nudge")
-	}
+	assert.Equal(t, 3, domain.drawDifferentFrom(random, 3), "single-valued domain produced another value")
+	_, ok := domain.nudge(3, random)
+	assert.False(t, ok, "single-valued domain offered a nudge")
 }
 
 func TestValueDomainNudgeStepsAwayAtTheEdges(t *testing.T) {
@@ -56,18 +51,20 @@ func TestValueDomainNudgeStepsAwayAtTheEdges(t *testing.T) {
 	domain := midiValueDomain()
 	random := rand.New(rand.NewSource(4))
 	tests := []struct {
+		name    string
 		current int
 		want    int
 	}{
-		{current: 0, want: 1},
-		{current: 64, want: 63},
-		{current: maxMIDIValue, want: maxMIDIValue - 1},
+		{name: "minimum steps up", current: 0, want: 1},
+		{name: "middle steps down", current: 64, want: 63},
+		{name: "maximum steps down", current: maxMIDIValue, want: maxMIDIValue - 1},
 	}
 	for _, test := range tests {
-		value, ok := domain.nudge(test.current, random)
-		if !ok || value != test.want {
-			t.Fatalf("nudge(%d) = %d, %t, want %d, true", test.current, value, ok, test.want)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			value, ok := domain.nudge(test.current, random)
+			require.True(t, ok, "nudge(%d) produced nothing", test.current)
+			assert.Equal(t, test.want, value, "nudge(%d)", test.current)
+		})
 	}
 }
 
@@ -77,9 +74,9 @@ func TestValueDomainNudgeStaysInsideAOneofSet(t *testing.T) {
 	for sample := 0; sample < 100; sample++ {
 		for _, current := range domain.allowed {
 			value, ok := domain.nudge(current, random)
-			if !ok || value == current || !domain.contains(value) {
-				t.Fatalf("nudge(%d) = %d, %t", current, value, ok)
-			}
+			require.True(t, ok, "nudge(%d) produced nothing", current)
+			assert.NotEqual(t, current, value, "nudge(%d) redrew the current value", current)
+			assert.True(t, domain.contains(value), "nudge(%d) produced %d, outside %s", current, value, domain)
 		}
 	}
 }
@@ -87,29 +84,26 @@ func TestValueDomainNudgeStaysInsideAOneofSet(t *testing.T) {
 func TestValueDomainClampSnapsToTheNearestChoice(t *testing.T) {
 	domain := newValueDomain(sysex.Domain{Minimum: 0, Maximum: 31, Allowed: []int{0, 7}})
 	tests := []struct {
+		name  string
 		value int
 		want  int
 	}{
-		{value: -5, want: 0},
-		{value: 3, want: 0},
-		{value: 4, want: 7},
-		{value: 99, want: 7},
+		{name: "below the range", value: -5, want: 0},
+		{name: "rounds down to the lower choice", value: 3, want: 0},
+		{name: "rounds up to the upper choice", value: 4, want: 7},
+		{name: "above the range", value: 99, want: 7},
 	}
 	for _, test := range tests {
-		if got := domain.clamp(test.value); got != test.want {
-			t.Fatalf("clamp(%d) = %d, want %d", test.value, got, test.want)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, domain.clamp(test.value), "clamp(%d)", test.value)
+		})
 	}
 }
 
 func TestValueDomainClampBoundsARange(t *testing.T) {
 	domain := newValueDomain(sysex.Domain{Minimum: 5, Maximum: 9})
-	if got := domain.clamp(-1); got != 5 {
-		t.Fatalf("clamp below the range is %d, want 5", got)
-	}
-	if got := domain.clamp(100); got != 9 {
-		t.Fatalf("clamp above the range is %d, want 9", got)
-	}
+	assert.Equal(t, 5, domain.clamp(-1), "clamp below the range")
+	assert.Equal(t, 9, domain.clamp(100), "clamp above the range")
 }
 
 func TestFixedGeneOutsideItsDomainIsRejected(t *testing.T) {
@@ -121,9 +115,8 @@ func TestFixedGeneOutsideItsDomainIsRejected(t *testing.T) {
 		},
 	}
 	err := gen.validateFixedValues()
-	if err == nil || !strings.Contains(err.Error(), "narrow") {
-		t.Fatalf("got error %v, want it to name the offending gene", err)
-	}
+	require.Error(t, err, "accepted a fixed gene outside its domain")
+	assert.Contains(t, err.Error(), "narrow", "the error does not name the offending gene")
 }
 
 func TestPendingFixedGeneIsRejected(t *testing.T) {
@@ -131,28 +124,21 @@ func TestPendingFixedGeneIsRejected(t *testing.T) {
 		format: "test",
 		genes:  []gene{{name: "waiting", policy: genePolicyFixedPendingSeed}},
 	}
-	if err := gen.validateFixedValues(); err == nil {
-		t.Fatal("accepted a fixed gene that never received a value")
-	}
+	assert.Error(t, gen.validateFixedValues(), "accepted a fixed gene that never received a value")
 }
 
 func TestGenesRejectAnotherFormat(t *testing.T) {
 	first := &patchGenes{format: ccFormatID, genes: []gene{{name: "a", value: 1}}}
 	second := &patchGenes{format: dx7SingleFormatName, genes: []gene{{name: "a", value: 2}}}
-	if err := first.crossover(second, rand.New(rand.NewSource(6))); err == nil {
-		t.Fatal("combined gene lists from two formats")
-	}
-	if _, err := first.changesFrom(second); err == nil {
-		t.Fatal("compared gene lists from two formats")
-	}
+	assert.Error(t, first.crossover(second, rand.New(rand.NewSource(6))), "combined gene lists from two formats")
+	_, err := first.changesFrom(second)
+	assert.Error(t, err, "compared gene lists from two formats")
 }
 
 func TestGenesRejectMismatchedLengths(t *testing.T) {
 	first := &patchGenes{format: ccFormatID, genes: []gene{{name: "a", value: 1}, {name: "b", value: 2}}}
 	second := &patchGenes{format: ccFormatID, genes: []gene{{name: "a", value: 3}}}
-	if err := first.crossover(second, rand.New(rand.NewSource(7))); err == nil {
-		t.Fatal("combined gene lists of different lengths")
-	}
+	assert.Error(t, first.crossover(second, rand.New(rand.NewSource(7))), "combined gene lists of different lengths")
 }
 
 // allowedValues lists the values a domain can actually produce, so the draw

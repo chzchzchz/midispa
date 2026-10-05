@@ -7,11 +7,12 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/chzchzchz/midispa/sysex/behringer/pro800"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // probePatchData is a patch with a few non-default values, in the newer dump
@@ -30,18 +31,14 @@ func probePatchData() *pro800.PatchData {
 func pro800Message(t *testing.T, data *pro800.PatchData) []byte {
 	t.Helper()
 	messages, err := newPro800Format().Encode(data)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
+	require.NoError(t, err, "encode")
 	return messages[0]
 }
 
 func writePro800Seed(t *testing.T, message []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "voice.syx")
-	if err := os.WriteFile(path, message, 0o600); err != nil {
-		t.Fatalf("write seed: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, message, 0o600), "write seed")
 	return path
 }
 
@@ -49,12 +46,8 @@ func newTestPro800Patch(t *testing.T) *SysexPatch {
 	t.Helper()
 	format := newPro800Format()
 	candidate, err := newSysexPatch(format, format.NewRoot(), nil)
-	if err != nil {
-		t.Fatalf("newSysexPatch: %v", err)
-	}
-	if err := candidate.loadMessage(pro800Message(t, probePatchData())); err != nil {
-		t.Fatalf("loadMessage: %v", err)
-	}
+	require.NoError(t, err, "newSysexPatch")
+	require.NoError(t, candidate.loadMessage(pro800Message(t, probePatchData())), "loadMessage")
 	return candidate
 }
 
@@ -69,29 +62,21 @@ func geneNamed(genes []gene, name string) *gene {
 
 func TestPro800FormatRoundTrips(t *testing.T) {
 	format := newPro800Format()
-	if format.ID() != pro800FormatName {
-		t.Fatalf("format is %q, want %q", format.ID(), pro800FormatName)
-	}
+	assert.Equal(t, pro800FormatName, format.ID(), "format ID")
 	message := pro800Message(t, probePatchData())
 	decoded, err := format.Decode(message)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
+	require.NoError(t, err, "Decode")
 	data, ok := decoded.(*pro800.PatchData)
-	if !ok {
-		t.Fatalf("Decode returned %T", decoded)
-	}
+	require.True(t, ok, "Decode returned %T", decoded)
 	// Everything the record carries has to survive, including the fields the
 	// catalog leaves alone.
-	if data.Address != 42 || data.Patch.Name != "PROBE" {
-		t.Fatalf("decoded address %d name %q", data.Address, data.Patch.Name)
-	}
-	if data.Patch.OscA.Volume != 1000 || data.Patch.OscB.Fine != 200 || data.Patch.Tuning[0] != 12345 {
-		t.Fatalf("decoded values did not survive: %+v", data.Patch)
-	}
-	if _, err := format.Encode(&dx7StyleRoot{}); err == nil {
-		t.Fatal("encoded a program from another format")
-	}
+	assert.Equal(t, 42, data.Address, "decoded address")
+	assert.Equal(t, "PROBE", data.Patch.Name, "decoded name")
+	assert.Equal(t, 1000, data.Patch.OscA.Volume, "decoded oscillator A volume")
+	assert.Equal(t, 200, data.Patch.OscB.Fine, "decoded oscillator B fine")
+	assert.Equal(t, int32(12345), data.Patch.Tuning[0], "decoded tuning")
+	_, err = format.Encode(&dx7StyleRoot{})
+	assert.Error(t, err, "encoded a program from another format")
 }
 
 // dx7StyleRoot stands in for a program a different format produced.
@@ -101,68 +86,69 @@ func TestPro800CatalogFollowsTheStructTags(t *testing.T) {
 	candidate := newTestPro800Patch(t)
 	// A field the record marks as not a sound parameter is not a gene. That
 	// is declared on the Pro800 struct, so this test names no field the
-	// command would otherwise have to know about.
-	for _, name := range []string{
-		"Address",
-		"Patch.Version",
-		"Patch.Reserved",
-		"Patch.Name",
-		"Patch.LfoAftertouchPresent",
+	// command would otherwise have to know about. Both directions live in
+	// one table because they are one decision per field: a field listed on
+	// the wrong side is the same mistake whichever way round it is.
+	fields := []struct {
+		name     string
+		wantGene bool
+	}{
+		{name: "Address", wantGene: false},
+		{name: "Patch.Version", wantGene: false},
+		{name: "Patch.Reserved", wantGene: false},
+		{name: "Patch.Name", wantGene: false},
+		{name: "Patch.LfoAftertouchPresent", wantGene: false},
 		// A 6E dump has nowhere to put these, so a run seeded from one
 		// could not evolve them. Leaving them out for both layouts keeps
 		// what a run can evolve independent of the layout it started from.
-		"Patch.VoiceSpread",
-		"Patch.TrackingReference",
-		"Patch.GlideMode",
-		"Patch.PitchBend.Range",
-	} {
-		if geneNamed(candidate.genes, name) != nil {
-			t.Fatalf("%s is not a sound parameter and must not be a gene", name)
-		}
-	}
-	for _, name := range []string{
-		"Patch.OscA.Volume",
-		"Patch.OscA.PitchMode",
-		"Patch.Filter.Cutoff",
-		"Patch.LfoAftertouch",
+		{name: "Patch.VoiceSpread", wantGene: false},
+		{name: "Patch.TrackingReference", wantGene: false},
+		{name: "Patch.GlideMode", wantGene: false},
+		{name: "Patch.PitchBend.Range", wantGene: false},
+		{name: "Patch.OscA.Volume", wantGene: true},
+		{name: "Patch.OscA.PitchMode", wantGene: true},
+		{name: "Patch.Filter.Cutoff", wantGene: true},
+		{name: "Patch.LfoAftertouch", wantGene: true},
 		// The fine tuning and the sync switch exist only on the second
 		// oscillator, so they are evolvable there and absent from the first
 		// because the record has nowhere to put them.
-		"Patch.OscB.Fine",
-		"Patch.OscB.Sync",
-		"Patch.Tuning[0]",
-		"Patch.Tuning[11]",
+		{name: "Patch.OscB.Fine", wantGene: true},
+		{name: "Patch.OscB.Sync", wantGene: true},
+		{name: "Patch.Tuning[0]", wantGene: true},
+		{name: "Patch.Tuning[11]", wantGene: true},
 		// The mod wheel's own range is in both layouts and stays evolvable,
 		// which is why the skip has to sit on the pitch bend field rather
 		// than on every field called Range.
-		"Patch.ModWheel.Range",
-		"Patch.PitchBend.Target",
-	} {
-		if geneNamed(candidate.genes, name) == nil {
-			t.Fatalf("%s is a sound parameter and should be a gene", name)
-		}
+		{name: "Patch.ModWheel.Range", wantGene: true},
+		{name: "Patch.PitchBend.Target", wantGene: true},
 	}
-	if candidate.mutableGeneCount() != len(candidate.genes) {
-		t.Fatal("every catalogued gene should be mutable")
+	for _, field := range fields {
+		t.Run(field.name, func(t *testing.T) {
+			gene := geneNamed(candidate.genes, field.name)
+			if field.wantGene {
+				assert.NotNil(t, gene, "%s is a sound parameter and should be a gene", field.name)
+				return
+			}
+			assert.Nil(t, gene, "%s is not a sound parameter and must not be a gene", field.name)
+		})
 	}
+	assert.Equal(t, len(candidate.genes), candidate.mutableGeneCount(), "every catalogued gene should be mutable")
 	// The embedded envelope inside the filter is flattened, so its fields
 	// carry no extra segment and a report reads the way a panel does.
 	if geneNamed(candidate.genes, "Patch.Filter.Envelope.Attack") == nil {
 		if geneNamed(candidate.genes, "Patch.Filter.Attack") == nil {
-			t.Fatal("the filter's envelope was not reached")
+			require.Fail(t, "the filter's envelope was not reached")
 		}
 	}
 }
 
 func TestPro800GeneValuesComeFromTheSeed(t *testing.T) {
 	candidate := newTestPro800Patch(t)
-	volume := geneNamed(candidate.genes, "Patch.OscA.Volume")
-	if volume == nil || volume.value != 1000 {
-		t.Fatalf("oscillator volume seeded as %+v", volume)
+	if volume := geneNamed(candidate.genes, "Patch.OscA.Volume"); assert.NotNil(t, volume, "no oscillator volume gene") {
+		assert.Equal(t, 1000, volume.value, "oscillator volume seeded")
 	}
-	tuning := geneNamed(candidate.genes, "Patch.Tuning[0]")
-	if tuning == nil || tuning.value != 12345 {
-		t.Fatalf("tuning seeded as %+v", tuning)
+	if tuning := geneNamed(candidate.genes, "Patch.Tuning[0]"); assert.NotNil(t, tuning, "no tuning gene") {
+		assert.Equal(t, 12345, tuning.value, "tuning seeded")
 	}
 }
 
@@ -174,13 +160,9 @@ func TestPro800EncodeRejectsAnUnwritableRecord(t *testing.T) {
 	older.Patch.Version = int(pro800.Version6E)
 	older.Patch.LfoAftertouchPresent = false
 	older.Patch.LfoAftertouch = 500
-	if _, err := (newPro800Format()).Encode(older); err == nil {
-		t.Fatal("encoded an aftertouch amount the layout has no room for")
-	}
-	candidate := newTestPro800Patch(t)
-	if err := candidate.encodable(); err != nil {
-		t.Fatalf("a seeded patch should be writable: %v", err)
-	}
+	_, err := (newPro800Format()).Encode(older)
+	assert.Error(t, err, "encoded an aftertouch amount the layout has no room for")
+	assert.NoError(t, newTestPro800Patch(t).encodable(), "a seeded patch should be writable")
 }
 
 // A Pro800 seed that decodes but cannot be written back cannot be built from
@@ -233,12 +215,9 @@ func TestPro800RunRejectsASeedItCannotWriteBack(t *testing.T) {
 		reason:       errors.New("value has no place in this dump layout"),
 	}
 	_, err := newMutation(factory, defaultEvolutionSettings(), rand.New(rand.NewSource(3)), nil, "seed.syx")
-	if err == nil || !strings.Contains(err.Error(), "seed cannot be written back") {
-		t.Fatalf("got error %v, want the seed to be rejected as unwritable", err)
-	}
-	if remaining != 0 {
-		t.Fatal("the parent was never asked whether it can be written")
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "seed cannot be written back", "want the seed to be rejected as unwritable")
+	assert.Zero(t, remaining, "the parent was never asked whether it can be written")
 }
 
 func TestPro800RunSkipsACandidateItCannotWrite(t *testing.T) {
@@ -248,13 +227,9 @@ func TestPro800RunSkipsACandidateItCannotWrite(t *testing.T) {
 	settings := defaultEvolutionSettings()
 	settings.roundSize = 3
 	engine, err := newMutation(sysexPatchFactory{format: newPro800Format()}, settings, rand.New(rand.NewSource(3)), nil, seedPath)
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
+	require.NoError(t, err, "newMutation")
 	parent, ok := engine.parent.(*SysexPatch)
-	if !ok {
-		t.Fatalf("parent is %T", engine.parent)
-	}
+	require.True(t, ok, "parent is %T", engine.parent)
 	remaining := 1
 	engine.population = []populationCandidate{
 		{
@@ -274,19 +249,13 @@ func TestPro800RunSkipsACandidateItCannotWrite(t *testing.T) {
 		input:      strings.NewReader("9 8"),
 		output:     &output,
 	}
-	if err := runner.run(context.Background()); err != nil {
-		t.Fatalf("a candidate that cannot be written ended the run: %v", err)
-	}
-	if !strings.Contains(output.String(), "skipped: value has no place in this dump layout") {
-		t.Fatalf("the unwritable candidate was not reported: %q", output.String())
-	}
-	if !strings.Contains(output.String(), "selected candidate with rank 9") {
-		t.Fatalf("the round was not ranked: %q", output.String())
-	}
+	require.NoError(t, runner.run(context.Background()), "a candidate that cannot be written ended the run")
+	assert.Contains(t, output.String(), "skipped: value has no place in this dump layout",
+		"the unwritable candidate was not reported")
+	assert.Contains(t, output.String(), "selected candidate with rank 9", "the round was not ranked")
 	// A dump is still a SysEx message, so the settle delay still applies.
-	if len(*sleeps) == 0 || (*sleeps)[0] != defaultSysexSettle {
-		t.Fatalf("first wait is %v, want the settle %v", (*sleeps)[0], defaultSysexSettle)
-	}
+	require.NotEmpty(t, *sleeps, "the run never waited before sending the dump")
+	assert.Equal(t, defaultSysexSettle, (*sleeps)[0], "first wait")
 	dumps := 0
 	for _, message := range writer.messages {
 		if message[0] == 0xf0 {
@@ -295,9 +264,7 @@ func TestPro800RunSkipsACandidateItCannotWrite(t *testing.T) {
 	}
 	// Two candidates were judged, and the run starts a second generation
 	// before the input runs out, so at least two dumps is the floor here.
-	if dumps < 2 {
-		t.Fatalf("sent %d dumps, want one per writable candidate", dumps)
-	}
+	assert.GreaterOrEqual(t, dumps, 2, "sent %d dumps, want one per writable candidate", dumps)
 }
 
 func TestPro800RunWritesDecodableGenerations(t *testing.T) {
@@ -306,9 +273,7 @@ func TestPro800RunWritesDecodableGenerations(t *testing.T) {
 	settings := defaultEvolutionSettings()
 	settings.roundSize = 3
 	engine, err := newMutation(sysexPatchFactory{format: newPro800Format()}, settings, rand.New(rand.NewSource(11)), nil, seedPath)
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
+	require.NoError(t, err, "newMutation")
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, _ := newFakeMIDIPlayer(writer)
 	var output strings.Builder
@@ -321,19 +286,12 @@ func TestPro800RunWritesDecodableGenerations(t *testing.T) {
 		input:  strings.NewReader("1 9 2"),
 		output: &output,
 	}
-	if err := runner.run(context.Background()); err != nil {
-		t.Fatalf("run: %v", err)
-	}
+	require.NoError(t, runner.run(context.Background()), "run")
 	written, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("read output: %v", err)
-	}
-	if _, err := (newPro800Format()).Decode(written); err != nil {
-		t.Fatalf("decode output: %v", err)
-	}
-	if reflect.DeepEqual(written, pro800Message(t, probePatchData())) {
-		t.Fatal("the champion is identical to the seed")
-	}
+	require.NoError(t, err, "read output")
+	_, err = (newPro800Format()).Decode(written)
+	assert.NoError(t, err, "decode output")
+	assert.NotEqual(t, pro800Message(t, probePatchData()), written, "the champion is identical to the seed")
 }
 
 func TestPro800GeneSemanticsUseReflectedNames(t *testing.T) {
@@ -342,45 +300,32 @@ func TestPro800GeneSemanticsUseReflectedNames(t *testing.T) {
 	candidate, err := newSysexPatch(format, format.NewRoot(), map[string]geneSemantic{
 		"Patch.Filter.Cutoff": {Policy: "fixed", Value: &fixed},
 	})
-	if err != nil {
-		t.Fatalf("newSysexPatch: %v", err)
+	require.NoError(t, err, "newSysexPatch")
+	require.NoError(t, candidate.loadMessage(pro800Message(t, probePatchData())), "loadMessage")
+	if cutoff := geneNamed(candidate.genes, "Patch.Filter.Cutoff"); assert.NotNil(t, cutoff, "no filter cutoff gene") {
+		assert.Equal(t, fixed, cutoff.value, "fixed gene value")
+		assert.Equal(t, genePolicyFixed, cutoff.policy, "fixed gene policy")
 	}
-	if err := candidate.loadMessage(pro800Message(t, probePatchData())); err != nil {
-		t.Fatalf("loadMessage: %v", err)
-	}
-	cutoff := geneNamed(candidate.genes, "Patch.Filter.Cutoff")
-	if cutoff == nil || cutoff.value != fixed || cutoff.policy != genePolicyFixed {
-		t.Fatalf("fixed gene is %+v", cutoff)
-	}
-	if err := candidate.validateFixedValues(); err != nil {
-		t.Fatalf("validateFixedValues: %v", err)
-	}
+	assert.NoError(t, candidate.validateFixedValues(), "validateFixedValues")
 	// A field the record marks as not a sound parameter cannot be named.
-	if _, err := newSysexPatch(format, format.NewRoot(), map[string]geneSemantic{
+	_, err = newSysexPatch(format, format.NewRoot(), map[string]geneSemantic{
 		"Patch.OscA.Fine": {Policy: "fixed", Value: &fixed},
-	}); err == nil {
-		t.Fatal("accepted a rule for a field that is not a gene")
-	}
+	})
+	assert.Error(t, err, "accepted a rule for a field that is not a gene")
 }
 
 func TestPro800FormatSelection(t *testing.T) {
-	if _, err := newPatchFactory(configuration{format: pro800FormatName, output: "best.syx", midiChannel: 1}); err != nil {
-		t.Fatalf("pro800 format: %v", err)
-	}
+	_, err := newPatchFactory(configuration{format: pro800FormatName, output: "best.syx", midiChannel: 1})
+	assert.NoError(t, err, "pro800 format")
 	withModel := configuration{format: pro800FormatName, modelName: "Volca Bass", portName: "test", output: "best.syx", midiChannel: 1}
-	if err := validateConfiguration(withModel); err != nil {
-		t.Fatalf("flag validation rejected a well-formed configuration: %v", err)
-	}
-	if _, err := newPatchFactory(withModel); err == nil {
-		t.Fatal("accepted --model for a format without one")
-	}
+	assert.NoError(t, validateConfiguration(withModel), "flag validation rejected a well-formed configuration")
+	_, err = newPatchFactory(withModel)
+	assert.Error(t, err, "accepted --model for a format without one")
 	withJSON := configuration{format: pro800FormatName, portName: "test", output: "best.syx", midiChannel: 1, jsonOutput: true}
-	if _, err := newPatchFactory(withJSON); err == nil {
-		t.Fatal("accepted --json for a format without a model")
-	}
-	if _, err := newPatchFactory(configuration{format: pro800FormatName, portName: "test", output: "best.mid", midiChannel: 1}); err == nil {
-		t.Fatal("accepted an output path the format would not write")
-	}
+	_, err = newPatchFactory(withJSON)
+	assert.Error(t, err, "accepted --json for a format without a model")
+	_, err = newPatchFactory(configuration{format: pro800FormatName, portName: "test", output: "best.mid", midiChannel: 1})
+	assert.Error(t, err, "accepted an output path the format would not write")
 }
 
 func TestPro800RunSaysWhyARoundEmptied(t *testing.T) {
@@ -391,13 +336,9 @@ func TestPro800RunSaysWhyARoundEmptied(t *testing.T) {
 	settings := defaultEvolutionSettings()
 	settings.roundSize = 3
 	engine, err := newMutation(sysexPatchFactory{format: newPro800Format()}, settings, rand.New(rand.NewSource(3)), nil, seedPath)
-	if err != nil {
-		t.Fatalf("newMutation: %v", err)
-	}
+	require.NoError(t, err, "newMutation")
 	parent, ok := engine.parent.(*SysexPatch)
-	if !ok {
-		t.Fatalf("parent is %T", engine.parent)
-	}
+	require.True(t, ok, "parent is %T", engine.parent)
 	remaining := settings.roundSize
 	population := make([]populationCandidate, 0, settings.roundSize)
 	for range settings.roundSize {
@@ -415,7 +356,7 @@ func TestPro800RunSaysWhyARoundEmptied(t *testing.T) {
 		output:     io.Discard,
 	}
 	err = runner.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "none of the 3 candidates could be written to the instrument") {
-		t.Fatalf("got error %v, want the round to explain itself", err)
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "none of the 3 candidates could be written to the instrument",
+		"want the round to explain itself")
 }
