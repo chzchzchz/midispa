@@ -30,10 +30,20 @@ const (
 
 // Validate routing values before opening ports because invalid channels otherwise fail during playback.
 func validateDevices(devices []Device) error {
+	// A name is how the palette, the log and the display talk about a device, so two of
+	// them answering to one name is a kit nobody can read back. A shared port or channel is
+	// not the same thing: a kit may put two devices on one destination deliberately, so
+	// only the name is checked here.
+	names := make(map[string]int, len(devices))
 	for index := range devices {
 		if err := validateDevice(index, &devices[index]); err != nil {
 			return err
 		}
+		name := devices[index].Name
+		if first, taken := names[name]; taken {
+			return fmt.Errorf("device %d (%q) has the same name as device %d", index, name, first)
+		}
+		names[name] = index
 	}
 	return nil
 }

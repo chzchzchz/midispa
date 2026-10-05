@@ -22,32 +22,57 @@ func writeKitFile(t *testing.T, dir, name, contents string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644))
 }
 
-func TestLoadDevicesFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "kit.json")
-	writeKitFile(t, dir, "kit.json", `{"Name":"single","MidiPort":"port","Channel":1,"Voices":[{"Name":"voice","Note":60}]}`)
+// A kit file holds either one device or a list of them, and the loader reads both back as
+// they were written. Each case goes through a file rather than a Go value, because the
+// shape on disk is what a kit author actually writes.
+func TestLoadDevicesFileShapes(t *testing.T) {
+	tests := []struct {
+		name          string
+		contents      string
+		wantNames     []string
+		wantPorts     []string
+		wantVoiceChan int
+	}{
+		{
+			name:          "one device as an object",
+			contents:      `{"Name":"single","MidiPort":"port","Channel":1,"Voices":[{"Name":"voice","Note":60}]}`,
+			wantNames:     []string{"single"},
+			wantPorts:     []string{"port"},
+			wantVoiceChan: 0,
+		},
+		{
+			name: "several as an array",
+			contents: `[
+				{"Name":"drums","MidiPort":"port-a","Channel":10,"Voices":[{"Name":"kick","Note":36}]},
+				{"Name":"lead","MidiPort":"port-b","Channel":1,"Voices":[{"Name":"lead","Channel":3}]}
+			]`,
+			wantNames:     []string{"drums", "lead"},
+			wantPorts:     []string{"port-a", "port-b"},
+			wantVoiceChan: 3,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKitFile(t, dir, "kit.json", tt.contents)
+			devices, err := loadDevices(filepath.Join(dir, "kit.json"))
+			require.NoError(t, err)
+			require.NoError(t, validateDevices(devices))
 
-	devices, err := loadDevices(path)
-	require.NoError(t, err)
-	require.Len(t, devices, 1)
-	require.Equal(t, "single", devices[0].Name)
-}
-
-func TestLoadDevicesArray(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "kit.json")
-	writeKitFile(t, dir, "kit.json", `[
-		{"Name":"drums","MidiPort":"port-a","Channel":10,"Voices":[{"Name":"kick","Note":36}]},
-		{"Name":"lead","MidiPort":"port-b","Channel":1,"Voices":[{"Name":"lead","Channel":3}]}
-	]`)
-
-	devices, err := loadDevices(path)
-	require.NoError(t, err)
-	require.NoError(t, validateDevices(devices))
-	require.Len(t, devices, 2)
-	require.Equal(t, "port-a", devices[0].MidiPort)
-	require.Equal(t, "port-b", devices[1].MidiPort)
-	require.Equal(t, 3, devices[1].Voices[0].Channel)
+			names := make([]string, 0, len(devices))
+			ports := make([]string, 0, len(devices))
+			for _, device := range devices {
+				names = append(names, device.Name)
+				ports = append(ports, device.MidiPort)
+			}
+			require.Equal(t, tt.wantNames, names, "the devices came back in another order")
+			require.Equal(t, tt.wantPorts, ports, "the ports came back in another order")
+			// The first voice of the last device, which is where the array case puts
+			// the one channel that is not the device's own. It is read as written:
+			// nothing has pointed these voices at a device yet.
+			require.Equal(t, tt.wantVoiceChan, devices[len(devices)-1].Voices[0].Channel)
+		})
+	}
 }
 
 func TestLoadDevicesDirectorySortsByName(t *testing.T) {
@@ -107,85 +132,135 @@ func TestLoadKitMergesFilesAndDirectories(t *testing.T) {
 }
 
 // One bad path fails the whole merge; a partial kit would silently drop voices.
+// One bad path fails the whole merge; a partial kit would silently drop voices. An empty
+// kit list is a run with no kit rather than an empty one.
 func TestLoadKitRejectsBadPath(t *testing.T) {
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good.json")
-	writeKitFile(t, dir, "good.json", `{"Name":"good","MidiPort":"g","Channel":1,"Voices":[{"Name":"v","Note":60}]}`)
-
-	_, err := loadKit([]string{good, filepath.Join(dir, "missing.json")})
-	require.Error(t, err, "a missing kit in the list should fail the merge")
-	_, err = loadKit(nil)
-	require.Error(t, err, "an empty kit list should fail")
-}
-
-// The flag has to accumulate so the same kit can be given more than once on the
-// command line, which is what lets several files be merged.
-func TestKitPathsFlagAccumulates(t *testing.T) {
-	var paths kitPaths
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	fs.Var(&paths, "kit", "kit")
-
-	require.NoError(t, fs.Parse([]string{"-kit", "a.json", "-kit", "b.json", "-kit", "dir"}))
-	require.Equal(t, []string{"a.json", "b.json", "dir"}, paths.all())
-	require.Equal(t, "a.json,b.json,dir", paths.String())
-	require.Error(t, fs.Parse([]string{"-kit", ""}), "an empty kit path should be refused")
-}
-
-// The default kit is only used when no -kit is given. It must not be merged with the
-// kits on the command line, which would fail on any directory without a kit.json.
-func TestKitPathsFlagReplacesDefault(t *testing.T) {
-	var paths kitPaths
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	fs.Var(&paths, "kit", "kit")
-
-	require.NoError(t, fs.Parse([]string{"-kit", "a.json", "-kit", "b.json"}))
-	for _, path := range paths.all() {
-		require.NotEqualf(t, defaultKitPath, path,
-			"the default kit was loaded alongside the given kits: %v", paths.all())
-	}
-
-	empty := flag.NewFlagSet("empty", flag.ContinueOnError)
-	var untouched kitPaths
-	empty.Var(&untouched, "kit", "kit")
-	require.NoError(t, empty.Parse(nil))
-	require.Equal(t, []string{defaultKitPath}, untouched.all())
-	require.Equal(t, defaultKitPath, untouched.String())
-}
-
-func TestValidateDevices(t *testing.T) {
-	valid := []Device{{
-		Name:     "valid",
-		MidiPort: "port",
-		Channel:  1,
-		Voices:   []Voice{{Name: "voice", Note: testNote(60)}},
-	}}
-	require.NoError(t, validateDevices(valid), "a valid device was rejected")
+	writeKitFile(t, dir, "good.json", `[{"Name":"good","MidiPort":"g","Channel":1,"Voices":[{"Name":"v","Note":60}]}]`)
 
 	tests := []struct {
-		name   string
-		device Device
+		name  string
+		paths []string
 	}{
-		{name: "missing port", device: Device{Channel: 1, Voices: []Voice{{Note: testNote(60)}}}},
-		{name: "invalid device channel", device: Device{MidiPort: "port", Channel: 17, Voices: []Voice{{Note: testNote(60)}}}},
-		{name: "invalid voice channel", device: Device{MidiPort: "port", Channel: 1, Voices: []Voice{{Note: testNote(60), Channel: 17}}}},
-		{name: "missing voices", device: Device{MidiPort: "port", Channel: 1}},
-		{name: "invalid note", device: Device{MidiPort: "port", Channel: 1, Voices: []Voice{{Note: testNote(128)}}}},
-		{name: "missing effective channel", device: Device{MidiPort: "port", Voices: []Voice{{Note: testNote(60)}}}},
+		{name: "a missing kit among the given ones", paths: []string{good, filepath.Join(dir, "missing.json")}},
+		{name: "no kits at all", paths: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Error(t, validateDevices([]Device{tt.device}), "expected a validation error")
+			_, err := loadKit(tt.paths)
+			require.Error(t, err)
 		})
 	}
 }
 
-func TestLoadDevicesRejectsEmptyKit(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "empty.json")
-	writeKitFile(t, dir, "empty.json", "")
+// The flag has to accumulate so the same kit can be given more than once on the
+// command line, which is what lets several files be merged.
+// The flag has to accumulate so the same kit can be given more than once on the command
+// line, which is what lets several files be merged. The default kit is only for the run
+// where nothing was asked for: merged with a given kit it would fail on any directory
+// without a kit.json. Each case states the whole result, so a default that leaked in
+// alongside a given kit would show as an extra path rather than pass unnoticed.
+func TestKitPathsFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		want     []string
+		wantText string
+	}{
+		{
+			name:     "nothing asked for falls back to the default",
+			args:     nil,
+			want:     []string{defaultKitPath},
+			wantText: defaultKitPath,
+		},
+		{
+			name:     "one kit replaces the default rather than joining it",
+			args:     []string{"-kit", "a.json"},
+			want:     []string{"a.json"},
+			wantText: "a.json",
+		},
+		{
+			name:     "several kits accumulate in the order given",
+			args:     []string{"-kit", "a.json", "-kit", "b.json", "-kit", "dir"},
+			want:     []string{"a.json", "b.json", "dir"},
+			wantText: "a.json,b.json,dir",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var paths kitPaths
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs.Var(&paths, "kit", "kit")
+			require.NoError(t, fs.Parse(tt.args))
+			require.Equal(t, tt.want, paths.all())
+			require.Equal(t, tt.wantText, paths.String())
+		})
+	}
 
-	_, err := loadDevices(path)
-	require.Error(t, err, "an empty kit should be refused")
+	// An empty path is refused rather than becoming a kit that is nowhere.
+	var paths kitPaths
+	fs := flag.NewFlagSet("empty", flag.ContinueOnError)
+	fs.Var(&paths, "kit", "kit")
+	require.Error(t, fs.Parse([]string{"-kit", ""}), "an empty kit path should be refused")
+}
+
+// The refusals each say which rule they are, so a case states the rule rather than only
+// that something went wrong. The valid case is here too: a validator that refused
+// everything would pass every other row.
+func TestValidateDevices(t *testing.T) {
+	tests := []struct {
+		name    string
+		device  Device
+		wantErr string
+	}{
+		{
+			name:   "a usable device",
+			device: Device{Name: "valid", MidiPort: "port", Channel: 1, Voices: []Voice{{Name: "voice", Note: testNote(60)}}},
+		},
+		{
+			name:    "missing port",
+			device:  Device{Channel: 1, Voices: []Voice{{Note: testNote(60)}}},
+			wantErr: "empty MidiPort",
+		},
+		{
+			name:    "invalid device channel",
+			device:  Device{MidiPort: "port", Channel: 17, Voices: []Voice{{Note: testNote(60)}}},
+			wantErr: "invalid channel",
+		},
+		{
+			name:    "invalid voice channel",
+			device:  Device{MidiPort: "port", Channel: 1, Voices: []Voice{{Note: testNote(60), Channel: 17}}},
+			wantErr: "invalid channel",
+		},
+		{
+			name:    "missing voices",
+			device:  Device{MidiPort: "port", Channel: 1},
+			wantErr: "has no voices",
+		},
+		{
+			name:    "invalid note",
+			device:  Device{MidiPort: "port", Channel: 1, Voices: []Voice{{Note: testNote(128)}}},
+			wantErr: "invalid note",
+		},
+		{
+			// A voice takes the device's channel, so a device with none leaves the
+			// voice with none either, which is a different complaint from a bad one.
+			name:    "missing effective channel",
+			device:  Device{MidiPort: "port", Voices: []Voice{{Note: testNote(60)}}},
+			wantErr: "has no MIDI channel",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDevices([]Device{tt.device})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
 }
 
 // A sequencer that failed to open comes back as a nil *alsa.Seq, and assigning that into
@@ -354,19 +429,213 @@ func TestReadFireReportsReadFailure(t *testing.T) {
 	require.Len(t, inc, 2, "readFire should pump the 2 events the reader held")
 }
 
+// Whether a write is shared is one property with two answers, and the difference is the
+// only thing under test here.
 func TestSharedMIDIDestination(t *testing.T) {
 	previous := sharedMIDIDestination
 	t.Cleanup(func() { sharedMIDIDestination = previous })
 	destination := alsa.SeqAddr{Client: 28, Port: 0}
 	message := []byte{midi.MakeNoteOn(0), 60, 100}
 
-	sharedMIDIDestination = false
-	writer := &captureMidiWriter{}
-	require.NoError(t, writeMidiMsgs(writer, destination, [][]byte{message}))
-	require.Equal(t, destination, writer.events[0].SeqAddr, "a per-device write keeps its own address")
+	tests := []struct {
+		name   string
+		shared bool
+		want   alsa.SeqAddr
+	}{
+		{name: "a per-device write keeps its own address", shared: false, want: destination},
+		{name: "a shared write goes to subscribers", shared: true, want: alsa.SubsSeqAddr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sharedMIDIDestination = tt.shared
+			writer := &captureMidiWriter{}
+			require.NoError(t, writeMidiMsgs(writer, destination, [][]byte{message}))
+			require.Equal(t, tt.want, writer.events[0].SeqAddr)
+		})
+	}
+}
 
-	sharedMIDIDestination = true
-	writer = &captureMidiWriter{}
-	require.NoError(t, writeMidiMsgs(writer, destination, [][]byte{message}))
-	require.Equal(t, alsa.SubsSeqAddr, writer.events[0].SeqAddr, "a shared write goes to subscribers")
+// A name is how the palette, the log and the display talk about a device, so two of them
+// answering to one name is a kit nobody can read back. A repeated port or channel is not
+// the same thing: a kit may put two devices on one destination deliberately, so only the
+// name decides. Every case goes through the file loader rather than a Go value, because a
+// kit is written on disk before anything looks at it.
+func TestValidateDevicesOnRepeatedNames(t *testing.T) {
+	tests := []struct {
+		name    string
+		kit     string
+		wantErr string
+	}{
+		{
+			name: "distinct names",
+			kit: `[
+				{"Name":"drums","MidiPort":"a","Channel":10,"Voices":[{"Name":"kick","Note":36}]},
+				{"Name":"lead","MidiPort":"b","Channel":1,"Voices":[{"Name":"lead"}]}
+			]`,
+		},
+		{
+			name: "one name twice",
+			kit: `[
+				{"Name":"drums","MidiPort":"a","Channel":10,"Voices":[{"Name":"kick","Note":36}]},
+				{"Name":"drums","MidiPort":"b","Channel":1,"Voices":[{"Name":"lead"}]}
+			]`,
+			wantErr: `device 1 ("drums") has the same name as device 0`,
+		},
+		{
+			// The clash is reported against the first device that took the name, not
+			// against whichever one a later sweep happened to meet.
+			name: "the clash names the first holder",
+			kit: `[
+				{"Name":"a","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","Note":60}]},
+				{"Name":"b","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","Note":61}]},
+				{"Name":"b","MidiPort":"q","Channel":2,"Voices":[{"Name":"v","Note":62}]}
+			]`,
+			wantErr: `device 2 ("b") has the same name as device 1`,
+		},
+		{
+			// Two devices on one port and one channel is the kit author's choice, and
+			// refusing it would forbid a kit that is meant to sound that way.
+			name: "the same port and channel twice",
+			kit: `[
+				{"Name":"drums","MidiPort":"a","Channel":10,"Voices":[{"Name":"kick","Note":36}]},
+				{"Name":"layer","MidiPort":"a","Channel":10,"Voices":[{"Name":"kick","Note":36}]}
+			]`,
+		},
+		{
+			// Only the name is a duplicate here, so the rest being identical changes
+			// nothing about the verdict.
+			name: "the same device twice under one name",
+			kit: `[
+				{"Name":"drums","MidiPort":"a","Channel":10,"Voices":[{"Name":"kick","Note":36}]},
+				{"Name":"drums","MidiPort":"a","Channel":10,"Voices":[{"Name":"kick","Note":36}]}
+			]`,
+			wantErr: "has the same name",
+		},
+		{
+			// A device with no name has always been allowed, and one of them still is.
+			name: "one device with no name",
+			kit:  `[{"MidiPort":"a","Channel":1,"Voices":[{"Name":"v","Note":60}]}]`,
+		},
+		{
+			// Two of them share the empty name, so the rule catches them.
+			name: "two devices with no name",
+			kit: `[
+				{"MidiPort":"a","Channel":1,"Voices":[{"Name":"v","Note":60}]},
+				{"MidiPort":"b","Channel":2,"Voices":[{"Name":"v","Note":61}]}
+			]`,
+			wantErr: `device 1 ("") has the same name as device 0`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKitFile(t, dir, "kit.json", tt.kit)
+			devices, err := loadDevices(filepath.Join(dir, "kit.json"))
+			require.NoError(t, err, "the table case should be a readable kit file")
+			if tt.wantErr == "" {
+				require.NoError(t, validateDevices(devices))
+				return
+			}
+			require.ErrorContains(t, validateDevices(devices), tt.wantErr)
+		})
+	}
+}
+
+// A kit file that cannot be read has to say so, because the usual cause is a half-saved
+// edit and the user needs to know which file to look at. The loader wraps what it gets
+// from the decoder with the path, so the cases below only have to name the shape.
+func TestLoadDevicesRejectsUnreadableFiles(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		wantErr  string
+		missing  bool
+	}{
+		{name: "empty file", contents: "", wantErr: "empty kit file"},
+		{name: "only whitespace", contents: "  \n\t ", wantErr: "empty kit file"},
+		{name: "truncated object", contents: `{"Name":"x","MidiPort":"p"`, wantErr: "unexpected end of JSON input"},
+		{name: "truncated array", contents: `[{"Name":"x"`, wantErr: "unexpected end of JSON input"},
+		{name: "not JSON at all", contents: "hello", wantErr: "invalid character"},
+		{name: "an object where an array was meant", contents: `{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","Note":60}],}`, wantErr: "invalid character"},
+		{name: "an array holding nothing", contents: `[]`, wantErr: "contains no devices"},
+		{name: "a directory that is not there", contents: "", wantErr: "no such file or directory", missing: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "kit.json")
+			if tt.missing {
+				path = filepath.Join(dir, "absent.json")
+			} else {
+				writeKitFile(t, dir, "kit.json", tt.contents)
+			}
+			_, err := loadDevices(path)
+			require.ErrorContains(t, err, tt.wantErr)
+			require.ErrorContains(t, err, filepath.Base(path), "the error should name the file")
+		})
+	}
+}
+
+// Loading is not validating. A kit file can be well-formed JSON describing a kit that
+// cannot be played, and the refusal has to survive the trip from the file to the
+// validator rather than only being reachable by building the value by hand.
+func TestLoadKitCarriesValidationFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		kit     string
+		wantErr string
+	}{
+		{
+			name:    "a device with no port",
+			kit:     `[{"Name":"x","Channel":1,"Voices":[{"Name":"v","Note":60}]}]`,
+			wantErr: "empty MidiPort",
+		},
+		{
+			name:    "a channel above the top",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":17,"Voices":[{"Name":"v","Note":60}]}]`,
+			wantErr: "invalid channel",
+		},
+		{
+			name:    "a device with no voices",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1}]`,
+			wantErr: "has no voices",
+		},
+		{
+			name:    "a voice with a note above the top",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","Note":200}]}]`,
+			wantErr: "invalid note",
+		},
+		{
+			name:    "a voice with a channel above the top",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","Channel":17,"Note":60}]}]`,
+			wantErr: "invalid channel",
+		},
+		{
+			// A voice with no channel of its own takes the device's, which is how a kit
+			// says all of these on channel one. It is the one shape that reaches the
+			// voice check and is still usable.
+			name: "a voice with no channel inherits the device's",
+			kit:  `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","Note":60}]}]`,
+		},
+		{
+			// The refusal reaches a kit that was read off disk, not just one built in
+			// a test, which is the only place a user meets it.
+			name:    "a repeated name in a loaded kit",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","Note":60}]},{"Name":"x","MidiPort":"q","Channel":2,"Voices":[{"Name":"v","Note":61}]}]`,
+			wantErr: "has the same name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKitFile(t, dir, "kit.json", tt.kit)
+			devices, err := loadKit([]string{filepath.Join(dir, "kit.json")})
+			require.NoError(t, err, "the file should be readable even when the kit is not usable")
+			if tt.wantErr == "" {
+				require.NoError(t, validateDevices(devices))
+				return
+			}
+			require.ErrorContains(t, validateDevices(devices), tt.wantErr)
+		})
+	}
 }
