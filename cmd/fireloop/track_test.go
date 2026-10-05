@@ -224,7 +224,7 @@ func TestTrackWindowHeaderStaysReadable(t *testing.T) {
 			continue
 		}
 		blank := true
-		for _, column := range byte2glyph(byte(ch)) {
+		for _, column := range appendGlyph(nil, byte(ch), false) {
 			if column != 0 {
 				blank = false
 				break

@@ -190,9 +190,6 @@ func topLeftMask(lights ...int) int {
 // of the blackout. A blackout suppresses all display output; the blanking clear is the
 // one exception.
 func (f *Fire) Blackout() error {
-	if f == nil {
-		return nil
-	}
 	f.dark.Store(true)
 	f.blanking.Store(true)
 	defer f.blanking.Store(false)
@@ -208,15 +205,12 @@ func (f *Fire) out() bool {
 // Wake reports whether the display was dark, so the caller can redraw what the blackout
 // cleared and restore the button lights.
 func (f *Fire) Wake() bool {
-	if f == nil {
-		return false
-	}
 	return f.dark.Swap(false)
 }
 
 // IsDark reports whether a blackout is in effect, which is the state a wake reacts to.
 func (f *Fire) IsDark() bool {
-	return f != nil && f.dark.Load()
+	return f.dark.Load()
 }
 
 func Note2Grid(n int) (int, int, bool) {

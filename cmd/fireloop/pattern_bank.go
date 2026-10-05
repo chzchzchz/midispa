@@ -75,9 +75,6 @@ func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 
 // TrackCount is the number of tracks available in the current pattern.
 func (p *PatternBank) TrackCount() int {
-	if p == nil {
-		return 0
-	}
 	p.trackMu.RLock()
 	defer p.trackMu.RUnlock()
 	return len(p.trackVoices)
@@ -85,9 +82,6 @@ func (p *PatternBank) TrackCount() int {
 
 // TrackOffset is the zero-based track shown on the first pad row.
 func (p *PatternBank) TrackOffset() int {
-	if p == nil {
-		return 0
-	}
 	p.trackMu.RLock()
 	defer p.trackMu.RUnlock()
 	return p.trackOffset
@@ -95,9 +89,6 @@ func (p *PatternBank) TrackOffset() int {
 
 // trackForPadRow maps a one-based pad row to its one-based track, or zero when the row holds none.
 func (p *PatternBank) trackForPadRow(row int) int {
-	if p == nil {
-		return 0
-	}
 	p.trackMu.RLock()
 	defer p.trackMu.RUnlock()
 	return p.trackForPadRowLocked(row)
@@ -116,9 +107,6 @@ func (p *PatternBank) trackForPadRowLocked(row int) int {
 
 // trackVoice resolves the voice assigned to the track behind a pad row.
 func (p *PatternBank) trackVoice(row int) *Voice {
-	if p == nil {
-		return nil
-	}
 	p.trackMu.RLock()
 	defer p.trackMu.RUnlock()
 	return p.trackVoiceLocked(row)
@@ -136,9 +124,6 @@ func (p *PatternBank) trackVoiceLocked(row int) *Voice {
 // lock once. A row with no track comes back nil, and one voice can sit on several rows.
 func (p *PatternBank) visibleTrackVoices() [padRows]*Voice {
 	var voices [padRows]*Voice
-	if p == nil {
-		return voices
-	}
 	p.trackMu.RLock()
 	defer p.trackMu.RUnlock()
 	for row := 1; row <= padRows; row++ {
@@ -184,9 +169,6 @@ func (p *PatternBank) maxTrackOffsetLocked() int {
 // own locks and a save reads each one through them, so what needs protecting is the map,
 // and copying it would be a shallow copy that costs the walk twice.
 func (p *PatternBank) snapshotSession() ([]int, map[int]*Pattern) {
-	if p == nil {
-		return nil, nil
-	}
 	p.trackMu.RLock()
 	defer p.trackMu.RUnlock()
 	return append([]int(nil), p.trackVoices...), p.Patterns
@@ -197,9 +179,6 @@ func (p *PatternBank) snapshotSession() ([]int, map[int]*Pattern) {
 // is left where it was: where the user was looking is the display's business, not part of
 // a set, so a load only needs to make sure that pattern exists.
 func (p *PatternBank) restoreState(state stateFile, patterns map[int]*Pattern) {
-	if p == nil {
-		return
-	}
 	p.restoreTracks(state.TrackVoices)
 	p.trackMu.Lock()
 	if _, ok := patterns[p.selPatIdx]; !ok {
@@ -213,7 +192,7 @@ func (p *PatternBank) restoreState(state stateFile, patterns map[int]*Pattern) {
 // voice that no longer exists takes the last one rather than being dropped, because a row
 // with no voice behind it cannot be edited at all.
 func (p *PatternBank) restoreTracks(voices []int) {
-	if p == nil || len(p.vb.voices) == 0 {
+	if len(p.vb.voices) == 0 {
 		return
 	}
 	last := len(p.vb.voices) - 1
@@ -262,9 +241,6 @@ func (p *PatternBank) forEachRowWithVoice(voice *Voice, fn func(row int) error) 
 func (p *PatternBank) leaveNoteEdit() error {
 	p.editingNote = false
 	p.clearPadState()
-	if p.f == nil {
-		return nil
-	}
 	return p.f.SetLed(NoteMode, LEDOff)
 }
 
@@ -282,9 +258,6 @@ func (p *PatternBank) resetEditState() error {
 // and a large kit does not open on a track list too long to work with. Navigation
 // changes no notes, so playback keeps running.
 func (p *PatternBank) ScrollTracks(delta int) error {
-	if p == nil {
-		return nil
-	}
 	p.trackMu.Lock()
 	offset := p.trackOffset + delta
 	if offset > p.maxTrackOffsetLocked() {
@@ -386,9 +359,6 @@ func (p *PatternBank) headerText() string {
 }
 
 func (p *PatternBank) redraw() error {
-	if p.f == nil {
-		return nil
-	}
 	if err := p.printText(0, 0, p.headerText(), false); err != nil {
 		return err
 	}
@@ -453,10 +423,8 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 	}
 	// Deselect currently selected row, if any.
 	if p.selTrackRow > 0 {
-		if p.f != nil {
-			if err := p.f.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
-				return err
-			}
+		if err := p.f.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
+			return err
 		}
 		if err := p.printTrackRow(p.selTrackRow, false); err != nil {
 			return err
@@ -474,10 +442,8 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 	if err := p.printTrackRow(row, true); err != nil {
 		return err
 	}
-	if p.f != nil {
-		if err := p.f.SetLed(CCMuteLED1+(row-1), LEDGreen); err != nil {
-			return err
-		}
+	if err := p.f.SetLed(CCMuteLED1+(row-1), LEDGreen); err != nil {
+		return err
 	}
 	if err := p.redrawTrackPads(row); err != nil {
 		return err
@@ -487,7 +453,7 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 
 // printTrackRow names the track on a pad row; the header shows which track the row starts at.
 func (p *PatternBank) printTrackRow(row int, inv bool) error {
-	return replaceRow(p.screen, p.f, row+1, voiceDisplayName(p.trackVoice(row)), inv)
+	return replaceRow(p.screen, row+1, voiceDisplayName(p.trackVoice(row)), inv)
 }
 
 // textScreen is the text layer of the display. The Fire rasterizes what it is given; a
@@ -498,56 +464,39 @@ type textScreen interface {
 	ClearOLEDRows(y, n int) error
 }
 
-// textLayer is where text goes: the recorder in a test, the Fire otherwise. Both banks
-// draw through one, so each of them reaches the display the same way and a test can put a
-// recorder in front of either.
-func textLayer(screen textScreen, f *Fire) textScreen {
-	if screen != nil {
-		return screen
-	}
-	return f
-}
-
-// displayPrint writes text at a row and column, inverted when asked. No surface at all
-// means the bank was built without a display, which is how a test drives the handlers.
-func displayPrint(screen textScreen, f *Fire, row, col int, text string, inverted bool) error {
-	surface := textLayer(screen, f)
-	if surface == nil {
-		return nil
-	}
+// displayPrint writes text at a row and column, inverted when asked. Both banks draw
+// through their screen, so each of them reaches the display the same way and a test can
+// put a recorder in front of either.
+func displayPrint(screen textScreen, row, col int, text string, inverted bool) error {
 	if inverted {
-		return surface.PrintInvert(col, row, text)
+		return screen.PrintInvert(col, row, text)
 	}
-	return surface.Print(col, row, text)
+	return screen.Print(col, row, text)
 }
 
 // displayClear blanks rows on the text layer.
-func displayClear(screen textScreen, f *Fire, row, n int) error {
-	surface := textLayer(screen, f)
-	if surface == nil {
-		return nil
-	}
-	return surface.ClearOLEDRows(row, n)
+func displayClear(screen textScreen, row, n int) error {
+	return screen.ClearOLEDRows(row, n)
 }
 
 // replaceRow blanks a row and writes one line into it, which is how every readout reaches
 // the display: new text has to overwrite what was there, because a shorter line drawn over
 // a longer one leaves the tail of the old one showing.
-func replaceRow(screen textScreen, f *Fire, row int, text string, inverted bool) error {
-	if err := displayClear(screen, f, row, 1); err != nil {
+func replaceRow(screen textScreen, row int, text string, inverted bool) error {
+	if err := displayClear(screen, row, 1); err != nil {
 		return err
 	}
-	return displayPrint(screen, f, row, 0, text, inverted)
+	return displayPrint(screen, row, 0, text, inverted)
 }
 
 // printText writes to the pattern bank's text layer.
 func (p *PatternBank) printText(row, col int, text string, inverted bool) error {
-	return displayPrint(p.screen, p.f, row, col, text, inverted)
+	return displayPrint(p.screen, row, col, text, inverted)
 }
 
 // clearTextRows blanks rows on the pattern bank's text layer.
 func (p *PatternBank) clearTextRows(row, n int) error {
-	return displayClear(p.screen, p.f, row, n)
+	return displayClear(p.screen, row, n)
 }
 
 func (p *PatternBank) JogSelect(n int) error {
@@ -584,9 +533,6 @@ func (p *PatternBank) JogSelect(n int) error {
 }
 
 func (p *PatternBank) redrawTrackPads(row int) error {
-	if p == nil || p.f == nil {
-		return nil
-	}
 	// One read of the window answers both whether the row holds a track and which voice
 	// stands behind it. Asking twice took the window lock twice for a row, and a cursor
 	// move repaints all four.
@@ -664,9 +610,6 @@ func (p *PatternBank) drawPadColumnColor(col int, invert bool) error {
 	if col < 0 || col >= padColumns {
 		return errOutOfRange
 	}
-	if p == nil || p.f == nil {
-		return nil
-	}
 	pattern := p.CurrentPattern()
 	if pattern == nil {
 		return nil
@@ -727,18 +670,16 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 	if !added {
 		ev.Velocity = 0
 	}
-	if p.f != nil {
-		// The press lights the step it placed and puts out the one it removed, so the pad
-		// says what the press did without waiting for a redraw of the whole row.
-		color := percussionStepColor
-		if !added {
-			color = [3]int{}
-		}
-		if err := p.forEachRowWithVoice(voice, func(row int) error {
-			return p.f.LightPadColor(col, row, color)
-		}); err != nil {
-			return ev, err
-		}
+	// The press lights the step it placed and puts out the one it removed, so the pad
+	// says what the press did without waiting for a redraw of the whole row.
+	color := percussionStepColor
+	if !added {
+		color = [3]int{}
+	}
+	if err := p.forEachRowWithVoice(voice, func(row int) error {
+		return p.f.LightPadColor(col, row, color)
+	}); err != nil {
+		return ev, err
 	}
 	return ev, nil
 }

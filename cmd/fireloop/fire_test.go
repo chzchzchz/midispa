@@ -220,18 +220,3 @@ func TestInvertedGlyphsDoNotAlterTheCache(t *testing.T) {
 		}
 	}
 }
-
-// byte2glyph is handed out to callers that may modify what they get, so it must not be a
-// window onto the table the next draw reads.
-func TestByte2GlyphReturnsACopy(t *testing.T) {
-	glyph := byte2glyph('A')
-	for i := range glyph {
-		glyph[i] = ^glyph[i]
-	}
-	want := appendGlyph(nil, 'A', false)
-	for i := range want {
-		if got := appendGlyph(nil, 'A', false)[i]; got != want[i] {
-			t.Fatalf("column %d = %#02x after modifying byte2glyph output, want %#02x", i, got, want[i])
-		}
-	}
-}

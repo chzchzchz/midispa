@@ -37,7 +37,7 @@ func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
 // kit is the voice bank the song's patterns are written against, which is also where the
 // patches sent when playback starts are read from.
 func (sb *SongBank) kit() *VoiceBank {
-	if sb == nil || sb.pb == nil {
+	if sb.pb == nil {
 		return nil
 	}
 	return sb.pb.vb
@@ -56,9 +56,6 @@ func (sb *SongBank) CurrentSong() *Song {
 // measures is not written to a file. Restoring the bank onto a song the file does not
 // carry would leave CurrentSong nil, and the arrangement view reads it on every pad press.
 func (s *SongBank) installSongs(songs map[int]*Song) {
-	if s == nil {
-		return
-	}
 	if _, ok := songs[s.selSongIdx]; !ok {
 		songs[s.selSongIdx] = &Song{}
 	}
@@ -130,9 +127,6 @@ func (sb *SongBank) ToggleMeasure(x, y int) error {
 	}
 	song := sb.CurrentSong()
 	p := sb.pb.Patterns[sb.pb.selPatIdx]
-	if p == nil {
-		return nil
-	}
 	if sp := song.GetPattern(idx); sp == p {
 		song.SetPattern(nil, idx)
 		p = nil
@@ -275,15 +269,15 @@ func (s *SongBank) patternsToColors() map[*Pattern][3]int {
 
 // printText writes to the song bank's text layer.
 func (s *SongBank) printText(row, col int, text string, inverted bool) error {
-	return displayPrint(s.screen, s.f, row, col, text, inverted)
+	return displayPrint(s.screen, row, col, text, inverted)
 }
 
 // clearTextRows blanks rows on the song bank's text layer.
 func (s *SongBank) clearTextRows(row, n int) error {
-	return displayClear(s.screen, s.f, row, n)
+	return displayClear(s.screen, row, n)
 }
 
 // printRow replaces one row of the arrangement with text.
 func (s *SongBank) printRow(row int, text string) error {
-	return replaceRow(s.screen, s.f, row, text, false)
+	return replaceRow(s.screen, row, text, false)
 }

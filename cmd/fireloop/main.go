@@ -292,7 +292,7 @@ func shutdown(aseq sequencerSession) error {
 // after the release because the release puts the step strip back, and a blackout suppresses
 // the display output that would undo it.
 func blankDevice() error {
-	if patbank == nil || patbank.f == nil {
+	if patbank == nil {
 		return nil
 	}
 	return patbank.f.Blackout()

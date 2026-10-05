@@ -19,16 +19,10 @@ func isPadRelease(status byte, velocity int) bool {
 
 // SelectedVoice returns the voice controlled by the selected mute row.
 func (p *PatternBank) SelectedVoice() *Voice {
-	if p == nil {
-		return nil
-	}
 	return p.trackVoice(p.selTrackRow)
 }
 
 func (p *PatternBank) StepCursor() int {
-	if p == nil {
-		return 0
-	}
 	return p.stepCursor
 }
 
@@ -37,9 +31,6 @@ func (p *PatternBank) NoteEditActive() bool {
 }
 
 func (p *PatternBank) clampStepCursor() {
-	if p == nil {
-		return
-	}
 	pattern := p.CurrentPattern()
 	if pattern == nil {
 		p.stepCursor = 0
@@ -66,7 +57,7 @@ func (p *PatternBank) redrawPatternRows() error {
 
 // MoveStepCursor keeps the edit target inside the active pattern length.
 func (p *PatternBank) MoveStepCursor(delta int) error {
-	if p == nil || p.editingLength {
+	if p.editingLength {
 		return nil
 	}
 	previous := p.stepCursor
@@ -81,9 +72,6 @@ func (p *PatternBank) MoveStepCursor(delta int) error {
 }
 
 func (p *PatternBank) setStepCursor(step int) error {
-	if p == nil {
-		return nil
-	}
 	pattern := p.CurrentPattern()
 	if pattern == nil || step < 0 || step >= pattern.LengthSteps() {
 		return nil
@@ -116,9 +104,6 @@ func (p *PatternBank) repaintEditView() error {
 
 // The pad masks model held hardware state, rather than a timing window for gestures.
 func (p *PatternBank) clearPadState() {
-	if p == nil {
-		return
-	}
 	p.pressedPads = 0
 	p.rowPadMasks = [padRows]uint16{}
 	p.noteEditHeldStep = noHeldStep
@@ -135,9 +120,6 @@ func (p *PatternBank) auditionEvent(aseq midiWriter, event Event) error {
 
 // Mode is a state toggle only for the selected chromatic voice.
 func (p *PatternBank) setNoteEdit(active bool) error {
-	if p == nil {
-		return nil
-	}
 	voice := p.SelectedVoice()
 	if active && (voice == nil || !voice.IsChromatic()) {
 		return nil
@@ -147,9 +129,6 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 	// the note-edit playhead stops lighting a cell here.
 	p.playheadStep = noPlayheadStep
 	p.clearPadState()
-	if p.f == nil {
-		return nil
-	}
 	if active {
 		if err := p.f.SetLed(NoteMode, LEDGreen); err != nil {
 			return err
@@ -161,7 +140,7 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 }
 
 func (p *PatternBank) ToggleNoteMode() error {
-	if p == nil || p.editingLength {
+	if p.editingLength {
 		return nil
 	}
 	return p.setNoteEdit(!p.editingNote)
@@ -191,7 +170,7 @@ func stepStatusText(voice *Voice, step int, event *Event, tieStep int) string {
 // when there is one. A percussive track reports the step and its dynamics too, because the
 // Volume knob sets them and a readout that went blank would leave the knob turning blind.
 func (p *PatternBank) printStepStatus() error {
-	if p == nil || p.f == nil || p.editingLength {
+	if p.editingLength {
 		return nil
 	}
 	if err := p.clearTextRows(lengthDisplayRow, 1); err != nil {

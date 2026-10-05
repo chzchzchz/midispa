@@ -24,7 +24,7 @@ const velocityStep = 1
 // with, and the knob is there to trim a hit rather than to replace it with whatever value
 // the encoder happened to be left at.
 func (p *PatternBank) AdjustVelocity(aseq midiWriter, encoderValue int) error {
-	if p == nil || p.editingLength {
+	if p.editingLength {
 		return nil
 	}
 	voice := p.SelectedVoice()

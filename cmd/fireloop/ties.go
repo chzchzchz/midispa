@@ -11,7 +11,7 @@ import "math/bits"
 // the pitch palette's columns are tracked; a step cell names a step rather than a pitch and
 // drives the gesture through the held step instead.
 func (p *PatternBank) padBit(row, col int) (uint64, bool) {
-	if p == nil || row < 0 || row >= len(p.rowPadMasks) || col < 0 || col >= chromaticPaletteColumns {
+	if row < 0 || row >= len(p.rowPadMasks) || col < 0 || col >= chromaticPaletteColumns {
 		return 0, false
 	}
 	return uint64(1) << uint(row*chromaticPaletteColumns+col), true
@@ -28,9 +28,6 @@ func (p *PatternBank) pressPad(row, col int) bool {
 }
 
 func (p *PatternBank) heldPadCount() int {
-	if p == nil {
-		return 0
-	}
 	return bits.OnesCount64(p.pressedPads)
 }
 
@@ -59,9 +56,6 @@ func (p *PatternBank) heldStepsOnRow(row int) []int {
 }
 
 func (p *PatternBank) releasePad(row, col int) {
-	if p == nil {
-		return
-	}
 	// A step cell names a step rather than a pitch, so it is not one of the pads the mask
 	// bookkeeping below knows about. It is the held step that drives the tie gesture, so
 	// letting go of that cell is what ends the gesture.

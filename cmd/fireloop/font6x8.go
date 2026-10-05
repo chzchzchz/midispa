@@ -3084,10 +3084,3 @@ var font6x8 = []byte{
 	0x00, /* 000000 */
 	0x00, /* 000000 */
 }
-
-func byte2glyph(b byte) []byte {
-	// The glyph is copied out so the cache stays read-only for every caller: a caller that
-	// flips the bits for inverted text must not be able to alter what the next draw reads.
-	glyph := glyphCache[b]
-	return glyph[:]
-}

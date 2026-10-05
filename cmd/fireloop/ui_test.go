@@ -230,3 +230,83 @@ func TestModeSwitchReleasesModifiers(t *testing.T) {
 		t.Fatal("no event handler after returning to pattern mode")
 	}
 }
+
+// Every view control reports itself through a light or the readout row as well as changing
+// state, so each one reaches for the display while it works. A bank whose display goes
+// nowhere must still take the state change, because that is the whole of what these tests
+// are able to see: a control that only lit a light would pass here having done nothing.
+func TestButtonsTakeEffectWithNowhereToDraw(t *testing.T) {
+	kit := trackWindowKit(4, 3)
+	bank := newTestBank(t, NewFire(func([]byte) error { return nil }), kit)
+
+	for _, tt := range []struct {
+		name  string
+		press func(t *testing.T)
+		want  func() bool
+	}{
+		{
+			name:  "length mode",
+			press: func(t *testing.T) { pressPatternButton(t, NoteOverview) },
+			want:  func() bool { return bank.editingLength },
+		},
+		{
+			name: "length mode again",
+			press: func(t *testing.T) {
+				pressPatternButton(t, NoteOverview)
+			},
+			want: func() bool { return !bank.editingLength },
+		},
+		{
+			name: "note mode on a chromatic track",
+			press: func(t *testing.T) {
+				if err := bank.SelectTrackRow(4); err != nil {
+					t.Fatal(err)
+				}
+				pressPatternButton(t, NoteMode)
+			},
+			want: func() bool { return bank.editingNote },
+		},
+		{
+			name: "note mode again",
+			press: func(t *testing.T) { pressPatternButton(t, NoteMode) },
+			want:  func() bool { return !bank.editingNote },
+		},
+		{
+			name:  "alt",
+			press: func(t *testing.T) { pressPatternButton(t, NoteAlt) },
+			want:  func() bool { return altOn },
+		},
+		{
+			name:  "alt released",
+			press: func(t *testing.T) { pressPatternButton(t, NoteAlt) },
+			want:  func() bool { return !altOn },
+		},
+		{
+			name:  "shift",
+			press: func(t *testing.T) { pressPatternButton(t, NoteShift) },
+			want:  func() bool { return shiftOn },
+		},
+		{
+			name:  "shift released",
+			press: func(t *testing.T) { pressPatternButton(t, NoteShift) },
+			want:  func() bool { return !shiftOn },
+		},
+		{
+			name:  "a pad edit",
+			press: func(t *testing.T) { pressPatternButton(t, NoteMute1) },
+			want:  func() bool { return bank.selTrackRow == 1 },
+		},
+		{
+			name:  "the tempo readout",
+			press: func(t *testing.T) { pressPatternButton(t, NoteTap) },
+			want:  func() bool { return currentBPM() != 0 },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.press(t)
+			if !tt.want() {
+				t.Fatalf("%s did not take effect", tt.name)
+			}
+		})
+	}
+}

@@ -116,7 +116,7 @@ func releaseModifiers() error {
 	altOn = false
 	shiftOn = false
 	pendingNumber = 0
-	if patbank == nil || patbank.f == nil {
+	if patbank == nil {
 		return nil
 	}
 	if err := patbank.f.SetLed(NoteAlt, LEDOff); err != nil {
@@ -130,7 +130,7 @@ func releaseModifiers() error {
 // mode is passed in rather than looked up: the handler that runs is the record of the mode,
 // and a second record of it could disagree with this one.
 func restoreIndicators(song bool) error {
-	if patbank == nil || patbank.f == nil {
+	if patbank == nil {
 		return nil
 	}
 	lights := map[int]int{
@@ -182,7 +182,7 @@ func restoreIndicators(song bool) error {
 // rather than Jump because the playback worker reads the selected pattern index, and a
 // blackout can happen while a pattern is playing.
 func wakeBlackout(song bool) error {
-	if patbank == nil || patbank.f == nil {
+	if patbank == nil {
 		return nil
 	}
 	if !patbank.f.Wake() {
@@ -399,7 +399,7 @@ func loadSession(song bool) error {
 // chromatic readouts use. Anything already there is a readout too, so a message is
 // replaced by the next redraw rather than left to go stale.
 func reportState(text string) error {
-	if patbank == nil || patbank.f == nil {
+	if patbank == nil {
 		return nil
 	}
 	if err := patbank.clearTextRows(lengthDisplayRow, 1); err != nil {

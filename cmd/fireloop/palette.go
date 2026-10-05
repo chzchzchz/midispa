@@ -103,7 +103,7 @@ func (p *PatternBank) paletteBase() int {
 // the shift shows on the grid without a word on the display. It does nothing outside
 // note-edit mode, where the knob moves the selected track's voice instead.
 func (p *PatternBank) ShiftPaletteOctave(detents int) error {
-	if p == nil || p.editingLength {
+	if p.editingLength {
 		return nil
 	}
 	voice := p.SelectedVoice()
@@ -142,7 +142,7 @@ func chromaticStepCell(step int) (row, col int, ok bool) {
 // drawStepCell paints one strip cell.
 func (p *PatternBank) drawStepCell(step int) error {
 	row, col, ok := chromaticStepCell(step)
-	if !ok || p.f == nil {
+	if !ok {
 		return nil
 	}
 	voice := p.SelectedVoice()
@@ -279,9 +279,6 @@ func (p *PatternBank) stepCellColor(pattern *Pattern, voice *Voice, step int) [3
 
 // The palette uses a stable color per pitch and highlights the current event's pitch.
 func (p *PatternBank) drawNotePalette() error {
-	if p == nil || p.f == nil {
-		return nil
-	}
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() {
 		return nil
