@@ -265,7 +265,7 @@ func (p *Pattern) insertEventLocked(event Event) int {
 	insertAt := sort.Search(len(p.Events), func(i int) bool {
 		return p.Events[i].Beat > event.Beat
 	})
-	p.clearInsertionTieLocked(insertAt, event.Voice)
+	p.clearTieBeforeLocked(insertAt, event.Voice)
 	p.Events = append(p.Events, Event{})
 	copy(p.Events[insertAt+1:], p.Events[insertAt:])
 	p.Events[insertAt] = event
@@ -281,20 +281,20 @@ func (p *Pattern) removeEventLocked(index int) Event {
 	return event
 }
 
+// clearPreviousTieLocked ends the tie running into the event at index, which is what
+// removing it has to do: the note after it would otherwise stay tied to a note that is no
+// longer there.
 func (p *Pattern) clearPreviousTieLocked(index int) {
 	if index <= 0 || index >= len(p.Events) {
 		return
 	}
-	voice := p.Events[index].Voice
-	for i := index - 1; i >= 0; i-- {
-		if p.Events[i].Voice == voice {
-			p.Events[i].Tie = false
-			return
-		}
-	}
+	p.clearTieBeforeLocked(index, p.Events[index].Voice)
 }
 
-func (p *Pattern) clearInsertionTieLocked(index int, voice *Voice) {
+// clearTieBeforeLocked ends the tie running into a position for one voice, which is also
+// what inserting there has to do. The walk goes backwards because the events are held in
+// beat order and only the nearest one before the position can be tied into it.
+func (p *Pattern) clearTieBeforeLocked(index int, voice *Voice) {
 	for i := index - 1; i >= 0; i-- {
 		if p.Events[i].Voice == voice {
 			p.Events[i].Tie = false

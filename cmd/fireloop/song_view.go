@@ -12,9 +12,31 @@ const (
 	measureFinePageSize = 4
 )
 
+// Where each viewport may start. A window has to begin on a whole page from the top of the
+// index, because one that began part-way through a page would have fewer entries on it
+// than the grid has pads, and the pads it does fill would name the wrong slots. These are
+// the bounds every scroll and every reposition clamps against, so a window cannot be
+// scrolled to a place the view cannot show.
+const (
+	patternWindowFirst = 1
+	patternWindowLast  = maxPatternIndex - patternViewSize + 1
+	measureWindowFirst = 0
+	measureWindowLast  = maxMeasureIndex - measureViewSize + 1
+)
+
 // clampIndex keeps a viewport position inside the range the view can show.
 func clampIndex(value, low, high int) int {
 	return min(max(value, low), high)
+}
+
+// clampPatternWindow keeps a pattern window start inside its page-aligned range.
+func clampPatternWindow(start int) int {
+	return clampIndex(start, patternWindowFirst, patternWindowLast)
+}
+
+// clampMeasureWindow keeps a measure window start inside the range the arrangement holds.
+func clampMeasureWindow(start int) int {
+	return clampIndex(start, measureWindowFirst, measureWindowLast)
 }
 
 func patternPageStart(index int) int {
@@ -27,21 +49,17 @@ func (sb *SongBank) resetArrangementView() {
 	if sb.pb != nil && sb.pb.selPatIdx > 0 {
 		index = sb.pb.selPatIdx
 	}
-	sb.patternStart = clampIndex(
-		patternPageStart(index),
-		1,
-		maxPatternIndex-patternViewSize+1,
-	)
+	sb.patternStart = clampPatternWindow(patternPageStart(index))
 	sb.measureStart = 0
 }
 
 func (sb *SongBank) patternWindow() (int, int) {
-	start := clampIndex(sb.patternStart, 1, maxPatternIndex-patternViewSize+1)
+	start := clampPatternWindow(sb.patternStart)
 	return start, start + patternViewSize - 1
 }
 
 func (sb *SongBank) measureWindow() (int, int) {
-	start := clampIndex(sb.measureStart, 0, maxMeasureIndex-measureViewSize+1)
+	start := clampMeasureWindow(sb.measureStart)
 	return start, start + measureViewSize - 1
 }
 
@@ -52,17 +70,13 @@ func (sb *SongBank) ensurePatternVisible(index int) {
 	} else if index > end {
 		start = index - patternViewSize + 1
 	}
-	sb.patternStart = clampIndex(start, 1, maxPatternIndex-patternViewSize+1)
+	sb.patternStart = clampPatternWindow(start)
 }
 
 // Keep scrolling separate from editing so browsing a long arrangement cannot change a measure.
 func (sb *SongBank) ScrollPatterns(delta int) error {
 	start, _ := sb.patternWindow()
-	sb.patternStart = clampIndex(
-		start+delta*patternPageSize,
-		1,
-		maxPatternIndex-patternViewSize+1,
-	)
+	sb.patternStart = clampPatternWindow(start + delta*patternPageSize)
 	if err := sb.DrawPadPatterns(); err != nil {
 		return err
 	}
@@ -86,11 +100,7 @@ func (sb *SongBank) MovePatternSelection(delta int) error {
 
 func (sb *SongBank) ScrollMeasures(delta int) error {
 	start, _ := sb.measureWindow()
-	sb.measureStart = clampIndex(
-		start+delta,
-		0,
-		maxMeasureIndex-measureViewSize+1,
-	)
+	sb.measureStart = clampMeasureWindow(start + delta)
 	if err := sb.DrawPadMeasures(); err != nil {
 		return err
 	}

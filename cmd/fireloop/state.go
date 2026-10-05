@@ -362,11 +362,9 @@ func loadState(path string, pb *PatternBank, sb *SongBank, kit []string) (stateR
 		return stateReport{}, err
 	}
 	var voiceBank *VoiceBank
+	voiceCount := 0
 	if pb != nil {
 		voiceBank = pb.vb
-	}
-	voiceCount := 0
-	if voiceBank != nil {
 		voiceCount = len(voiceBank.voices)
 	}
 	if changed, reason := state.kitChanged(kit, voiceCount); changed {
