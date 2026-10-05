@@ -285,6 +285,33 @@ func (j *Port) BufferSize() uint32 {
 	return j.client.BufferSize()
 }
 
+// portKindFor resolves what a configuration asks for and checks it against the number
+// of ports being registered. Both answers have to come from one place: the realtime
+// callback picks what fills it from the port count, so a configuration whose callback
+// and port count disagree would be accepted here and then call a function nobody set,
+// on JACK's own thread, where a nil call takes the process down rather than returning
+// an error.
+func portKindFor(pc *PortConfig, names []string) (portKind, error) {
+	kind, err := pc.kind()
+	if err != nil {
+		return kindNone, err
+	}
+	switch {
+	case kind == kindStereo && len(names) < 2:
+		return kindNone, fmt.Errorf("StereoCallback needs a stereo port, which registers two ports")
+	case kind != kindStereo && len(names) > 1:
+		return kindNone, fmt.Errorf("a port with %d outputs needs StereoCallback, not the callback that was set", len(names))
+	case kind == kindStereo && len(pc.MatchName) > len(names):
+		// Only a stereo port routes by position, so only a stereo port can run out of
+		// channels. A match entry past the last one has nothing to wire to, and taking
+		// it would index off the end of the ports slice, which took the process down
+		// during the sweep. Refusing here keeps that a message the caller can read.
+		return kindNone, fmt.Errorf("a stereo port has %d channels but %d match names, so the last %d name no channel",
+			len(names), len(pc.MatchName), len(pc.MatchName)-len(names))
+	}
+	return kind, nil
+}
+
 // NewJackPort opens one of this package's own ports. It is the whole of the shared
 // constructor; names is the ports to register, and a stereo port passes two of them.
 func NewJackPort(pc PortConfig, fl uint64) (*Port, error) {
@@ -294,28 +321,9 @@ func NewJackPort(pc PortConfig, fl uint64) (*Port, error) {
 func newJackPort(pc PortConfig, fl uint64, names []string) (*Port, error) {
 	// Resolved before the client is opened, so that a configuration this package
 	// refuses never reaches the server and never leaves one open behind it.
-	kind, err := pc.kind()
+	kind, err := portKindFor(&pc, names)
 	if err != nil {
 		return nil, err
-	}
-	// The callback set and the port count have to agree, because the realtime callback
-	// picks what fills it from the port count. A stereo callback on a one port config,
-	// or a mono callback on a two port one, would otherwise be accepted here and then
-	// call a function nobody set, on JACK's own thread, where a nil call takes the
-	// whole process down rather than returning an error.
-	if kind == kindStereo && len(names) < 2 {
-		return nil, fmt.Errorf("StereoCallback needs a stereo port, which registers two ports")
-	}
-	if kind != kindStereo && len(names) > 1 {
-		return nil, fmt.Errorf("a port with %d outputs needs StereoCallback, not the callback that was set", len(names))
-	}
-	// Only a stereo port routes by position, so only a stereo port can run out of
-	// channels. A match entry past the last one has nothing to wire to, and taking it
-	// would index off the end of the ports slice, which took the process down during
-	// the sweep below. Refusing here keeps that a message the caller can read.
-	if kind == kindStereo && len(pc.MatchName) > len(names) {
-		return nil, fmt.Errorf("a stereo port has %d channels but %d match names, so the last %d name no channel",
-			len(names), len(pc.MatchName), len(pc.MatchName)-len(names))
 	}
 	client, err := pc.open()(pc.ClientName)
 	if err != nil {
@@ -332,12 +340,10 @@ func newJackPort(pc PortConfig, fl uint64, names []string) (*Port, error) {
 		j.client.Close()
 		return nil, err
 	}
-	var cb ProcessCallback
+	cb := ProcessCallback(j.processAudio)
 	if kind == kindMidi {
 		cb = j.processMidi
 		j.mw = &midiWriter{port: j}
-	} else {
-		cb = j.processAudio
 	}
 	if err := client.SetProcessCallback(cb); err != nil {
 		j.client.Close()
@@ -347,62 +353,84 @@ func newJackPort(pc PortConfig, fl uint64, names []string) (*Port, error) {
 		j.client.Close()
 		return nil, err
 	}
-
 	// Registered before Activate so that the ports slice is complete before the
 	// process callback can run. That thread reads it without a lock, and a slice read
 	// while it is still being filled is an index panic rather than a nil dereference.
 	// JACK refuses a process callback set after activation and a connection made before
 	// it, but says nothing against registering first, which is the order a JACK client
 	// normally uses.
-	portType := audioPortType
-	if kind == kindMidi {
-		portType = midiPortType
+	if err := j.registerPorts(kind, fl, names); err != nil {
+		j.client.Close()
+		return nil, err
 	}
-	for _, name := range names {
-		p := client.PortRegister(name, portType, fl, portBufferHint)
-		if p == nil {
-			client.Close()
-			return nil, fmt.Errorf("jack refused to register %q", name)
-		}
-		j.ports = append(j.ports, p)
-	}
-
 	if err := client.Activate(); err != nil {
 		j.client.Close()
 		return nil, err
 	}
 	log.Println("jack activated")
+	j.startConnector()
+	if err := j.sweepExisting(); err != nil {
+		j.Close()
+		return nil, err
+	}
+	return j, nil
+}
+
+// registerPorts claims the named ports on the server. It runs before activation, and
+// the caller closes the client on failure like every other step here.
+func (j *Port) registerPorts(kind portKind, fl uint64, names []string) error {
+	portType := audioPortType
+	if kind == kindMidi {
+		portType = midiPortType
+	}
+	for _, name := range names {
+		p := j.client.PortRegister(name, portType, fl, portBufferHint)
+		if p == nil {
+			return fmt.Errorf("jack refused to register %q", name)
+		}
+		j.ports = append(j.ports, p)
+	}
+	return nil
+}
+
+// startConnector runs the goroutine that makes connections. It cannot start before
+// activation, since JACK refuses a connection made before it, so anything that
+// registers in the meantime waits in the queue rather than being wired.
+func (j *Port) startConnector() {
 	j.wg.Add(1)
 	go func() {
 		defer j.wg.Done()
 		for m := range j.portc {
-			j.connectMatch(m.index, m.port)
+			if err := j.connectMatch(m.index, m.port); err != nil {
+				log.Println("failed to connect a matched port:", err)
+			}
 		}
 	}()
+}
 
-	// Ports that were already there when the client opened never announced themselves,
-	// so they are swept for here. Each port is asked which entry it belongs to rather
-	// than each entry being asked what it matches: a name matching two entries would
-	// then be wired once per entry, and the bookkeeping keyed by name would collapse
-	// those into one, leaving the connected count short of what is actually wired.
+// sweepExisting wires the ports that were already there when the client opened, which
+// never announced themselves. Each port is asked which entry it belongs to rather than
+// each entry being asked what it matches: a name matching two entries would then be
+// wired once per entry, and the bookkeeping keyed by name would collapse those into
+// one, leaving the connected count short of what is actually wired.
+func (j *Port) sweepExisting() error {
 	found := make([]bool, len(j.MatchName))
 	for _, ext := range j.externalPorts() {
-		i := pc.matchIndex(ext.Name())
+		i := j.matchIndex(ext.Name())
 		if i < 0 {
 			continue
 		}
 		if err := j.connectMatch(i, ext); err != nil {
-			j.Close()
-			return nil, err
+			return err
 		}
 		found[i] = true
 	}
-	for i, mn := range pc.MatchName {
+	for i, mn := range j.MatchName {
 		if !found[i] {
 			log.Printf("matching port not found on %s; will wait to register", mn)
 		}
 	}
-	return j, nil
+	return nil
 }
 
 // connectMatch wires one external port to every one of this package's own ports that

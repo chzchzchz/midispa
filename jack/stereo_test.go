@@ -23,10 +23,7 @@ const (
 // newTestStereoPort opens a stereo write port against the fake client.
 func newTestStereoPort(t *testing.T, c *fakeClient, pc PortConfig) *Port {
 	t.Helper()
-	p, err := NewStereoWritePort(testConfig(c, pc))
-	require.NoError(t, err, "opening stereo port")
-	t.Cleanup(p.Close)
-	return p
+	return openTestPort(t, NewStereoWritePort, c, pc)
 }
 
 // fillStereo is the callback for a test that is about routing or registration rather
@@ -137,25 +134,19 @@ func TestPortRegisterFailureIsAnError(t *testing.T) {
 	}))
 	require.Error(t, err, "a refused second port was accepted")
 	assert.Contains(t, err.Error(), testPortName+rightSuffix, "error does not say which port was refused")
-	if c.wasOpened() {
-		assert.True(t, c.isClosed(), "the client was left open after the failure")
-	}
+	requireNoClientLeft(t, c)
 }
 
+// TestPortWithNoCallbackIsRejected covers a port with nothing to fill it, which used to
+// be a MIDI port rather than an error.
 func TestPortWithNoCallbackIsRejected(t *testing.T) {
-	c := newFakeClient(testClientName)
-
-	_, err := NewWritePort(testConfig(c, PortConfig{MatchName: []string{playbackMatch}}))
-	require.Error(t, err, "a port with nothing to fill it was accepted")
-	assert.False(t, c.wasOpened(), "a configuration this package refuses reached the server")
+	requireRejected(t, NewWritePort, PortConfig{})
 }
 
+// TestStereoPortWithoutACallbackIsRejected covers two ports and nothing to fill them
+// with, which has no reading other than broken.
 func TestStereoPortWithoutACallbackIsRejected(t *testing.T) {
-	c := newFakeClient(testClientName)
-
-	_, err := NewStereoWritePort(testConfig(c, PortConfig{MatchName: []string{playbackMatch}}))
-	require.Error(t, err, "two ports and nothing to fill them with were accepted")
-	assert.False(t, c.wasOpened(), "a configuration this package refuses reached the server")
+	requireRejected(t, NewStereoWritePort, PortConfig{})
 }
 
 // TestAmbiguousCallbacksAreRejected covers every pair. One of the two would be
@@ -170,16 +161,9 @@ func TestAmbiguousCallbacksAreRejected(t *testing.T) {
 		{"audio and midi", PortConfig{AudioCallback: silentAudio, MidiCallback: func(io.Writer) {}}},
 		{"stereo and midi", PortConfig{StereoCallback: fillStereo, MidiCallback: func(io.Writer) {}}},
 	}
+	open := func(pc PortConfig) (*Port, error) { return NewJackPort(pc, portIsOutput|portIsTerminal) }
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newFakeClient(testClientName)
-			pc := tc.pc
-			pc.MatchName = []string{playbackMatch}
-
-			_, err := NewJackPort(testConfig(c, pc), portIsOutput|portIsTerminal)
-			require.Error(t, err, "two callbacks were accepted and one of them will be ignored")
-			assert.False(t, c.wasOpened(), "a configuration this package refuses reached the server")
-		})
+		t.Run(tc.name, func(t *testing.T) { requireRejected(t, open, tc.pc) })
 	}
 }
 
@@ -334,15 +318,7 @@ func TestCallbackMustFitThePortCount(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newFakeClient(testClientName)
-			pc := tc.pc
-			pc.MatchName = []string{playbackMatch}
-
-			_, err := tc.open(testConfig(c, pc))
-			require.Error(t, err, "a callback that cannot fill the port was accepted")
-			assert.False(t, c.wasOpened(), "a configuration this package refuses reached the server")
-		})
+		t.Run(tc.name, func(t *testing.T) { requireRejected(t, tc.open, tc.pc) })
 	}
 }
 

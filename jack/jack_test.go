@@ -326,8 +326,9 @@ func (c *fakeClient) remove(p *fakePort) {
 	}
 }
 
-// cycle runs one process callback with the given frame count.
-func (c *fakeClient) cycle(t *testing.T, nframes uint32) {
+// cycle runs one process callback with the given frame count. It takes testing.TB so a
+// benchmark can drive the same path a test does.
+func (c *fakeClient) cycle(t testing.TB, nframes uint32) {
 	t.Helper()
 	c.mu.Lock()
 	cb := c.process
@@ -420,13 +421,44 @@ func testConfig(c *fakeClient, pc PortConfig) PortConfig {
 	return pc
 }
 
-// newTestPort opens a write port against the fake client.
+// newTestPort opens a mono write port against the fake client.
 func newTestPort(t *testing.T, c *fakeClient, pc PortConfig) *Port {
 	t.Helper()
-	p, err := NewWritePort(testConfig(c, pc))
+	return openTestPort(t, NewWritePort, c, pc)
+}
+
+// openTestPort opens a port with the given constructor and closes it when the test
+// ends. The constructor is a parameter because the mono, midi and stereo ports are the
+// same shape and differ only in which one is called.
+func openTestPort(t *testing.T, open func(PortConfig) (*Port, error), c *fakeClient, pc PortConfig) *Port {
+	t.Helper()
+	p, err := open(testConfig(c, pc))
 	require.NoError(t, err, "opening port")
 	t.Cleanup(p.Close)
 	return p
+}
+
+// requireRejected opens a port the configuration says this package should refuse, and
+// checks both halves of that: the error comes back, and the configuration never reached
+// the server. The second half is the one a caller cannot see, and a refusal that had
+// already opened a client would leave one running with nothing to close it.
+func requireRejected(t *testing.T, open func(PortConfig) (*Port, error), pc PortConfig) {
+	t.Helper()
+	c := newFakeClient(testClientName)
+	pc.MatchName = []string{playbackMatch}
+	_, err := open(testConfig(c, pc))
+	require.Error(t, err, "a configuration this package refuses was accepted")
+	assert.False(t, c.wasOpened(), "a configuration this package refuses reached the server")
+}
+
+// requireNoClientLeft asserts the other half of a failed open. A caller that gets an
+// error has no port to close, so a client that was handed out must already be shut. One
+// that never opened has nothing to close and is not a failure.
+func requireNoClientLeft(t *testing.T, c *fakeClient) {
+	t.Helper()
+	if c.wasOpened() {
+		assert.True(t, c.isClosed(), "the client was left open after the failure")
+	}
 }
 
 // silentAudio is the callback for a test that is about routing or lifetime rather than
@@ -658,11 +690,7 @@ func TestOpenFailures(t *testing.T) {
 
 			_, err := NewWritePort(testConfig(c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio}))
 			require.ErrorIs(t, err, wantErr)
-			// A client that never opened has nothing to close, so only one that was
-			// handed out can have been left running.
-			if c.wasOpened() {
-				assert.True(t, c.isClosed(), "the client was left open after the failure")
-			}
+			requireNoClientLeft(t, c)
 		})
 	}
 }
