@@ -799,7 +799,7 @@ func TestStateGesturesSaveAndLoad(t *testing.T) {
 			path := stateFilePath(t)
 			controller := withSession(session, path, nil)
 			recorder := useScreenRecorder(t, &bank.screen)
-			readout := func() string { return recorder.row(lengthDisplayRow) }
+			readout := func() string { return recorder.row(readoutRow) }
 			if tt.song {
 				controller.mode = songView
 			}
@@ -853,7 +853,7 @@ func TestStateGesturesWithoutAPathSaySo(t *testing.T) {
 		{name: "load", run: session.loadSession},
 	} {
 		require.NoErrorf(t, gesture.run(), "the %s gesture reported an error", gesture.name)
-		assert.Containsf(t, recorder.row(lengthDisplayRow), "-state",
+		assert.Containsf(t, recorder.row(readoutRow), "-state",
 			"readout after %s should say there is no state path", gesture.name)
 	}
 }
@@ -881,7 +881,7 @@ func TestStateLoadFailureLeavesTheSessionAlone(t *testing.T) {
 			require.Truef(t, err == nil || os.IsNotExist(err), "removing the file: %v", err)
 		}
 		require.NoErrorf(t, controller.loadSession(), "%s", tt.name)
-		assert.Containsf(t, recorder.row(lengthDisplayRow), "Load failed",
+		assert.Containsf(t, recorder.row(readoutRow), "Load failed",
 			"%s: the failure should be reported", tt.name)
 		_, ok := bank.Patterns[1].EventAtStep(0, kit.voices[2])
 		require.Truef(t, ok, "%s: a failed load changed the running session", tt.name)

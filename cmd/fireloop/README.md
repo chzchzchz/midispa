@@ -49,12 +49,13 @@ A missing file at startup is not an error, because that is what a first run look
 
 ## Session file
 
-`-state` names one file holding what the controls make: the patterns, the songs that arrange them, the kit's voices assigned to the tracks, and the tempo.
+`-state` names one file holding what the controls make: the patterns, the songs that arrange them, the kit's voices assigned to the tracks, the tempo and the swing.
 
 - The write is atomic. A save either lands whole or leaves the previous file untouched, so an interrupted save never costs a set.
 - Voice references are positions in the kit as this run loaded it, so the file records the kit paths and the voice count. A file loaded against a different kit is reported rather than trusted: everything that still resolves is kept, and what did not is counted and shown on the display.
 - Values outside their range are clamped, not refused. A set with one bad number in it is still mostly a set.
-- Where you were looking is not saved. The selected pattern and row, the scroll windows, the step cursor and the palette octave are the display's business, so a load lands on whatever pattern was showing. Notes, arrangement, tempo and kit layout are what come back.
+- Where you were looking is not saved. The selected pattern and row, the scroll windows, the step cursor and the palette octave are the display's business, so a load lands on whatever pattern was showing. Notes, arrangement, tempo, swing and kit layout are what come back.
+- A straight swing is written as no key at all, so a session that has never been swung is the same file the earlier build wrote, and a file with no `swingPct` loads as straight.
 - Editing modes, held pads, the playhead and the clipboard are not saved either. They mean nothing across a restart, and a loaded clipboard would paste on the next accidental Play press.
 - Patterns are written in index order, so the file can be diffed and read by eye after a show.
 - Each save is written over the same path. There is one file per run, and no slots.
@@ -132,6 +133,10 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Grid left/right: move the current step cursor.
 - Overview: enter or leave length-edit mode.
 - Encoder in length mode: change the pattern from 1 to 16 sixteenth-note steps; shortening removes later events and clears affected ties.
+- Snap: enter or leave swing entry. Unlike length mode this does not stop playback, because a swing changes nothing in any pattern. The Snap light is red while the mode is on.
+- `Shift` and Snap: turn the groove off and on without entering the entry mode. Straight is 50, and the last swing that was not straight is put back, so a groove can be heard straight for a bar and returned to. `Shift` latches, so repeated Snap presses toggle. A session that has never been swung has nothing to put back and the toggle does nothing.
+- Encoder in swing entry: move the swing by one percent of a beat per detent. It takes effect from the next step, so turning it while a pattern runs moves the groove under the music.
+- Pads in swing entry: type the swing outright, without `Shift`. The readout fills in as you press, and the number is applied when Snap is pressed again. A single digit is discarded rather than becoming a tenth of a percent, so a mis-hit does not answer with a number nobody meant.
 - Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback. Note editing follows the selection, so a mute button moves the palette to another voice rather than closing it; press Mode to leave.
 - Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step. The knob is not re-read from the step you select, so its value carries over to the next step.
 - Volume knob with a selected percussive voice: each detent moves the selected step's velocity by one from the value it already holds, so the knob trims the hit rather than replacing it. See [Percussion dynamics](#percussion-dynamics).
@@ -148,6 +153,8 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Play while copied: paste the pattern.
 - Stop: stop playback and release active chromatic notes.
 - Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
+- The bottom row carries whichever mode owns it: the step being edited, `Length NN steps`, the swing being typed, or a message from a save, a load or a controller.
+- The separator row under the header carries the swing whenever it is not straight, for example `----------- Sw 66`, so the groove is visible while nothing is being edited. A straight swing leaves that row bare.
 - The four lights at the top left, labelled Channel, Mixer, User 1 and User 2, are indicators with no button behind them. Fireloop does not report state on them yet, and clears them whenever it clears the indicators, so they stay dark.
 
 #### Choosing voices
@@ -228,6 +235,7 @@ A chromatic note lasts one sixteenth-note step. It stops as soon as the playhead
 - A tie between two notes of the same pitch reuses the sounding note, so there is no retrigger: the tied step writes nothing to the wire and the note is simply held for another step. The tied step's own velocity is not heard either, since no new note starts. A tie to a different pitch is legato: the new pitch starts before the old one stops.
 - Untied notes retrigger, so a note followed by another on the same voice stops exactly where the next one begins.
 - Stopping playback, switching pattern, or reaching the end of a pattern releases anything still sounding.
+- Under swing, the two steps that make the first half of a beat are longer than the two that make the second half, so a tied note on the long half rings noticeably longer than the same tie at a straight 50. That is what a tie means once the clock is swung, not a change to the tie.
 
 #### Blackout
 
@@ -275,7 +283,7 @@ A song holds up to 1000 measures, so the 48 measure pads only ever show part of 
 
 - Row 0: the song slot, for example `Song 001`.
 - Row 1: the selected pattern and its length in steps, for example `Pattern 003 L16`.
-- Row 2: the current tempo.
+- Row 2: the current tempo and, when it is not straight, the swing beside it, for example `Tempo 139 Sw 66`.
 - Row 3: the visible windows, for example `P 001-016 M 001-048`.
 - Rows 4 and 5: during playback the playing measure and its pattern, for example `Measure 005` and `Pat-bar 003`.
 
@@ -291,6 +299,7 @@ A song holds up to 1000 measures, so the 48 measure pads only ever show part of 
 - Play: play the song from the top and loop it. The playing measure lights up and rows 4 and 5 follow it.
 - Stop: stop playback and release active chromatic notes.
 - `Alt` is a pattern-mode modifier and does nothing here, so there is no blackout in song mode.
+- The Fire's own knobs do nothing in song mode either. A controller's tempo and swing controls work in both views, which is where a groove is usually set against the arrangement.
 - `Shift` plus Browser saves the session and `Shift` plus Accent loads it, the same as in pattern mode. A song is usually saved from here, since that is where the arrangement is.
 
 Only song slot 1 is reachable from the controls today; the display names the slot and there is no button bound to changing it.
@@ -305,6 +314,33 @@ Only song slot 1 is reachable from the controls today; the display names the slo
 6. Press Pattern/Song to go back and edit any pattern in the song; every measure holding that pattern changes with it, including its length.
 
 Measures reference the pattern itself rather than a copy, so edits are shared. Percussive and chromatic patterns can be mixed freely in one song. With `-state` the arrangement is written to the session file described above; without it, patterns and songs are held in memory for the lifetime of the process and are lost when the process ends.
+
+## MIDI controls
+
+Fireloop's controls and fireloop's own MIDI controls arrive over the same wire, on the same port, so the two are told apart by the channel before either looks at the number.
+
+| | number | on the Fire |
+| --- | --- | --- |
+| Select encoder | 118 | yes |
+| Volume knob | 16 | yes |
+| pan knob | 17 | sent, not acted on |
+| filter knob | 18 | sent, not acted on |
+| resonance knob | 19 | sent, not acted on |
+
+| | number | meaning |
+| --- | --- | --- |
+| tempo, coarse | 16 | beats per minute in sixty-fourths, high seven bits |
+| tempo, fine | 48 | the same value, low seven bits |
+| swing | 17 | 64 is straight, 127 is near the ceiling |
+| swing, second number | 78 | the same mapping |
+
+The Fire's controls arrive on MIDI channel 1, which is the channel a controller sends on by default, so the two sets cannot share it: the Fire's own knobs are honoured on MIDI channel 1 only, and the tempo and swing controls are honoured on **MIDI channel 2 or above** only. That is what stops the Volume knob from setting the tempo and the pan knob from setting the swing.
+
+Set your controller to MIDI channel 2 or above for these four numbers. Left on its default it will send them on channel 1, where fireloop treats them as the Fire's own and ignores them.
+
+The tempo pair is midiclock's convention rather than a general coarse-and-fine pair, so that one controller drives both programs the same way: 120 BPM is 7680 counts, sent as coarse 60 and fine 0. A controller sending a plain 0-127 pair will land somewhere else.
+
+Both numbers report on the display when they change, on the row for the view being used, and neither stops playback.
 
 ## Development
 

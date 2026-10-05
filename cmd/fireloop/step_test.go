@@ -42,11 +42,11 @@ func TestPercussionStatusFollowsTheSelectedStep(t *testing.T) {
 	voice := voiceBank.voices[0]
 	require.NoError(t, bank.controller.handlePatternGrid(nil, 2, 0, 84))
 	require.NoError(t, bank.MoveStepCursor(2))
-	require.Equal(t, "S03 @084", recorder.row(lengthDisplayRow))
+	require.Equal(t, "S03 @084", recorder.row(readoutRow))
 	// An empty step shows nothing, the same as a chromatic one, so a velocity belonging to
 	// no step cannot make two steps look equal.
 	require.NoError(t, bank.MoveStepCursor(2))
-	require.Equal(t, "S05 --", recorder.row(lengthDisplayRow))
+	require.Equal(t, "S05 --", recorder.row(readoutRow))
 	event, ok := bank.CurrentPattern().EventAtStep(2, voice)
 	require.True(t, ok, "moving the cursor removed the step")
 	require.Equal(t, 84, event.Velocity, "moving the cursor changed the step's dynamics")

@@ -104,7 +104,7 @@ func (p *PatternBank) paletteBase() int {
 // the shift shows on the grid without a word on the display. It does nothing outside
 // note-edit mode, where the knob moves the selected track's voice instead.
 func (p *PatternBank) ShiftPaletteOctave(detents int) error {
-	if p.lengthEditActive() {
+	if p.lengthEditActive() || p.swingEditActive() {
 		return nil
 	}
 	voice := p.SelectedVoice()

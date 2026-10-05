@@ -58,6 +58,12 @@ type stateFile struct {
 	// says nothing about whether that voice still exists.
 	VoiceCount int `json:"voiceCount"`
 	BPM        int `json:"bpm"`
+	// SwingPct is the groove, in the same units midiclock uses so a percentage means the
+	// same thing in both programs. Straight is written as zero so omitempty leaves the key
+	// out, which is what keeps a straight session's file identical to what the previous
+	// build wrote; swingPctFrom reads that zero back as straight. The tenths are not
+	// dropped by the file, so 66.7 survives a save.
+	SwingPct float64 `json:"swingPct,omitempty"`
 	// TrackVoices is the voice sitting on each track. It belongs to the pattern bank
 	// rather than to any one pattern, and it is not recoverable from the patterns: a
 	// pattern records which voice sounds on a step, not which track row it sits on, and
@@ -146,11 +152,12 @@ var (
 // is the goroutine that calls this, which is also the goroutine a load installs from.
 func stateFrom(pb *PatternBank, sb *SongBank, kit []string) stateFile {
 	state := stateFile{
-		App:     stateApp,
-		Version: stateVersion,
-		SavedAt: time.Now(),
-		Kit:     append([]string(nil), kit...),
-		BPM:     currentBPM(),
+		App:      stateApp,
+		Version:  stateVersion,
+		SavedAt:  time.Now(),
+		Kit:      append([]string(nil), kit...),
+		BPM:      currentBPM(),
+		SwingPct: swingPctFor(currentSwingPct()),
 	}
 	if pb == nil {
 		return state
@@ -407,6 +414,7 @@ func (c *Controller) loadState(path string) (stateReport, error) {
 		c.songbank.installSongs(songs)
 	}
 	setBPM(clampIndex(state.BPM, stateTempoMin, stateTempoMax))
+	setSwingPct(swingPctFrom(state.SwingPct))
 	return report, nil
 }
 

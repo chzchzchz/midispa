@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -246,6 +248,28 @@ func TestTraceTapTempoWindowResets(t *testing.T) {
 	require.Equal(t, 120, currentBPM(), "the discarded tap must leave the tempo alone")
 	require.Len(t, patternBank.controller.tapTimes, 1, "the window should have reset the tap history to one")
 	_ = patternBank
+}
+
+// Two taps a moment apart ask for a tempo no sequencer would play. The tempo store takes
+// whatever it is given, so the bound has to be applied where the taps are measured rather
+// than trusted to the caller, and the readout has to show the bounded value too.
+func TestTraceTapTempoStaysInsideThePlayableRange(t *testing.T) {
+	_, patternBank, _, _ := useTestBanks(t)
+	previousBPM := currentBPM()
+	t.Cleanup(func() { setBPM(previousBPM) })
+	screen := useScreenRecorder(t, &patternBank.screen)
+
+	// Two taps with no gap between them measure a duration of zero, which is a tempo of
+	// infinity rather than one the store should ever be handed.
+	patternBank.controller.tapTimes = []time.Time{time.Now(), time.Now()}
+	require.NoError(t, patternBank.controller.tapTempo())
+
+	require.LessOrEqualf(t, currentBPM(), stateTempoMax,
+		"tapping faster than the ceiling left the tempo at %d", currentBPM())
+	require.GreaterOrEqualf(t, currentBPM(), stateTempoMin,
+		"tapping faster than the ceiling left the tempo at %d", currentBPM())
+	assert.Containsf(t, screen.row(4), fmt.Sprintf("%03d", stateTempoMax),
+		"the readout should show the tempo that is actually playing, not the raw one")
 }
 
 // A note is one step long unless a tie holds it, so it stops where it started instead of

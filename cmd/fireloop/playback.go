@@ -364,7 +364,9 @@ func writeSequencerPort(aseq alsa.PortWriter, data []byte) error {
 
 func (p *Playback) run(ctx context.Context, aseq sequencerWriter, clock stepClock) (runErr error) {
 	started := false
-	logger.Info("playback start", "bpm", currentBPM())
+	// The run's swing is a property of the run rather than an event inside it, so it is a
+	// field here rather than a line of its own.
+	logger.Info("playback start", "bpm", currentBPM(), "swing", currentSwingPct())
 	defer func() {
 		if err := p.releaseAll(aseq); runErr == nil {
 			runErr = err
@@ -416,7 +418,12 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter, clock stepCloc
 
 		var waitUntil time.Duration
 		if nextBeat != 0 {
-			waitUntil = time.Duration(float64(nextBeat-patBeat) * float64(beatDuration(curBpm)))
+			// The swing read is in the call rather than hoisted into a variable beside
+			// curBpm, so a turn of the knob takes effect from the next step. The tempo is
+			// sampled once and re-read only at a pattern boundary, which is right for a tap
+			// and wrong for a groove: a boundary is a coarse place to put between a knob and
+			// the music, so the two deliberately do not agree about this.
+			waitUntil = swungSpan(patBeat, nextBeat, beatDuration(curBpm), currentSwingPct())
 			songBeat, _, _ = p.position()
 			p.setPosition(songBeat+nextBeat-patBeat, nextBeat)
 		} else {

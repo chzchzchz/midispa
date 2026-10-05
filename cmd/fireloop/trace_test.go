@@ -330,7 +330,7 @@ func TestTraceStatusShowsEachStepItsOwnVelocity(t *testing.T) {
 	seen := map[int]string{}
 	for _, step := range []int{0, 4} {
 		require.NoError(t, bank.setStepCursor(step))
-		status := recorder.row(lengthDisplayRow)
+		status := recorder.row(readoutRow)
 		t.Logf("cursor at step %d -> status %q", step, status)
 		seen[step] = status
 	}
@@ -347,11 +347,11 @@ func TestTraceEmptyStepShowsNoVelocity(t *testing.T) {
 	bank.CurrentPattern().SetChromaticNote(0, voice, 60, 83)
 	require.NoError(t, bank.SelectTrackRow(1))
 	require.NoError(t, bank.setStepCursor(0))
-	assert.Contains(t, recorder.row(lengthDisplayRow), "@083", "step 1 should show its own velocity")
+	assert.Contains(t, recorder.row(readoutRow), "@083", "step 1 should show its own velocity")
 
 	// An empty step must not carry the previous note's velocity on the display.
 	require.NoError(t, bank.setStepCursor(4))
-	empty := recorder.row(lengthDisplayRow)
+	empty := recorder.row(readoutRow)
 	t.Logf("empty step status %q", empty)
 	require.NotContainsf(t, empty, "@", "an empty step shows a velocity: %q", empty)
 	require.Equal(t, "S05 --", empty)
@@ -370,7 +370,7 @@ func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
 	require.NoErrorf(t, err, "the pad press was not handled (handled=%v)", handled)
 	require.True(t, handled, "the pad press was not handled")
 	// The display reports the step that is now selected.
-	assert.Contains(t, recorder.row(lengthDisplayRow), "@099", "status after a pad move")
+	assert.Contains(t, recorder.row(readoutRow), "@099", "status after a pad move")
 	// Re-picking the pitch sets the dynamics from the new press.
 	require.NoError(t, bank.ToggleNoteMode())
 	require.NoError(t, bank.handleNoteEditPad(nil, 1, 2, 60, false))
@@ -395,7 +395,7 @@ func TestTracePressVelocityBecomesTheNotesVelocity(t *testing.T) {
 		event, ok := bank.CurrentPattern().EventAtStep(0, voice)
 		require.Truef(t, ok, "the pad press placed no note (velocity %d)", event.Velocity)
 		require.Equalf(t, pressed, event.Velocity, "the note should carry the pad press")
-		assert.Containsf(t, recorder.row(lengthDisplayRow), fmt.Sprintf("@%03d", pressed),
+		assert.Containsf(t, recorder.row(readoutRow), fmt.Sprintf("@%03d", pressed),
 			"the status should show the press velocity")
 	}
 	// The audition carries the press velocity too, so what is heard matches what is shown.
@@ -428,7 +428,7 @@ func TestTraceStateGesturesReportOnTheReadoutRow(t *testing.T) {
 			note:  NoteBrowser,
 			vel:   100,
 			until: func(r *screenRecorder) bool {
-				return strings.HasPrefix(r.row(lengthDisplayRow), "Saved")
+				return strings.HasPrefix(r.row(readoutRow), "Saved")
 			},
 		},
 		press("shift+accent: load", NoteAccent),
@@ -437,7 +437,7 @@ func TestTraceStateGesturesReportOnTheReadoutRow(t *testing.T) {
 		if step.until != nil {
 			waitFor(t, step.label+" to report", func() bool { return step.until(recorder) })
 		}
-		readout := recorder.row(lengthDisplayRow)
+		readout := recorder.row(readoutRow)
 		t.Logf("%-20s readout %q", step.label, readout)
 		rows = append(rows, readout)
 	}

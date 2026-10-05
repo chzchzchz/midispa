@@ -29,6 +29,8 @@ const (
 	noteEdit
 	// lengthEdit hands the SELECT knob to the pattern's length.
 	lengthEdit
+	// swingEdit hands the SELECT knob and the pads as a keypad to the swing amount.
+	swingEdit
 )
 
 // noHeldStep means no step cell is held, so a press cannot be the second half of a tie.
@@ -264,7 +266,7 @@ func (p *PatternBank) forEachRowWithVoice(voice *Voice, fn func(row int) error) 
 // every caller is about to redraw what note editing owned, so a redraw here would only be
 // thrown away by the one that follows.
 func (p *PatternBank) leaveNoteEdit() error {
-	p.clearNoteEdit()
+	p.claimMode(false, noteEdit)
 	p.clearPadState()
 	return p.pads.SetLed(NoteMode, LEDOff)
 }
@@ -389,7 +391,9 @@ func (p *PatternBank) redraw() error {
 	if err := p.printText(0, 0, p.headerText(), false); err != nil {
 		return err
 	}
-	if err := p.printText(1, 0, "-----------", false); err != nil {
+	// printSwing rebuilds this row from the separator and the swing, so it has to come after
+	// the separator rather than instead of it.
+	if err := p.printSwing(); err != nil {
 		return err
 	}
 	for row := 1; row <= padRows; row++ {
@@ -402,6 +406,9 @@ func (p *PatternBank) redraw() error {
 	}
 	if p.lengthEditActive() {
 		return p.printLength()
+	}
+	if p.swingEditActive() {
+		return p.printSwingEntry()
 	}
 	if p.noteEditActive() {
 		if err := p.drawNotePalette(); err != nil {
@@ -560,6 +567,19 @@ func (p *PatternBank) printText(row, col int, text string, inverted bool) error 
 // clearTextRows blanks rows on the pattern bank's text layer.
 func (p *PatternBank) clearTextRows(row, n int) error {
 	return displayClear(p.screen, row, n)
+}
+
+// printReadout replaces the bottom row, which whichever mode or message owns it shares with
+// all the others. The row is cleared first because there is no partial-row clear, so a
+// shorter message would otherwise leave the tail of the one before it.
+//
+// Only this row is cleared. Wiping the display looked like a blackout while the pads stayed
+// lit, which is the whole reason this is not just printText over a wider clear.
+func (p *PatternBank) printReadout(col int, text string) error {
+	if err := p.clearTextRows(readoutRow, 1); err != nil {
+		return err
+	}
+	return p.printText(readoutRow, col, text, false)
 }
 
 func (p *PatternBank) JogSelect(n int) error {

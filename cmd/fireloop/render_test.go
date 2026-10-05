@@ -46,14 +46,16 @@ func TestAPadRepaintIsReadableWithoutAnEvent(t *testing.T) {
 	require.Equal(t, [3]int{}, pads.pad(2, 0), "the step next to it should still be dark")
 }
 
-// The unit has more buttons than fireloop binds, and a press on one of those is said out
-// loud rather than swallowed. This matters because NoteSnap, Play and Record and several
-// others share a value, so a constant that stops being routed looks identical to a button
-// that is merely not ours.
+// Every button the unit has is bound now — Snap among them, which is the swing entry — so
+// this stands on a number no Fire button sends. It matters because NoteMetronome, Wait,
+// Countdown and LoopRec share their values with controls that are bound, so a number that
+// stops being routed is indistinguishable from one that was never ours.
 func TestAnUnboundControlIsReportedRatherThanSwallowed(t *testing.T) {
 	bank, _ := quietBank(t, trackWindowKit(4, -1))
 	capture := useCaptureLog(t)
 
-	require.NoError(t, dispatch(bank, padMessage(NoteSnap, 100)), "an unbound control should not fail a press")
+	// 27 is the gap between the Mode button at 26 and the pattern row at 31.
+	const unboundNote = 27
+	require.NoError(t, dispatch(bank, padMessage(unboundNote, 100)), "an unbound control should not fail a press")
 	assert.Contains(t, capture.messages(), "unbound control", "a press on an unbound control was swallowed")
 }

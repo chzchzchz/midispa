@@ -36,11 +36,26 @@ func (p *PatternBank) lengthEditActive() bool {
 	return p.mode == lengthEdit
 }
 
-// clearNoteEdit steps out of note editing and leaves every other mode alone. Choosing a
-// pattern or scrolling the track window is not a request to give up the length, and the
-// modes are exclusive, so this only has anything to clear when note editing is on.
-func (p *PatternBank) clearNoteEdit() {
-	if p.mode == noteEdit {
+// swingEditActive is the third way of asking what mode the grid is in. It joins the enum
+// rather than sitting beside it as a flag: swing entry takes the pads as a keypad and the
+// readout row, exactly what length entry takes, so the two are the same kind of exclusive
+// claim and a bank holding both flags at once would let two readouts fight over one row.
+func (p *PatternBank) swingEditActive() bool {
+	return p.mode == swingEdit
+}
+
+// claimMode records the mode the grid is in, or steps back out of it when active is false.
+// It leaves every other mode alone: choosing a pattern or scrolling the track window is not
+// a request to give up the length, and the modes are exclusive, so stepping out has anything
+// to clear only when the mode named is the one that was on.
+//
+// The way back to stepEdit is written once here rather than in each of the three toggles,
+// because three copies of it is three chances for one of them to forget and leave a bank in
+// a mode nothing can leave.
+func (p *PatternBank) claimMode(active bool, mode editMode) {
+	if active {
+		p.mode = mode
+	} else if p.mode == mode {
 		p.mode = stepEdit
 	}
 }
@@ -74,7 +89,7 @@ func (p *PatternBank) redrawStepRows() error {
 
 // MoveStepCursor keeps the edit target inside the active pattern length.
 func (p *PatternBank) MoveStepCursor(delta int) error {
-	if p.lengthEditActive() {
+	if p.lengthEditActive() || p.swingEditActive() {
 		return nil
 	}
 	previous := p.stepCursor
@@ -141,11 +156,7 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 	if active && (voice == nil || !voice.IsChromatic()) {
 		return nil
 	}
-	if active {
-		p.mode = noteEdit
-	} else {
-		p.clearNoteEdit()
-	}
+	p.claimMode(active, noteEdit)
 	// The step rows are about to be redrawn, which puts the strip back on its own, so
 	// the note-edit playhead stops lighting a cell here.
 	p.playheadStep = noPlayheadStep
@@ -161,7 +172,7 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 }
 
 func (p *PatternBank) ToggleNoteMode() error {
-	if p.lengthEditActive() {
+	if p.lengthEditActive() || p.swingEditActive() {
 		return nil
 	}
 	return p.setNoteEdit(p.noteEditActive() == false)
@@ -191,10 +202,13 @@ func stepStatusText(voice *Voice, step int, event *Event, tieStep int) string {
 // when there is one. A percussive track reports the step and its dynamics too, because the
 // Volume knob sets them and a readout that went blank would leave the knob turning blind.
 func (p *PatternBank) printStepStatus() error {
-	if p.lengthEditActive() {
+	// The guard belongs here rather than in the twelve callers: every one of them ends at
+	// this line, and a guard in one of them covers neither the other eleven nor the next one
+	// anybody writes.
+	if p.lengthEditActive() || p.swingEditActive() {
 		return nil
 	}
-	if err := p.clearTextRows(lengthDisplayRow, 1); err != nil {
+	if err := p.clearTextRows(readoutRow, 1); err != nil {
 		return err
 	}
 	voice := p.SelectedVoice()
@@ -212,7 +226,7 @@ func (p *PatternBank) printStepStatus() error {
 			}
 		}
 	}
-	return p.printText(lengthDisplayRow, 0, fitOLEDText(stepStatusText(voice, p.stepCursor, event, tieStep)), false)
+	return p.printText(readoutRow, 0, fitOLEDText(stepStatusText(voice, p.stepCursor, event, tieStep)), false)
 }
 
 func fitOLEDText(text string) string {

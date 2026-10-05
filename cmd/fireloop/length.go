@@ -2,8 +2,10 @@ package main
 
 import "fmt"
 
-// The bottom OLED row is reserved for the active pattern-length edit state.
-const lengthDisplayRow = 6
+// readoutRow is the bottom OLED row, which one mode or another owns at any moment: the step
+// being edited, the pattern's length, a number being typed, or a transient message. There is
+// one name for it because there is one row, and three of them used to have three.
+const readoutRow = 6
 
 func (p *PatternBank) ToggleLengthMode() error {
 	return p.setLengthMode(!p.lengthEditActive())
@@ -16,11 +18,15 @@ func (p *PatternBank) setLengthMode(active bool) error {
 			return err
 		}
 	}
-	if active {
-		p.mode = lengthEdit
-	} else if p.mode == lengthEdit {
-		p.mode = stepEdit
+	// Length entry and swing entry both want the readout row and the encoder. The enum
+	// already drops the other mode, but only this call runs the leaving half — applying a
+	// typed swing and clearing the Snap light — so it has to be made explicitly.
+	if active && p.swingEditActive() {
+		if err := p.setSwingEntry(false); err != nil {
+			return err
+		}
 	}
+	p.claimMode(active, lengthEdit)
 	if active {
 		if err := p.pads.SetLed(NoteOverview, LEDRed); err != nil {
 			return err
@@ -53,9 +59,9 @@ func (p *PatternBank) printLength() error {
 	if pattern == nil {
 		// A bank that has not chosen a pattern yet has no length to report, and leaving
 		// the row blank says that rather than reporting on no pattern at all.
-		return p.clearTextRows(lengthDisplayRow, 1)
+		return p.clearTextRows(readoutRow, 1)
 	}
-	return p.printText(lengthDisplayRow, 0, fmt.Sprintf(
+	return p.printText(readoutRow, 0, fmt.Sprintf(
 		"Length %02d steps",
 		pattern.LengthSteps(),
 	), false)

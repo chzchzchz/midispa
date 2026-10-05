@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
 )
 
 // logger carries structured events from the sequencer: every MIDI message it writes, the
@@ -91,12 +92,17 @@ func ledName(control int) string {
 // logIncoming records a control press that is not a grid pad. The Fire's buttons send
 // plain note-ons, so pressing an unbound button and reading its number off the log is how
 // a new control is identified without guessing.
+//
+// The channel is the wire's own, read through midi.Channel rather than taken from logMIDI,
+// because logMIDI reports the wire's 0 as 1 and a control has to be recognisable by the number
+// fireControlChannel is tested against. It is what settles that constant against real hardware
+// instead of against an assumption.
 func logIncoming(note, status, velocity int) {
 	if _, _, onGrid := Note2Grid(note); onGrid {
 		return
 	}
 	kind, _, _, _ := logMIDI([]byte{byte(status), byte(note), byte(velocity)})
-	logger.Debug("in", "note", note, "kind", kind, "velocity", velocity)
+	logger.Debug("in", "note", note, "kind", kind, "velocity", velocity, "channel", midi.Channel(byte(status)))
 }
 
 // logOutbound records one message on its way to a device. Every write goes through here so

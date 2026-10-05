@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/chzchzchz/midispa/midi"
 
 	"github.com/chzchzchz/midispa/sysex/akai"
+	"github.com/stretchr/testify/require"
 )
 
 // The setup every test starts from: a kit, a bank on it with the package globals pointed at
@@ -148,6 +150,92 @@ func padMessage(note, velocity int) alsa.SeqEvent {
 
 func releaseMessage(note int) alsa.SeqEvent {
 	return alsa.SeqEvent{Data: []byte{midi.MakeNoteOff(0), byte(note), 0}}
+}
+
+// encoderTurn is the Select encoder as the hardware sends it: a control change, not a note.
+// The two share numbers on this device and on none other, which is why the handlers tell them
+// apart by the status byte rather than by what arrives in the second byte.
+func encoderTurn(turn int) alsa.SeqEvent {
+	return alsa.SeqEvent{Data: []byte{midi.MakeCC(fireControlChannel), byte(CCSelect), byte(turn)}}
+}
+
+// deviceChannel and softwareChannel name the two halves of the control rule from a test's
+// side, so a test says which side it means rather than counting from fireControlChannel.
+const (
+	deviceChannel   = fireControlChannel
+	softwareChannel = fireControlChannel + 1
+)
+
+// sendCC is a control change as a controller sends it, on the channel asked for.
+func sendCC(bank *PatternBank, channel, controller, value int) error {
+	return dispatch(bank, alsa.SeqEvent{Data: []byte{
+		midi.MakeCC(channel), byte(controller), byte(value),
+	}})
+}
+
+// pressPad is a grid pad press, which is how the keypads are reached.
+func pressPad(t *testing.T, bank *PatternBank, note int) {
+	t.Helper()
+	require.NoError(t, dispatch(bank, padMessage(note, 100)))
+}
+
+// pressEncoder is the Select encoder as the hardware sends it.
+func pressEncoder(t *testing.T, bank *PatternBank, turn int) {
+	t.Helper()
+	require.NoError(t, dispatch(bank, encoderTurn(turn)))
+}
+
+// padTyping is the note whose key types each digit, found by asking the keypad rather than
+// written down, so a change to the pad arithmetic moves the tests with it instead of leaving
+// them passing on a number no pad produces.
+func padTyping(digit int) int {
+	for note := 54; note <= 117; note++ {
+		x, y, onGrid := Note2Grid(note)
+		if onGrid && padDigit(y, x) == digit {
+			return note
+		}
+	}
+	panic("no pad types " + strconv.Itoa(digit))
+}
+
+// setSwing puts the swing back after a test, because the store is package state and a test
+// that leaves it swung changes every test that runs after it. The remembered groove is saved
+// with it: it is the same kind of state, it is written by setSwingPct on every route to a
+// swing, and a test that left one behind would decide what the toggle restores for the next.
+func setSwing(t *testing.T, value float64) {
+	t.Helper()
+	previous, previousGroove := swing.Load(), lastGroove.Load()
+	t.Cleanup(func() {
+		swing.Store(previous)
+		lastGroove.Store(previousGroove)
+	})
+	setSwingPct(value)
+}
+
+// timedMidiWriter records when each note-on reached the writer, which is what a playback
+// worker writing through a stub can offer instead of the hardware's own clock.
+type timedMidiWriter struct {
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func (w *timedMidiWriter) Write(event alsa.SeqEvent) error {
+	if len(event.Data) == 3 && midi.IsNoteOn(event.Data[0]) && event.Data[2] > 0 {
+		w.mu.Lock()
+		w.times = append(w.times, time.Now())
+		w.mu.Unlock()
+	}
+	return nil
+}
+
+func (w *timedMidiWriter) WritePort(event alsa.SeqEvent, _ int) error {
+	return w.Write(event)
+}
+
+func (w *timedMidiWriter) noteOnTimes() []time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]time.Time(nil), w.times...)
 }
 
 func assertMidiData(t *testing.T, event alsa.SeqEvent, want []byte) {

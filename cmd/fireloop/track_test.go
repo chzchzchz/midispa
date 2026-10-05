@@ -25,15 +25,22 @@ func trackWindowKit(count int, chromatic int) *VoiceBank {
 	return NewVoiceBank([]Device{{Channel: 1, Voices: voices}})
 }
 
-// newTestController builds the banks and leaves only the tempo to restore, which is the one
-// piece of state still in the package because the playback worker samples it from its own
-// goroutine. The banks are built here rather than handed in so a test cannot end up with one
-// that has no owner to stop playback through.
+// newTestController builds the banks and leaves only the package-level state to restore,
+// which is what is left after tempo and swing moved out of the controller and into atomics
+// the playback worker samples from its own goroutine. Both are restored raw, which is raw to
+// raw and so needs no conversion: a swing test that set 66 and did not restore it would leak
+// that into every later test in the package. The banks are built here rather than handed in
+// so a test cannot end up with one that has no owner to stop playback through.
 func newTestController(t testing.TB, fire *Fire, kit *VoiceBank) *Controller {
 	t.Helper()
 	previousBPM := bpm.Load()
-	t.Cleanup(func() { bpm.Store(previousBPM) })
+	previousSwing := swing.Load()
+	t.Cleanup(func() {
+		bpm.Store(previousBPM)
+		swing.Store(previousSwing)
+	})
 	setBPM(defaultBPM)
+	setSwingPct(straightSwingPct)
 	return newController(fire, kit, "")
 }
 

@@ -131,10 +131,10 @@ func TestPatternLengthControls(t *testing.T) {
 	require.NoError(t, dispatch(patternBank, arrangementNote(NoteOverview)))
 	require.True(t, patternBank.lengthEditActive(), "Overview did not enter length mode")
 
-	require.NoError(t, dispatch(patternBank, arrangementNote(CCSelect)))
+	require.NoError(t, dispatch(patternBank, encoderTurn(EncoderRight)))
 	require.Equal(t, 9, patternBank.CurrentPattern().LengthSteps(), "the encoder should lengthen")
 
-	left := alsa.SeqEvent{Data: []byte{midi.MakeCC(0), byte(CCSelect), byte(EncoderLeft)}}
+	left := encoderTurn(EncoderLeft)
 	require.NoError(t, dispatch(patternBank, left))
 	require.Equal(t, 8, patternBank.CurrentPattern().LengthSteps(), "the encoder should shorten")
 
@@ -153,7 +153,7 @@ func TestLengthModeWithoutAPatternReportsNothing(t *testing.T) {
 	bank := useEmptyController(t, NewFire(func([]byte) error { return nil }), kit).patbank
 	recorder := useScreenRecorder(t, &bank.screen)
 	require.NoError(t, bank.ToggleLengthMode())
-	require.Empty(t, recorder.row(lengthDisplayRow), "the length row should be left blank")
+	require.Empty(t, recorder.row(readoutRow), "the length row should be left blank")
 }
 
 func TestSongModePatternPadUsesViewport(t *testing.T) {

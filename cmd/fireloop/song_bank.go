@@ -194,7 +194,7 @@ func (s *SongBank) SelectPattern(n int) error {
 	if err := s.askStop(); err != nil {
 		return err
 	}
-	s.pb.clearNoteEdit()
+	s.pb.claimMode(false, noteEdit)
 	s.pb.clearPadState()
 	if s.pb.Patterns == nil {
 		s.pb.Patterns = make(map[int]*Pattern)
@@ -225,8 +225,12 @@ func (s *SongBank) PrintPattern() error {
 	return s.printRow(1, fmt.Sprintf("Pattern %03d L%02d", s.pb.selPatIdx, steps))
 }
 
+// PrintTempo is the arrangement's tempo row, carrying the swing beside it so a groove set
+// against a song is visible from the song view. The swing is read live rather than redrawn on
+// a change, so this row and the pattern view's cannot disagree.
 func (s *SongBank) PrintTempo() error {
-	return s.printRow(2, fmt.Sprintf("Tempo %03d", currentBPM()))
+	row := fmt.Sprintf("Tempo %03d", currentBPM()) + swingText(currentSwingPct())
+	return s.printRow(2, row)
 }
 
 func (s *SongBank) DrawPadMeasures() error {

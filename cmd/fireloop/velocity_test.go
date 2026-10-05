@@ -115,6 +115,6 @@ func TestPercussionVelocityKnobStopsAtOne(t *testing.T) {
 	require.True(t, ok, "turning the knob past the floor removed the step")
 	require.Equal(t, minPercussionVelocity, event.Velocity)
 	// The readout reports the floor, so the display never claims a velocity nothing plays.
-	require.Equal(t, "S01 @001", recorder.row(lengthDisplayRow))
+	require.Equal(t, "S01 @001", recorder.row(readoutRow))
 	assertMidiData(t, alsa.SeqEvent{Data: event.NoteOnMidi()}, []byte{midi.MakeNoteOn(0), byte(note), minPercussionVelocity})
 }

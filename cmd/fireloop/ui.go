@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -11,26 +12,77 @@ import (
 
 const defaultBPM = 139
 
+// bpmFixed is the resolution of the 14-bit tempo midiclock programs over CC: one sixty-fourth
+// of a beat per count. Fireloop has always stored whole beats, so the stored value becomes this
+// fixed point and currentBPM divides it back out. It is midiclock's convention rather than the
+// coarse-and-fine a general controller sends, and taking it exactly is what makes one knob mean
+// the same thing in both programs.
+const bpmFixed = 64
+
 // The tempo is the one piece of state the controller does not own: the playback worker
 // samples it from its own goroutine while the event loop is still setting it, so it has to
 // stay readable from both without a lock that would sit on the step path.
 var bpm atomic.Int64
 
 func init() {
-	bpm.Store(defaultBPM)
+	setBPM(defaultBPM)
 }
 
 func currentBPM() int {
-	return int(bpm.Load())
+	return int(math.Round(float64(bpm.Load()) / bpmFixed))
 }
 
+// setBPM takes a whole beat and does not clamp, which is the existing convention rather than an
+// oversight: every caller with a bounded value clamps it before calling.
 func setBPM(value int) {
-	bpm.Store(int64(value))
+	bpm.Store(int64(value) * bpmFixed)
+}
+
+// setBPMHalf writes one half of the 14-bit tempo and leaves the other half standing, because
+// the coarse and fine controllers arrive as two separate messages and nothing promises the
+// coarse one comes first. Every MIDI event is handled on one goroutine in processIncomingEvents,
+// so the read-modify-write needs no compare-and-swap loop; the atomic is there because the
+// playback worker reads currentBPM from another.
+func setBPMHalf(msb bool, value int) {
+	raw := bpm.Load()
+	if msb {
+		raw = raw&0x7f | int64(value)<<7
+	} else {
+		raw = raw&^0x7f | int64(value)
+	}
+	bpm.Store(clampBPMRaw(raw))
+}
+
+// clampBPMRaw keeps a raw 14-bit tempo above the slowest beat the sequencer will play.
+//
+// Only a floor is needed, because the fourteen-bit format is its own ceiling: the largest raw
+// two seven-bit halves can carry is 16383 counts, which is 255.98 BPM, and stateTempoMax is 299.
+// A bound that cannot fire is a bound nothing tests, so the format's ceiling is stated here
+// instead of written as a branch.
+//
+// Clamping the raw rather than rounding it to a beat and clamping that is what keeps currentBPM
+// in range by construction, whatever the halves happened to hold. A floor clamp also rewrites
+// the other half's bits — a raw of 0x0010 comes back as 0x0540, so the MSB is suddenly 10 —
+// which is safe because the floor is itself a legal tempo and the coarse message that follows
+// overwrites those bits. It is why the clamp lives here rather than inside setBPM, which takes
+// a whole beat and has no half-formed value to repair.
+func clampBPMRaw(raw int64) int64 {
+	if low := int64(stateTempoMin * bpmFixed); raw < low {
+		return low
+	}
+	return raw
 }
 
 func (c *Controller) exitPatternEditModes() error {
 	if c.patbank.noteEditActive() {
 		if err := c.patbank.setNoteEdit(false); err != nil {
+			return err
+		}
+	}
+	// Swing entry is left before length entry because both own the readout row, and a mode
+	// switch that dropped only one of them would leave the other's number on the display.
+	if c.patbank.swingEditActive() {
+		if err := c.patbank.setSwingEntry(false); err != nil {
 			return err
 		}
 	}
@@ -64,6 +116,7 @@ func (c *Controller) restoreIndicators() error {
 		NoteRecord:      LEDOff,
 		NoteMode:        LEDOff,
 		NoteOverview:    LEDOff,
+		NoteSnap:        LEDOff,
 		NotePatternSong: LEDOff,
 		CCMuteLED1:      LEDOff,
 		CCMuteLED2:      LEDOff,
@@ -89,6 +142,9 @@ func (c *Controller) restoreIndicators() error {
 	}
 	if c.patbank.lengthEditActive() {
 		lights[NoteOverview] = LEDRed
+	}
+	if c.patbank.swingEditActive() {
+		lights[NoteSnap] = LEDRed
 	}
 	if c.patbank.selTrackRow >= 1 && c.patbank.selTrackRow <= padRows {
 		lights[CCMuteLED1+c.patbank.selTrackRow-1] = LEDGreen
@@ -121,9 +177,10 @@ func (c *Controller) wakeBlackout() error {
 // minute. It is a variable so a test can exercise the reset path in milliseconds.
 var tapTempoWindow = time.Minute / 20
 
-// tempoDisplayRow is where an in-progress tempo entry is shown. It shares the bottom row
-// with the length and chromatic status, which are transient readouts too.
-const tempoDisplayRow = lengthDisplayRow
+// tempoEntryColumn indents the tempo entry so it reads as a number being typed rather than as
+// another readout; a swing entry is not transient, so it takes column zero like the other
+// modes' own readouts. Both are written to readoutRow.
+const tempoEntryColumn = 4
 
 func (c *Controller) tapTempo() error {
 	// TODO: have this use the pads instead
@@ -146,7 +203,11 @@ func (c *Controller) tapTempo() error {
 		dur += c.tapTimes[i].Sub(c.tapTimes[i-1])
 	}
 	dur /= time.Duration(len(c.tapTimes) - 1)
-	tempo := int(60.0 / dur.Seconds())
+	// Two taps a few milliseconds apart put a tempo far above anything the sequencer will
+	// play, and the store takes whatever it is given, so the bound belongs here. The
+	// readout shows the clamped value rather than the raw one, so the display never claims
+	// a tempo nothing is playing.
+	tempo := clampIndex(int(60.0/dur.Seconds()), stateTempoMin, stateTempoMax)
 	setBPM(tempo)
 	s := fmt.Sprintf("Tempo: %03d", tempo)
 	return c.patbank.printText(4, 3, s, false)
@@ -182,15 +243,21 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 	status := ev.Data[0]
 	velocity := int(ev.Data[2])
 	logIncoming(int(ev.Data[1]), int(status), velocity)
-	x, y, onGrid := Note2Grid(int(ev.Data[1]))
-	if onGrid {
-		if isPadRelease(status, velocity) {
-			return nil
+	// The same split the pattern view makes: a controller is not a button, even where their
+	// numbers collide.
+	if midi.IsCC(status) {
+		if err := c.wakeBlackout(); err != nil {
+			return err
 		}
-	} else if !(midi.IsCC(status) || midi.IsNoteOn(status)) {
+		return c.handleControlChange(aseq, ev)
+	}
+	x, y, onGrid := Note2Grid(int(ev.Data[1]))
+	// A release is asked before the note-on test, because a pad is released by a note-off
+	// as well as by a note-on with no velocity.
+	if onGrid && isPadRelease(status, velocity) {
 		return nil
 	}
-	if midi.IsNoteOn(status) && velocity == 0 {
+	if !midi.IsNoteOn(status) || velocity == 0 {
 		return nil
 	}
 	// A release must not end a blackout, so the wake waits for a real press.
@@ -244,6 +311,146 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 		return c.handleStateButton(int(ev.Data[1]))
 	}
 	return nil
+}
+
+// fireControlChannel is the channel the Fire's own controls arrive on. A number from the
+// device and a number for the software travel the same wire, so the channel is the only thing
+// telling them apart, and it is tested before either handler looks at the number.
+//
+// It is counted the way midi.Channel counts, from zero, so this is MIDI channel 1 — which is
+// also the channel a controller sends on by default, and the reason the software's own
+// controls have to be aimed at MIDI channel 2 or above to be heard. Saying which one it is
+// matters because the two numberings are both called "channel" and a user reading one and
+// sending on the other gets silence.
+//
+// This was an assumption until it was checked against a Fire, which does send its knobs on
+// MIDI channel 1 as counted here. It stays written as an assumption no test can settle: the
+// tests that dispatch CCSelect and CCVolume call midi.MakeCC(0) themselves, which authors the
+// answer rather than observing it, and no amount of reading this repository can do better.
+// logIncoming reports the channel a control actually arrived on, which is how it was checked and
+// how it would be checked again.
+const fireControlChannel = 0
+
+// Fireloop's own controls, as opposed to the device's in fire.go. The prefix is the
+// distinction and not a naming habit: CC is what the Fire sends, Cc is what this program
+// accepts, and a constant appearing in the wrong one of the two handlers below is a bug on
+// sight. The numbers are midiclock's, so one controller drives both programs the same way.
+const (
+	// CcBpmMsb and CcBpmLsb are one 14-bit tempo split across two messages, not a coarse
+	// and fine pair: the value is beats per minute in sixty-fourths, so 120 BPM is 7680
+	// counts whose MSB is 60 and LSB is 0. A controller sending a plain 7-bit pair lands
+	// somewhere else entirely, which is the trade for agreeing with midiclock.
+	CcBpmMsb = 16
+	CcBpmLsb = 48
+	// CcSwing is midiclock's number, so a controller set up for it works here unchanged.
+	CcSwing = 17
+	// CcSwingAlt is the number a controller with a real swing knob on it sends. cc/model.go
+	// knows it as Skulpt's swing; the repository also finds it on a PWM sweep, a wah, two
+	// oscillators, a slider, filter Q and vibrato delay, so it is the second choice rather
+	// than the first.
+	CcSwingAlt = 78
+)
+
+// handleControlChange tells a number meant for this program from one meant for the device,
+// before either handler looks at what the number is. Both sets arrive on one wire from one
+// port, so this is the whole of the separation between them.
+func (c *Controller) handleControlChange(aseq sequencerWriter, ev alsa.SeqEvent) error {
+	controller, value := int(ev.Data[1]), int(ev.Data[2])
+	channel := midi.Channel(ev.Data[0])
+	if channel != fireControlChannel {
+		return c.handleSequencerControl(controller, value, channel)
+	}
+	// The Fire's controls mean nothing on the arrangement screen, which is how they behave
+	// today. Routing them through a shared handler must not start joging a track selection
+	// that song mode has no concept of.
+	if c.mode == songView {
+		return nil
+	}
+	return c.handleDeviceControl(aseq, controller, value)
+}
+
+// handleDeviceControl is the CC set the Fire sends. It holds CC-prefixed numbers only, so
+// nothing here can be moved by a controller that was aimed at the software.
+func (c *Controller) handleDeviceControl(aseq sequencerWriter, controller, value int) error {
+	switch controller {
+	case CCSelect:
+		dir, turning := encoderDirection(value)
+		if !turning {
+			return nil
+		}
+		// Swing entry comes before length mode: the two are mutually exclusive, and the
+		// newest mode owning the knob is what a player expects of a mode they just entered.
+		if c.patbank.swingEditActive() {
+			return c.patbank.AdjustSwing(dir)
+		}
+		if c.patbank.lengthEditActive() {
+			return c.patbank.AdjustLength(dir)
+		}
+		if c.patbank.noteEditActive() {
+			// In note-edit mode the knob moves the palette by an octave rather than the
+			// track's voice, so the pitch being chosen stays on screen while it moves.
+			return c.patbank.ShiftPaletteOctave(dir)
+		}
+		return c.patbank.JogSelect(dir)
+	case CCVolume:
+		return c.patbank.AdjustVelocity(aseq, value)
+	}
+	return nil
+}
+
+// handleSequencerControl is the CC set fireloop accepts, off the device's channel. It holds
+// Cc-prefixed numbers only, so the Fire's own knobs cannot reach it however they are moved.
+func (c *Controller) handleSequencerControl(controller, value, channel int) error {
+	switch controller {
+	case CcBpmMsb, CcBpmLsb:
+		setBPMHalf(controller == CcBpmMsb, value)
+		logger.Debug("tempo cc",
+			"msb", controller == CcBpmMsb,
+			"value", value,
+			"channel", channel,
+			"bpm", currentBPM(),
+		)
+		return c.reportControlChange(fmt.Sprintf("Tempo %03d", currentBPM()))
+	case CcSwing, CcSwingAlt:
+		from := currentSwingPct()
+		setSwingPct(ccSwingToSwingPct(value))
+		logger.Debug("swing cc",
+			"controller", controller,
+			"value", value,
+			"channel", channel,
+			"from", from,
+			"to", currentSwingPct(),
+		)
+		return c.reportControlChange(fmt.Sprintf("Swing %s%%", swingLabel(currentSwingPct())))
+	}
+	return nil
+}
+
+// reportControlChange says what a software control just did, on the screen the player is
+// looking at. reportState writes the pattern view's readout row, which is the wrong screen in
+// song mode, so the song bank prints its own row there instead — a knob that moves something
+// invisible is a knob that looks broken.
+//
+// The separator is repainted alongside it because the swing appears in two places at once,
+// and the readout changing while the label did not is exactly the disagreement printSwing
+// exists to prevent.
+func (c *Controller) reportControlChange(text string) error {
+	if c.mode == songView {
+		return c.songbank.PrintTempo()
+	}
+	// Swing entry owns the readout row, so a control that moved the value repaints that mode
+	// the way the encoder does rather than writing a message over a number being typed. The
+	// one rule is that anything moving the value repaints everywhere the value is shown.
+	if c.patbank.swingEditActive() {
+		if err := c.patbank.printSwingEntry(); err != nil {
+			return err
+		}
+		return c.patbank.printSwing()
+	}
+	if err := c.reportState(text); err != nil {
+		return err
+	}
+	return c.patbank.printSwing()
 }
 
 func (c *Controller) handlePatternMute(n int) error {
@@ -332,10 +539,14 @@ func (c *Controller) loadSession() error {
 // chromatic readouts use. Anything already there is a readout too, so a message is
 // replaced by the next redraw rather than left to go stale.
 func (c *Controller) reportState(text string) error {
-	if err := c.patbank.clearTextRows(lengthDisplayRow, 1); err != nil {
-		return err
+	// Swing entry owns the readout row the way length entry does, so a message written over
+	// it would replace a number the player is in the middle of typing with a differently
+	// worded one. The control it reports having changed has already said itself on the
+	// separator.
+	if c.patbank.swingEditActive() {
+		return nil
 	}
-	return c.patbank.printText(lengthDisplayRow, 0, fitOLEDText(text), false)
+	return c.patbank.printReadout(0, fitOLEDText(text))
 }
 
 func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) error {
@@ -346,23 +557,15 @@ func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) erro
 	if c.patbank.noteEditActive() {
 		return c.patbank.handleNoteEditPad(aseq, y, x, vel, c.alt)
 	}
+	// Swing entry's keypad sits in front of the Shift branch, not beside it. Shift is not
+	// part of this gesture — the mode already says which of the two is being entered — so
+	// placed after, Shift plus a pad would build a tempo number that the mode's own release
+	// then applied as a swing.
+	if c.patbank.swingEditActive() {
+		return c.typeNumber(x, y, "swing entry", swingEntryColumn, "Swing: %02d")
+	}
 	if c.shift {
-		c.pending *= 10
-		if c.pending > 999 {
-			c.pending = 0
-		}
-		addend := (3*y + ((x % 4) % 3)) + 1
-		if y == 3 {
-			addend = 0
-		}
-		c.pending += addend
-		logger.Debug("tempo entry", "pending", c.pending, "padX", x, "padY", y)
-		// Only the row the number goes on is cleared. Wiping the whole display here
-		// looked like a blackout: the screen went dark while the pads stayed lit.
-		if err := c.patbank.clearTextRows(tempoDisplayRow, 1); err != nil {
-			return err
-		}
-		return c.patbank.printText(tempoDisplayRow, 4, fmt.Sprintf("Tempo: %03d", c.pending), false)
+		return c.typeNumber(x, y, "tempo entry", tempoEntryColumn, "Tempo: %03d")
 	}
 	if handled, err := c.patbank.handleChromaticStepPress(y, x); handled {
 		return err
@@ -384,19 +587,24 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 	status := ev.Data[0]
 	velocity := int(ev.Data[2])
 	logIncoming(int(ev.Data[1]), int(status), velocity)
+	// A control change is never a pad and never a button, and the second byte alone cannot
+	// say which it is: NoteShift is 48 and so is CcBpmLsb, and CC 78 lands inside the grid
+	// pads' own range. The status byte is the only thing that tells the two apart, so it is
+	// asked before the number is looked at at all.
+	if midi.IsCC(status) {
+		if err := c.wakeBlackout(); err != nil {
+			return err
+		}
+		return c.handleControlChange(aseq, ev)
+	}
 	x, y, onGrid := Note2Grid(int(ev.Data[1]))
-	if onGrid {
-		if isPadRelease(status, velocity) {
-			c.patbank.releasePad(y, x)
-			return nil
-		}
-		if !midi.IsNoteOn(status) {
-			return nil
-		}
-	} else if !(midi.IsCC(status) || midi.IsNoteOn(status)) {
+	// A release is asked before the note-on test, because a pad is released by a note-off
+	// as well as by a note-on with no velocity.
+	if onGrid && isPadRelease(status, velocity) {
+		c.patbank.releasePad(y, x)
 		return nil
 	}
-	if midi.IsNoteOn(status) && velocity == 0 {
+	if !midi.IsNoteOn(status) || velocity == 0 {
 		return nil
 	}
 	// A release must not end a blackout, so the wake waits for a real press.
@@ -416,15 +624,15 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 	switch note {
 	case NotePlay, NoteStop, NoteTap:
 		return c.handleTransport(aseq, note)
-	case NoteShift, NoteAlt, NoteMute1, NoteMute2, NoteMute3, NoteMute4, CCVolume, CCSelect:
-		return c.handleEditing(aseq, ev, note)
-	case NoteOverview, NoteMode, NoteGridLeft, NoteGridRight,
+	case NoteShift, NoteAlt, NoteMute1, NoteMute2, NoteMute3, NoteMute4:
+		return c.handleEditing(note)
+	case NoteOverview, NoteSnap, NoteMode, NoteGridLeft, NoteGridRight,
 		NotePatternUp, NotePatternDown, NoteRecord, NotePatternSong,
 		NoteBrowser, NoteAccent:
 		return c.handleNavigation(aseq, note)
 	}
-	// The unit has more buttons than the program binds. Saying so once is better than a
-	// control that looks handled and is not.
+	// Every button the unit has is bound above, so reaching this means a number nobody
+	// bound arrived. Saying so once is better than a control that looks handled and is not.
 	logger.Debug("unbound control", "note", note)
 	return nil
 }
@@ -460,10 +668,12 @@ func (c *Controller) handleTransport(aseq sequencerWriter, note int) error {
 	}
 }
 
-// handleEditing answers the controls that change notes or hold a modifier: Shift, Alt, the
-// four track rows, and the two encoders.
-func (c *Controller) handleEditing(aseq sequencerWriter, ev alsa.SeqEvent, note int) error {
-	velocity := int(ev.Data[2])
+// handleEditing answers the controls that change notes or hold a modifier: Shift, Alt and
+// the four track rows. The encoders and the volume knob are not here: they arrive as
+// control changes, and handleDeviceControl answers them before this dispatch is reached at
+// all. Listing them again by note number would be a second copy of the same rule, and the
+// copy that has drifted is the one nothing reaches.
+func (c *Controller) handleEditing(note int) error {
 	switch note {
 	case NoteShift:
 		c.shift = !c.shift
@@ -472,8 +682,20 @@ func (c *Controller) handleEditing(aseq sequencerWriter, ev alsa.SeqEvent, note 
 			if err := c.patbank.pads.SetLed(NoteShift, 0); err != nil {
 				return err
 			}
+			// Shift is inert inside swing entry — the mode already says which of the
+			// two is being entered — so it must not touch the digits the pads are typing
+			// there. Treating them as a stale tempo entry threw away a number the player
+			// had only just read off the display.
+			if c.patbank.swingEditActive() {
+				break
+			}
 			if c.pending > 20 && c.pending < 300 {
 				setBPM(c.pending)
+			}
+			// Dropped rather than left standing: a digit run that turned out to be out
+			// of range used to survive the release and be applied by the next Shift
+			// gesture, which answers one entry with another one's number.
+			if c.pending != 0 {
 				c.pending = 0
 				return c.patbank.redraw()
 			}
@@ -496,22 +718,6 @@ func (c *Controller) handleEditing(aseq sequencerWriter, ev alsa.SeqEvent, note 
 		return c.handlePatternMute(3)
 	case NoteMute4:
 		return c.handlePatternMute(4)
-	case CCVolume:
-		return c.patbank.AdjustVelocity(aseq, velocity)
-	case CCSelect:
-		dir, turning := encoderDirection(int(ev.Data[2]))
-		if !turning {
-			return nil
-		}
-		if c.patbank.lengthEditActive() {
-			return c.patbank.AdjustLength(dir)
-		}
-		if c.patbank.noteEditActive() {
-			// In note-edit mode the knob moves the palette by an octave rather than the
-			// track's voice, so the pitch being chosen stays on screen while it moves.
-			return c.patbank.ShiftPaletteOctave(dir)
-		}
-		return c.patbank.JogSelect(dir)
 	}
 	// Shift with nothing typed into it is the one control that has nothing to do, and
 	// saying so is cheaper than making every path through it return.
@@ -531,6 +737,16 @@ func (c *Controller) handleNavigation(aseq sequencerWriter, note int) error {
 			return err
 		}
 		return c.patbank.ToggleLengthMode()
+	// Snap enters swing entry, which unlike length mode leaves the set running: a swing
+	// changes nothing in any pattern, so stopping to move a groove control would make the
+	// control useless on a running groove. With Shift it is the same control's off and on
+	// instead — straight, or the last groove — because reaching for the value while the set
+	// runs should not require entering a mode and leaving it again.
+	case NoteSnap:
+		if c.shift {
+			return c.patbank.ToggleSwingOnOff()
+		}
+		return c.patbank.ToggleSwingEntry()
 	case NoteMode:
 		return c.patbank.ToggleNoteMode()
 	case NoteGridLeft:
