@@ -380,7 +380,7 @@ func (c *fakeClient) openCount() int {
 // tracked is a snapshot of the external ports the package is holding on to. The
 // package reaches them from its own goroutine, so a test has to read them the same
 // guarded way rather than looking at the map itself.
-func tracked(p *Port) map[string]JackPort {
+func tracked(p *Port) map[string]wiring {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return maps.Clone(p.portExternal)

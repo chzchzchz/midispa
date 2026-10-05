@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -113,10 +114,17 @@ type Port struct {
 
 	// mu guards the external port bookkeeping, which the registration callback and the
 	// connect goroutine both reach. The realtime callbacks cannot afford a lock, so
-	// they read nConnected instead.
+	// they read isReady instead.
 	mu           sync.Mutex
-	portExternal map[string]JackPort
-	nConnected   atomic.Int32
+	portExternal map[string]wiring
+	// nWired counts, per one of this package's own ports, the external ports reaching
+	// it. It is per port rather than one total because a stereo port with a single
+	// channel wired is not half a note, it is a note heard hard against one speaker.
+	nWired []int
+	// isReadyFlag publishes whether every one of those counts is above zero. It is a
+	// single word rather than a slice so the realtime callback reads it with one atomic
+	// load and no lock.
+	isReadyFlag atomic.Int32
 
 	// portc hands matches to the goroutine that connects them, so that a connection is
 	// never attempted on the thread JACK calls back into.
@@ -141,6 +149,15 @@ type Port struct {
 type match struct {
 	index int
 	port  JackPort
+}
+
+// wiring is what an external port was connected to: the port itself, and every one of
+// this package's own ports it reached. One external can be reached by both channels at
+// once, and taking it away has to undo exactly those, or a channel would go on counting
+// a connection the server no longer has.
+type wiring struct {
+	port JackPort
+	own  []int
 }
 
 type PortConfig struct {
@@ -332,7 +349,8 @@ func newJackPort(pc PortConfig, fl uint64, names []string) (*Port, error) {
 	j := &Port{
 		PortConfig:   pc,
 		client:       client,
-		portExternal: make(map[string]JackPort),
+		portExternal: make(map[string]wiring),
+		nWired:       make([]int, len(names)),
 		fl:           fl,
 		portc:        make(chan match, connectQueueDepth),
 	}
@@ -476,21 +494,30 @@ func (mw *midiWriter) Write(msg []byte) (int, error) {
 	return len(msg), nil
 }
 
-// isConnected reports whether anything is wired to this port. The realtime callbacks
-// use it to sit out cycles while JACK has nowhere to deliver samples.
-func (j *Port) isConnected() bool {
-	return j.nConnected.Load() > 0
+// isReady reports whether every one of this package's own ports has somewhere to send
+// samples. A stereo port waits rather than running on whichever channel happens to be
+// wired, since a half image is worse than either channel alone and nothing about it
+// looks like a fault from where the player is sitting.
+func (j *Port) isReady() bool {
+	return j.isReadyFlag.Load() > 0
 }
 
-// setConnected publishes the external port count to the realtime callbacks. It runs
-// under the lock so the count cannot be published from a snapshot that a concurrent
-// change has already overtaken.
-func (j *Port) setConnected() {
-	j.nConnected.Store(int32(len(j.portExternal)))
+// publish records whether every one of this package's own ports has somewhere to send
+// samples. It runs under the lock so the answer cannot be worked out from a snapshot a
+// concurrent change has already overtaken.
+func (j *Port) publish() {
+	ready := int32(1)
+	for _, n := range j.nWired {
+		if n == 0 {
+			ready = 0
+			break
+		}
+	}
+	j.isReadyFlag.Store(ready)
 }
 
 func (j *Port) processMidi(nFrames uint32) int {
-	if !j.isConnected() {
+	if !j.isReady() {
 		return 0
 	}
 	j.mw.buf = j.ports[0].MidiClearBuffer(nFrames)
@@ -499,7 +526,7 @@ func (j *Port) processMidi(nFrames uint32) int {
 }
 
 func (j *Port) processAudio(nFrames uint32) int {
-	if !j.isConnected() {
+	if !j.isReady() {
 		return 0
 	}
 	// Both of a stereo port's buffers are taken whether or not anything is wired to
@@ -566,16 +593,20 @@ func (j *Port) portRegistration(id PortID, made bool) {
 // never announced themselves.
 func (j *Port) unregisterExternal() {
 	j.mu.Lock()
-	dropped := 0
-	for name := range j.portExternal {
-		if j.client.PortByName(name) == nil {
-			log.Println("unregistered:", name)
-			delete(j.portExternal, name)
-			dropped++
+	dropped := false
+	for name, w := range j.portExternal {
+		if j.client.PortByName(name) != nil {
+			continue
 		}
+		log.Println("unregistered:", name)
+		for _, own := range w.own {
+			j.nWired[own]--
+		}
+		delete(j.portExternal, name)
+		dropped = true
 	}
-	if dropped > 0 {
-		j.setConnected()
+	if dropped {
+		j.publish()
 	}
 	j.mu.Unlock()
 }
@@ -607,8 +638,14 @@ func (j *Port) connectExternal(index int, ext JackPort) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.portExternal[ext.Name()] = ext
-	j.setConnected()
+	w := j.portExternal[ext.Name()]
+	if !slices.Contains(w.own, index) {
+		w.own = append(w.own, index)
+		j.nWired[index]++
+	}
+	w.port = ext
+	j.portExternal[ext.Name()] = w
+	j.publish()
 	return nil
 }
 

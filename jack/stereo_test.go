@@ -386,19 +386,99 @@ func TestGetBufferOnAStereoPortIsTheLeftChannel(t *testing.T) {
 	assert.Equal(t, leftVal, c.own(0).samples()[0], "GetBuffer writes into the left port")
 }
 
-func TestUnwiredChannelIsSilence(t *testing.T) {
+// TestStereoPortStaysQuietWhenOnlyOneChannelIsWired covers the half-connect. One
+// channel of a stereo port is not half a note, it is a note heard hard against a
+// single speaker, so a port missing either end waits rather than running on the half
+// that happens to be wired.
+func TestStereoPortStaysQuietWhenOnlyOneChannelIsWired(t *testing.T) {
 	c := newFakeClient(testClientName)
 	c.existing = []*fakePort{newFakePort(sinkRight)}
-	newTestStereoPort(t, c, PortConfig{
-		MatchName:      []string{"front-left", "front-right"},
-		StereoCallback: fillStereo,
+	var calls int
+	p := newTestStereoPort(t, c, PortConfig{
+		MatchName: []string{"front-left", "front-right"},
+		StereoCallback: func(left, right []float32) int {
+			calls++
+			return fillStereo(left, right)
+		},
 	})
 	waitWired(t, c, 1)
 
 	c.cycle(t, testFrames)
 
-	// The unwired side is still handed a real buffer and still written, so it carries
-	// this cycle's samples rather than whatever the last one left behind.
+	assert.Zero(t, calls, "callback ran with one channel unwired")
+	assert.False(t, p.isReady(), "a half-wired stereo port is not ready")
+}
+
+// TestStereoPortResumesWhenTheMissingChannelArrives is the other half of that rule: the
+// port starts itself as soon as the second channel has somewhere to go, rather than
+// needing to be reopened.
+func TestStereoPortResumesWhenTheMissingChannelArrives(t *testing.T) {
+	c := newFakeClient(testClientName)
+	c.existing = []*fakePort{newFakePort(sinkRight)}
+	var calls int
+	p := newTestStereoPort(t, c, PortConfig{
+		MatchName: []string{"front-left", "front-right"},
+		StereoCallback: func(left, right []float32) int {
+			calls++
+			return fillStereo(left, right)
+		},
+	})
+	waitWired(t, c, 1)
+	c.cycle(t, testFrames)
+	require.Zero(t, calls, "callback ran with one channel unwired")
+
+	c.add(sinkLeft)
+	waitWired(t, c, 2)
+
+	c.cycle(t, testFrames)
+
+	assert.Equal(t, 1, calls, "callback once both channels are wired")
 	wantSamples(t, c.own(0), leftVal)
 	wantSamples(t, c.own(1), rightVal)
+	assert.True(t, p.isReady(), "a fully wired stereo port is ready")
+}
+
+// TestUnregisteringOneChannelStopsTheStereoCallback covers a channel going away while
+// the other stays. The count that gates the callback has to fall with it, or the port
+// goes on believing it can still play both ends.
+func TestUnregisteringOneChannelStopsTheStereoCallback(t *testing.T) {
+	c := newFakeClient(testClientName)
+	c.add(sinkLeft)
+	right := c.add(sinkRight)
+	var calls int
+	p := newTestStereoPort(t, c, PortConfig{
+		MatchName: []string{"front-left", "front-right"},
+		StereoCallback: func(left, right []float32) int {
+			calls++
+			return 0
+		},
+	})
+	waitWired(t, c, 2)
+
+	c.cycle(t, testFrames)
+	require.Equal(t, 1, calls, "callback runs while both channels are wired")
+
+	c.remove(right)
+	assert.False(t, p.isReady(), "a stereo port with one channel left is not ready")
+
+	c.cycle(t, testFrames)
+	assert.Equal(t, 1, calls, "callback ran again after one channel was unplugged")
+}
+
+// TestMonoPortKeepsPlayingOnOneChannel is the other side of the rule. A mono port has
+// one output, so anything wired to it is everything it needs.
+func TestMonoPortKeepsPlayingOnOneChannel(t *testing.T) {
+	c := newFakeClient(testClientName)
+	c.existing = []*fakePort{newFakePort(playbackPort)}
+	var calls int
+	p := newTestPort(t, c, PortConfig{
+		MatchName:     []string{playbackMatch},
+		AudioCallback: func([]float32) int { calls++; return 0 },
+	})
+	waitWired(t, c, 1)
+
+	c.cycle(t, testFrames)
+
+	assert.Equal(t, 1, calls, "callback ran")
+	assert.True(t, p.isReady())
 }
