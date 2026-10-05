@@ -17,13 +17,60 @@ package alsa
 
 uint8_t* snd_seq_ev_ext_data(const snd_seq_ev_ext_t* ext) { return ext->ptr; }
 void snd_seq_ev_ext_data_set(snd_seq_ev_ext_t* ext, uint8_t* v) { ext->ptr = v; }
+
+// cgo cannot call a C macro, and the queue's entry points are macros. The wrappers below
+// keep the flag arithmetic and the flush ordering in the header that owns them, so an
+// upstream change arrives as a change to one line here rather than as a copy of a macro
+// that quietly drifts from the original.
+
+// The queue status struct is large and its allocation helpers are macros, so reading it is
+// one wrapper rather than a hand-rolled block of cgo. Pending comes back in the same struct
+// as the return code so that a caller crossing into cgo once does not pay for a pointer to a
+// four-byte out-parameter on every submission.
+typedef struct seq_queue_state {
+	int rc;
+	int pending;
+} seq_queue_state_t;
+
+seq_queue_state_t seq_queue_pending(snd_seq_t* seq, int q) {
+	seq_queue_state_t state;
+	snd_seq_queue_status_t* status;
+	snd_seq_queue_status_alloca(&status);
+	state.rc = snd_seq_get_queue_status(seq, q, status);
+	state.pending = state.rc < 0 ? 0 : snd_seq_queue_status_get_events(status);
+	return state;
+}
+
+// Stamp, submit and flush, in one crossing. Each cgo call costs more than the drain it
+// would be hiding, and there is a correctness reason to keep them adjacent: a submission
+// the kernel refused must not be followed by a flush, because the flush blocks until the
+// queue takes what is already buffered and a full queue never will.
+int seq_submit_stamped(snd_seq_t* seq, snd_seq_event_t* ev, unsigned char queue,
+                       unsigned int sec, unsigned int nsec) {
+	snd_seq_real_time_t rtime = { sec, nsec };
+	snd_seq_ev_schedule_real(ev, queue, 1, &rtime);
+	int rc = snd_seq_event_output(seq, ev);
+	if (rc < 0)
+		return rc;
+	return snd_seq_drain_output(seq);
+}
+
+// Start or stop a queue, and flush it, for the same reason as seq_submit_stamped: the
+// control event lands in the same buffer a scheduled one does, and a start that has not
+// been flushed is a queue that is stopped.
+int seq_control_queue(snd_seq_t* seq, int q, int type) {
+	int rc = snd_seq_control_queue(seq, q, type, 0, NULL);
+	if (rc < 0)
+		return rc;
+	return snd_seq_drain_output(seq);
+}
 */
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"github.com/chzchzchz/midispa/midi"
@@ -114,7 +161,7 @@ func OpenSeq(clientName string) (a *Seq, err error) {
 
 func (a *Seq) createPortAddrCaps(name string, caps PortCaps) (SeqAddr, error) {
 	if a.seq == nil {
-		return SeqAddr{}, errors.New("sequencer is closed")
+		return SeqAddr{}, ErrSeqClosed
 	}
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
@@ -228,18 +275,108 @@ func (a *Seq) outputDirect(event *outputEvent) error {
 	return snderr2error(C.snd_seq_event_output_direct(a.seq, event))
 }
 
+// Everything below is SeqQueue's contact with libasound. It lives here rather than in
+// queue.go so that this file keeps the promise its own comment makes: every call into C
+// is here, and the file beside it holds the policy those calls serve.
+
+// isOpen reports whether the client is still usable. SeqQueue holds its Seq rather than
+// the handle, so it cannot ask about a nil pointer of a type it does not name.
+func (a *Seq) isOpen() bool { return a.seq != nil }
+
+// allocNamedQueue creates a queue attached to the client. The name is what the queue is
+// called in aconnect and aplay, so Reset allocates through here rather than through the
+// unnamed form and keeps the queue recognisable after it is reallocated.
+func (a *Seq) allocNamedQueue(name string) (int, error) {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	queue := C.snd_seq_alloc_named_queue(a.seq, cname)
+	if queue < 0 {
+		return 0, snderr2error(queue)
+	}
+	return int(queue), nil
+}
+
+// freeQueue releases a queue this client owns. ALSA hands the identifier to the next
+// allocation, which is why a caller that stops a queue has already flushed the stop by
+// the time it gets here.
+func (a *Seq) freeQueue(queue int) error {
+	return snderr2error(C.snd_seq_free_queue(a.seq, C.int(queue)))
+}
+
+// startQueue and stopQueue are the two things snd_seq_control_queue does, named so that a
+// call site says which it means. The flush is inside them rather than left to the caller
+// because snd_seq_control_queue writes a control event into the client's output buffer,
+// exactly as snd_seq_event_output does. Without the flush the queue does not start, the
+// call still reports success, and every event scheduled afterwards is accepted by the
+// kernel and never delivered. Nothing about that failure is visible from Go, which is why
+// it cannot be left as a rule the caller has to remember.
+func (a *Seq) startQueue(queue int) error {
+	return a.controlQueue(queue, C.int(C.SND_SEQ_EVENT_START))
+}
+
+func (a *Seq) stopQueue(queue int) error {
+	return a.controlQueue(queue, C.int(C.SND_SEQ_EVENT_STOP))
+}
+
+func (a *Seq) controlQueue(queue int, control C.int) error {
+	return snderr2error(C.seq_control_queue(a.seq, C.int(queue), control))
+}
+
+// queuePending reports how many events the queue is holding, which is what the ceiling in
+// queue.go is measured against. It is the most expensive thing a submission does and the
+// submission itself is the second: both are one call into the kernel, and this one only
+// asks a question. Measured on an FX-8350, roughly 600ns against the submission's 600ns
+// and the encoder's 80ns, which is why nothing else in the path is worth trimming for a
+// caller that sends tens of notes a second.
+func (a *Seq) queuePending(queue int) (int, error) {
+	state := C.seq_queue_pending(a.seq, C.int(queue))
+	if state.rc < 0 {
+		return 0, snderr2error(state.rc)
+	}
+	return int(state.pending), nil
+}
+
+// outputStamped submits an event for delivery after delay and then flushes it.
+//
+// The event is not routed through Seq.output: that field exists so a test can observe
+// what the encoder produced, and it is bound to the immediate path, so an event reaching
+// it would go out at once with its timestamp ignored.
+//
+// The delay is split here rather than converted by cgo because snd_seq_real_time_t holds
+// unsigned fields, and the caller has already refused a negative one: an unchecked
+// conversion would turn that refusal into a stamp decades away rather than into an error.
+func (a *Seq) outputStamped(event *outputEvent, queue int, delay time.Duration) error {
+	return snderr2error(C.seq_submit_stamped(a.seq, event, C.uchar(queue),
+		C.uint(delay/time.Second), C.uint(delay%time.Second)))
+}
+
+// encodeForPort is what WritePort and SeqQueue share: it refuses an event or a port the
+// sequencer will not take, and hands back the encoded event for that port. A nil event
+// with no error is an event carrying no bytes, which both callers read as nothing to send
+// rather than as a failure.
+//
+// It lives beside the encoder rather than in seq.go because the thing it returns is the
+// libasound struct, and queue.go is not a file that may name one.
+func (a *Seq) encodeForPort(ev SeqEvent, port int) (*outputEvent, error) {
+	if err := ev.SeqAddr.validate(); err != nil {
+		return nil, err
+	}
+	if err := a.localPort(SeqAddr{a.Client, port}); err != nil {
+		return nil, err
+	}
+	event, err := encodeEvent(ev, SeqAddr{a.Client, port})
+	if err != nil || len(ev.Data) == 0 {
+		return nil, err
+	}
+	return event, nil
+}
+
 // WritePort validates and owns the output event. It lives beside the encoder because
 // KeepAlive below is a cgo lifetime concern: encodeEvent stores a pointer into the Go
 // byte slice in the event, and the slice has to outlive the call into libasound.
 func (a *Seq) WritePort(ev SeqEvent, port int) error {
-	if err := ev.SeqAddr.validate(); err != nil {
-		return err
-	}
-	if err := a.localPort(SeqAddr{a.Client, port}); err != nil {
-		return err
-	}
-	event, err := encodeEvent(ev, SeqAddr{a.Client, port})
-	if err != nil || len(ev.Data) == 0 {
+	event, err := a.encodeForPort(ev, port)
+	if err != nil || event == nil {
 		return err
 	}
 	err = a.output(event)

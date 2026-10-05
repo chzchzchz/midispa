@@ -59,7 +59,7 @@ Integration tests also create source-only, destination-only, duplex, unsubscriba
 
 # Test seams
 
-Commands do their MIDI I/O through the sequencer, and it is the only part of that plumbing that needs hardware. A consumer holding one of four narrow views instead of `*Seq` can therefore be driven with no `/dev/snd/seq` at all:
+Commands do their MIDI I/O through the sequencer, and it is the only part of that plumbing that needs hardware. A consumer holding one of five narrow views instead of `*Seq` can therefore be driven with no `/dev/snd/seq` at all:
 
 | Interface | Method | Reached by |
 | --- | --- | --- |
@@ -67,14 +67,15 @@ Commands do their MIDI I/O through the sequencer, and it is the only part of tha
 | `EventWriter` | `Write(SeqEvent) error` | A write on the default port |
 | `PortWriter` | `WritePort(SeqEvent, int) error` | A write from a chosen local port |
 | `Closer` | `Close() error` | Shutdown |
+| `Scheduler` | `Start`, `ScheduleIn`, `SchedulePort`, `Reset`, `Close` | A queue that delivers later |
 
-Take the narrowest one that fits: a wider one would force every stand-in to implement methods its caller never reaches. Where something reads and writes, a field per direction says which is which, and reaching for the wrong one does not compile. Where one thing genuinely needs both — notes out of the default port and transport out of a second — a named type carrying the two methods says so once and reads better than two parameters passed side by side; write those methods out rather than embedding the two, so the calls it makes stay visible where it is declared. `*Seq` satisfies all four, and `interfaces.go` asserts that at build time, so a signature that stops matching is a compile error rather than something a test has to notice.
+Take the narrowest one that fits: a wider one would force every stand-in to implement methods its caller never reaches. Where something reads and writes, a field per direction says which is which, and reaching for the wrong one does not compile. Where one thing genuinely needs both — notes out of the default port and transport out of a second — a named type carrying the two methods says so once and reads better than two parameters passed side by side; write those methods out rather than embedding the two, so the calls it makes stay visible where it is declared. `Scheduler` is the exception to the one-method rule, because its lifecycle is not a second job: a stand-in that could accept a scheduled event and had no way to be started would be recording something the real queue could never do. `*Seq` satisfies the first four and `*SeqQueue` the fifth, and `interfaces.go` asserts both at build time, so a signature that stops matching is a compile error rather than something a test has to notice.
 
-`alsa/fake` is the stand-in, in its own package so that a consumer's test can import it while no production binary links it. `fake.Seq` records writes with the port each went out on, hands back queued events, and injects a read, write or close failure.
+`alsa/fake` is the stand-in, in its own package so that a consumer's test can import it while no production binary links it. `fake.Seq` records writes with the port each went out on, hands back queued events, and injects a read, write or close failure. `fake.Queue` is the same idea for scheduled output: it records each submission with the delay and the port it was given, and refuses what the real queue refuses — a delay in the past, a queue that is not running, and a released queue — so a consumer's branch for each is reachable with no hardware. A full queue is the exception: the real ceiling is a number `alsa` chose rather than one it can report, so `fake.Queue` takes it as a field and counts nothing until a test sets it.
 
-Three things about it are worth knowing before relying on it. `Read` does not block the way the real one does: it returns `fake.ErrNoEvents` once the queue is empty, so a read loop driven by a stand-in has to treat an error as "nothing right now" rather than "broken". And it has no lock, for the same reason `Seq` has none: the contract to serialize lifecycle changes against other operations still holds, so a test that races has a sequencing bug and the fix belongs in the test. It also accepts writes on any port and validates nothing, since port ownership and message validation are `Seq`'s own policy and are covered by this package's tests.
+Three things about it are worth knowing before relying on it. `Read` does not block the way the real one does: it returns `fake.ErrNoEvents` once the queue is empty, so a read loop driven by a stand-in has to treat an error as "nothing right now" rather than "broken". And it has no lock, for the same reason `Seq` has none: the contract to serialize lifecycle changes against other operations still holds, so a test that races has a sequencing bug and the fix belongs in the test. It also accepts writes on any port and validates nothing, since port ownership and message validation are `Seq`'s own policy and are covered by this package's tests. The same applies to `fake.Queue` and the queue's event ceiling, which is a policy about how much lookahead this package will hold rather than something a test can be shown.
 
-This makes the package testable without hardware, not without cgo. Every `C.` call lives in `seq_cgo.go` and the policy it serves in `seq.go`, but cgo is a property of the package rather than of a file and `Seq` holds an `*snd_seq_t` either way.
+This makes the package testable without hardware, not without cgo. Every `C.` call lives in `seq_cgo.go` and the policy it serves in `seq.go` and `queue.go`, but cgo is a property of the package rather than of a file and `Seq` holds an `*snd_seq_t` either way.
 
 ## Verification
 

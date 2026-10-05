@@ -265,6 +265,7 @@ func TestDirectionChecksAndRollback(t *testing.T) {
 		t.Error("first failure created output subscription")
 	}
 }
+
 const (
 	alsaSongPosition       = 20
 	alsaSongSelect         = 21
@@ -373,7 +374,9 @@ func openTestSeq(t *testing.T, suffix ...string) *Seq {
 	return seq
 }
 
-func seqOK(t *testing.T, err error) {
+// seqOK takes testing.TB so that the benchmarks use it as well as the tests: a benchmark
+// that fails a setup step has the same problem as a test that does.
+func seqOK(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
@@ -392,20 +395,35 @@ func createTestPort(t *testing.T, seq *Seq, name string) SeqAddr {
 	return addr
 }
 
+// readReady hands back one event if the client has one waiting, and reports whether it
+// did. Every test that waits has to read this way rather than through Read, which blocks
+// inside libasound and would hang the goroutine instead of failing it, so the check and
+// the read live together here. What a caller does with an event it was not looking for is
+// what differs between them.
+func readReady(seq *Seq) (SeqEvent, bool, error) {
+	if !seq.MayRead() {
+		return SeqEvent{}, false, nil
+	}
+	event, err := seq.Read()
+	if err != nil {
+		return SeqEvent{}, false, err
+	}
+	return event, true, nil
+}
+
 func readTestEvent(t *testing.T, seq *Seq, data []byte) SeqEvent {
 	t.Helper()
 	deadline := time.Now().Add(seqTestTimeout)
 	for time.Now().Before(deadline) {
-		if !seq.MayRead() {
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		event, err := seq.Read()
+		event, ready, err := readReady(seq)
 		seqOK(t, err)
-		if slices.Equal(event.Data, data) {
-			return event
+		if ready {
+			if slices.Equal(event.Data, data) {
+				return event
+			}
+			t.Fatalf("unexpected event %v, want data %v", event, data)
 		}
-		t.Fatalf("unexpected event %v, want data %v", event, data)
+		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %v", data)
 	return SeqEvent{}

@@ -15,6 +15,8 @@ package fake
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
 )
@@ -176,6 +178,174 @@ func (s *Seq) Close() error {
 	return s.CloseErr
 }
 
+// Scheduled records one event a caller asked to have delivered later.
+type Scheduled struct {
+	// Port is the local port the event was submitted from: the default for ScheduleIn,
+	// and whatever was named for SchedulePort.
+	Port int
+	// Delay is how long after the call the caller asked for the event to sound. Nothing
+	// here waits that long. What is recorded is the request, which is what a test of
+	// timing logic can assert on without a clock underneath it.
+	Delay time.Duration
+	// Event is the event as it was submitted, destination included.
+	Event alsa.SeqEvent
+}
+
+// Queue stands in for *alsa.SeqQueue and satisfies alsa.Scheduler.
+//
+// It mirrors the guards a consumer's own error handling depends on, and nothing
+// more. Scheduling into a queue that is not running is refused with alsa.ErrQueueStopped,
+// a negative delay with alsa.ErrScheduleInPast, a released queue with ErrClosed, and a
+// full one with alsa.ErrQueueFull once Ceiling is set, because a consumer holding a branch
+// for any of those has to be able to reach it with no hardware. Messages, addresses and the
+// real queue's ceiling are not mirrored, for the same reason WritePort does not validate
+// them here: that is the real package's policy, it is covered by that package's tests, and
+// repeating it would only prove that this file agrees with itself.
+//
+// Like Seq it has no lock, and for the same reason. It also copies the event data, and
+// for the same reason: the real queue hands the bytes to the sequencer and keeps nothing,
+// so a caller reusing one buffer must not be able to change the recording afterwards.
+type Queue struct {
+	// SeqAddr mirrors the address on the sequencer that owns the queue, so a consumer
+	// that reads SeqAddr.Port to decide where to submit sees the same thing here.
+	alsa.SeqAddr
+
+	// StartErr, ScheduleErr, ResetErr and CloseErr are the failures a test asks for.
+	// They are fields rather than constructor arguments on the same terms as Seq's: a
+	// test usually sets one halfway through, after it has seen the working case.
+	StartErr    error
+	ScheduleErr error
+	ResetErr    error
+	CloseErr    error
+
+	// Ceiling is how many submissions this queue accepts before refusing with
+	// alsa.ErrQueueFull, and zero for no limit. It is opt-in rather than mirroring the
+	// real queue's because the real number is a policy of that package and a guess about
+	// one kernel, so a stand-in that invented it would be testing itself. A test that
+	// cares about a full queue sets it to a small number and gets there in three lines.
+	Ceiling int
+
+	scheduled []Scheduled
+	starts    int
+	resets    int
+	closes    int
+	running   bool
+	closed    bool
+}
+
+// NewQueue returns a stopped queue whose default port is port 0. It comes up stopped
+// because the real one does: allocating a queue does not start it, and a stand-in that
+// started itself would let a consumer's missing Start go untested.
+func NewQueue() *Queue { return &Queue{SeqAddr: alsa.SeqAddr{Port: 0}} }
+
+// Start makes the queue accept events. Repeating it changes nothing, as it does on the
+// real queue.
+func (q *Queue) Start() error {
+	if q.closed {
+		return ErrClosed
+	}
+	if q.StartErr != nil {
+		return q.StartErr
+	}
+	if q.running {
+		return nil
+	}
+	q.running = true
+	q.starts++
+	return nil
+}
+
+// ScheduleIn submits ev from the default port, as *alsa.SeqQueue does.
+func (q *Queue) ScheduleIn(d time.Duration, ev alsa.SeqEvent) error {
+	return q.schedule(d, ev, q.Port)
+}
+
+// SchedulePort submits ev from an explicitly chosen local port.
+func (q *Queue) SchedulePort(d time.Duration, ev alsa.SeqEvent, port int) error {
+	return q.schedule(d, ev, port)
+}
+
+// Reset stops the queue and discards what was on it, which is what the real one does
+// when it frees a queue. The recording goes with the events rather than outliving them,
+// so a test that wants to know what was pending reads Scheduled before it resets.
+func (q *Queue) Reset() error {
+	if q.closed {
+		return ErrClosed
+	}
+	if q.ResetErr != nil {
+		return q.ResetErr
+	}
+	q.resets++
+	q.running = false
+	q.scheduled = nil
+	return nil
+}
+
+// Close releases the queue. It is safe to repeat, as *alsa.SeqQueue.Close is, and
+// invalidates the default port so that a later submission fails loudly.
+func (q *Queue) Close() error {
+	q.closes++
+	if q.closed {
+		return nil
+	}
+	q.closed = true
+	q.running = false
+	q.Port = -1
+	return q.CloseErr
+}
+
+// Running reports whether the queue is started, which is the question a consumer asks
+// when it wants to know whether a refusal was a bug in its own sequencing.
+func (q *Queue) Running() bool { return q.running }
+
+// Scheduled returns what has been submitted and not yet discarded, oldest first. It
+// copies, so a test cannot reach into the recording and change what a later assertion
+// sees.
+func (q *Queue) Scheduled() []Scheduled { return append([]Scheduled(nil), q.scheduled...) }
+
+// Starts returns how many times Start actually began a queue, so a test can tell a
+// repeat that was refused from one that was taken.
+func (q *Queue) Starts() int { return q.starts }
+
+// Resets returns how many times Reset ran.
+func (q *Queue) Resets() int { return q.resets }
+
+// Closes returns how many times Close was called.
+func (q *Queue) Closes() int { return q.closes }
+
+func (q *Queue) schedule(d time.Duration, ev alsa.SeqEvent, port int) error {
+	if q.closed {
+		return ErrClosed
+	}
+	if d < 0 {
+		return alsa.ErrScheduleInPast
+	}
+	if !q.running {
+		return alsa.ErrQueueStopped
+	}
+	if q.ScheduleErr != nil {
+		return q.ScheduleErr
+	}
+	// The ceiling is checked before the empty event, in the same order as the real queue:
+	// a stand-in that refused in a different order would let a consumer's ordering
+	// assumptions go untested, which is the one thing it is here to prevent.
+	if q.Ceiling > 0 && len(q.scheduled) >= q.Ceiling {
+		return fmt.Errorf("%w: %d of %d submissions", alsa.ErrQueueFull, len(q.scheduled), q.Ceiling)
+	}
+	// An event with no bytes is not recorded, because the real queue does not send one:
+	// a stand-in that invented a submission would let a consumer's conditional send go
+	// untested.
+	if len(ev.Data) == 0 {
+		return nil
+	}
+	q.scheduled = append(q.scheduled, Scheduled{
+		Port:  port,
+		Delay: d,
+		Event: alsa.SeqEvent{SeqAddr: ev.SeqAddr, Data: bytes.Clone(ev.Data)},
+	})
+	return nil
+}
+
 // The stand-in is only worth having where the real sequencer would go, which is the
 // whole reason for the narrow interfaces in alsa.
 var (
@@ -183,4 +353,5 @@ var (
 	_ alsa.EventWriter = (*Seq)(nil)
 	_ alsa.PortWriter  = (*Seq)(nil)
 	_ alsa.Closer      = (*Seq)(nil)
+	_ alsa.Scheduler   = (*Queue)(nil)
 )

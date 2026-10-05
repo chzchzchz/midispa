@@ -106,7 +106,7 @@ func (a *Seq) localPort(addr SeqAddr) error {
 		return err
 	}
 	if a.ports == nil {
-		return errors.New("sequencer is closed")
+		return ErrSeqClosed
 	}
 	if _, ok := a.ports[addr.Port]; !ok || addr.Client != a.Client {
 		return fmt.Errorf("port %v is not owned by this sequencer", addr)
