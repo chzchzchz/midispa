@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/alsa/fake"
 	"github.com/chzchzchz/midispa/midi"
 	"github.com/stretchr/testify/require"
 )
@@ -218,6 +219,125 @@ func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 	require.Zero(t, playback.activeNoteCount(), "stop left an active chromatic note")
 	require.Len(t, writer.events, 2, "stop writes a note-on and a note-off")
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOff(0), 72, 0})
+}
+
+// Two devices that happen to share a channel number are two places a note can be left, so
+// the sweep has to name the port as well as the channel. The other case is the reverse: one
+// device with four voices on one channel is one place, and silencing it four times would be
+// four messages where one does the same work.
+func TestSilenceTargetsAreDistinctPlaces(t *testing.T) {
+	kick := 36
+	shared := alsa.SeqAddr{Client: 10, Port: 20}
+	voiceBank := NewVoiceBank([]Device{
+		{
+			Name: "drums", MidiPort: "a", Channel: 1, SeqAddr: shared,
+			Voices: []Voice{{Name: "one", Note: &kick}, {Name: "two", Note: &kick}},
+		},
+		{
+			// The same channel on a different port, which is a kit author deliberately
+			// layering two devices rather than a mistake.
+			Name: "layer", MidiPort: "b", Channel: 1, SeqAddr: alsa.SeqAddr{Client: 10, Port: 21},
+			Voices: []Voice{{Name: "three", Note: &kick}},
+		},
+		{Name: "lead", MidiPort: "c", Channel: 3, SeqAddr: alsa.SeqAddr{Client: 10, Port: 22},
+			Voices: []Voice{{Name: "four"}, {Name: "five", Channel: 4}}},
+	})
+	playback := &Playback{vb: voiceBank}
+
+	targets := playback.silenceTargets()
+
+	require.ElementsMatch(t, []silenceTarget{
+		{channel: 1, destination: shared},
+		{channel: 1, destination: alsa.SeqAddr{Client: 10, Port: 21}},
+		{channel: 3, destination: alsa.SeqAddr{Client: 10, Port: 22}},
+		{channel: 4, destination: alsa.SeqAddr{Client: 10, Port: 22}},
+	}, targets, "one message per place a note can be left, not one per voice")
+}
+
+// The set ending is the one moment everything has to be silent, and the release built from
+// the sequencer's own record cannot get there alone: only chromatic notes are recorded, so a
+// drum and anything written outside the worker outlive it. The sweep goes to every channel
+// the kit plays on, because a note the sequencer never tracked has no other address.
+//
+// The messages are pinned as exactly one All Notes Off per channel. Sending All Sound Off
+// beside it is deliberately not wanted, and asserting the count rather than searching the
+// capture is what makes an extra one a failure rather than a silent addition.
+func TestSilenceAllReachesEveryKitChannel(t *testing.T) {
+	writer := &captureMidiWriter{}
+	voiceBank := NewVoiceBank([]Device{
+		{Name: "drums", MidiPort: "a", Channel: 10, SeqAddr: alsa.SeqAddr{Client: 10, Port: 20},
+			Voices: []Voice{{Name: "kick", Note: testNote(36)}}},
+		{Name: "lead", MidiPort: "b", Channel: 1, SeqAddr: alsa.SeqAddr{Client: 11, Port: 20},
+			Voices: []Voice{{Name: "one"}, {Name: "two", Channel: 2}}},
+	})
+	playback := &Playback{vb: voiceBank}
+
+	require.NoError(t, playback.silenceAll(writer))
+
+	silence := func(protocolChannel, controller int) []byte {
+		return []byte{midi.MakeCC(protocolChannel), byte(controller), 0}
+	}
+	require.Len(t, writer.events, 3, "one all-notes-off per channel the kit plays on")
+	assertMidiData(t, writer.events[0], silence(9, midi.AllNotesOff))
+	assertMidiData(t, writer.events[1], silence(0, midi.AllNotesOff))
+	assertMidiData(t, writer.events[2], silence(1, midi.AllNotesOff))
+	require.Equal(t, alsa.SeqAddr{Client: 10, Port: 20}, writer.events[0].SeqAddr)
+	require.Equal(t, alsa.SeqAddr{Client: 11, Port: 20}, writer.events[1].SeqAddr)
+	require.Equal(t, alsa.SeqAddr{Client: 11, Port: 20}, writer.events[2].SeqAddr)
+}
+
+// A client that never opened has nothing to sweep, and a playback built without a kit has
+// no channels to sweep. Both ways of being absent have to be silent rather than a write to
+// a sequencer that is not there, which is the same rule every other write path follows.
+func TestSilenceAllIgnoresAnAbsentSequencer(t *testing.T) {
+	var unopened *alsa.Seq
+	playback := &Playback{vb: NewVoiceBank([]Device{{Channel: 1, Voices: []Voice{{Name: "lead"}}}})}
+
+	require.NoError(t, playback.silenceAll(unopened))
+	require.NoError(t, playback.silenceAll(nil))
+	writer := &captureMidiWriter{}
+	require.NoError(t, (&Playback{}).silenceAll(writer))
+	require.Empty(t, writer.events, "a playback with no kit has no channel to silence")
+}
+
+// The guarantee as a player meets it: a set is playing, the process is asked to stop the way
+// ctrl+c does, and nothing is left sounding. The drum is the interesting one, because the
+// sequencer never records a percussive note, so the note-off below can only be arriving from
+// the sweep.
+func TestLeavingSilencesEverythingTheSetWasPlaying(t *testing.T) {
+	kick, crash := 36, 49
+	voiceBank := NewVoiceBank([]Device{
+		{Name: "drums", MidiPort: "a", Channel: 10, SeqAddr: alsa.SeqAddr{Client: 10, Port: 20},
+			Voices: []Voice{{Name: "kick", Note: &kick}, {Name: "crash", Note: &crash}}},
+		{Name: "lead", MidiPort: "b", Channel: 1, SeqAddr: alsa.SeqAddr{Client: 11, Port: 20},
+			Voices: []Voice{{Name: "lead"}}},
+	})
+	controller := useController(t, NewFire(func([]byte) error { return nil }), voiceBank)
+	bank := controller.patbank
+	pattern := bank.CurrentPattern()
+	// The drums are spread across the window so both tracks carry a hit.
+	require.NoError(t, bank.SelectTrackRow(1))
+	pattern.ToggleEvent(Event{Voice: voiceBank.voices[0], Beat: stepBeat(0), Velocity: 100})
+	require.NoError(t, bank.SelectTrackRow(2))
+	pattern.ToggleEvent(Event{Voice: voiceBank.voices[1], Beat: stepBeat(0), Velocity: 100})
+	require.NoError(t, bank.SelectTrackRow(3))
+	pattern.SetChromaticNote(0, voiceBank.voices[2], 60, 100)
+
+	instrument := newSoundingInstrument()
+	controller.startPlayback(instrument, bank.newPlayback())
+	t.Cleanup(func() { _ = controller.stopPlayback() })
+	// Wait for the first step to land on every track, so the test stops a set that is
+	// genuinely sounding rather than one that has not begun.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(instrument.stillSounding()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	require.Len(t, instrument.stillSounding(), 3, "the set should have three notes sounding")
+
+	require.NoError(t, shutdown(controller, fake.New()))
+
+	require.Emptyf(t, instrument.stillSounding(),
+		"leaving left notes sounding; a note-off was only ever written for the chromatic one")
 }
 
 // Where the playhead lands next decides what the set sounds like, and the two rules that

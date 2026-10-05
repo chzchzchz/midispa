@@ -11,7 +11,7 @@ go build -o /tmp/fireloop ./cmd/fireloop
 /tmp/fireloop -kit cmd/fireloop/kits/gm_drums.json -port 'FL STUDIO FIRE Jack 1'
 ```
 
-`Ctrl-C` releases any note still sounding and blanks the unit before leaving, so the instrument is not left holding a note or showing the last frame.
+`Ctrl-C` releases any note still sounding and blanks the unit before leaving, so the instrument is not left holding a note or showing the last frame. A set that ends sends All Notes Off on every channel the kit plays on, which is what catches the notes fireloop never tracked: drums are written as a note-off and a note-on with nothing recording them, and anything a drum machine or sampler is still ringing on for its own reasons. All Sound Off is deliberately not sent, because on some instruments it resets the patch fireloop has just sent, and a tail decaying on its own is a smaller fault than a rig sitting on the wrong sound.
 
 `-kit` accepts a JSON file containing a top-level device array or a directory of JSON files. When a directory is supplied, each `.json` file is loaded and devices are ordered by their `Name` field. This makes it possible to keep output-port and voice mappings in separate files.
 
@@ -153,7 +153,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Record: copy the current pattern, including pitches and ties. Record lights green while a copy is armed, and pressing Record again discards it. There is one copy slot; a new copy replaces the old one.
 - `Shift` plus Browser: save the session. `Shift` plus Accent: load it. Both buttons mean nothing on their own, so a stray press cannot write over a set or replace one. Either gesture reports on the readout row, for example `Saved 12.4 KB` or `Loaded 8, dropped 2`, and works the same way in song mode. They need `-state` to be set; without it the readout says so.
 - Play while copied: paste the pattern.
-- Stop: stop playback and release active chromatic notes.
+- Stop: stop playback, release the notes it is tracking, then send All Notes Off on every channel the kit plays on, so nothing is left sounding.
 - Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
 - The bottom row carries whichever mode owns it: the step being edited, `Length NN steps`, the swing being typed, a triplet gesture's line, or a message from a save, a load or a controller.
 - The separator row under the header carries the swing whenever it is not straight, for example `----------- Sw 66`, so the groove is visible while nothing is being edited. A straight swing leaves that row bare.
@@ -314,7 +314,7 @@ A song holds up to 1000 measures, so the 48 measure pads only ever show part of 
 - `Shift` plus grid left/right: scroll measures by 4.
 - `Shift` plus a measure pad: jump playback to that measure. The jump only applies while the song is playing, takes effect at the next pattern boundary, and the display reports the move.
 - Play: play the song from the top and loop it. The playing measure lights up and rows 4 and 5 follow it.
-- Stop: stop playback and release active chromatic notes.
+- Stop: stop playback, release the notes it is tracking, then send All Notes Off on every channel the kit plays on, so nothing is left sounding.
 - `Alt` is a pattern-mode modifier and does nothing here, so there is no blackout in song mode.
 - The Fire's own knobs do nothing in song mode either. A controller's tempo and swing controls work in both views, which is where a groove is usually set against the arrangement.
 - `Shift` plus Browser saves the session and `Shift` plus Accent loads it, the same as in pattern mode. A song is usually saved from here, since that is where the arrangement is.

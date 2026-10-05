@@ -351,6 +351,84 @@ func (p *Playback) releaseAll(aseq alsa.EventWriter) error {
 	return firstErr
 }
 
+// silenceTarget is one place a kit can be sounding: a MIDI channel together with the device
+// port its messages are written to. The two are held as a pair because a kit may put two
+// devices on one channel deliberately, and silencing only one of them would leave the
+// other's note ringing.
+type silenceTarget struct {
+	channel     int
+	destination alsa.SeqAddr
+}
+
+// allNotesOffMidi is the controller message that releases every note on a channel at once.
+//
+// All Sound Off (CC 120) is deliberately not sent beside it, even though it would catch the
+// reverb tails and long envelopes this one leaves behind. On several instruments CC 120 also
+// resets controller state and sound parameters, so a set ending would wipe the patch fireloop
+// just sent and the rig would sit on the wrong sound until Play was pressed again — which
+// during a performance is a worse fault than a tail decaying on its own. CC 120 is optional in
+// practice as well, so leaning on it would mean relying on the less widely honoured of the
+// two. Add it here if a kit needs it and its instruments are known not to reset on it.
+func allNotesOffMidi(channel int) []byte {
+	return []byte{
+		midi.MakeCC(protocolChannel(channel)),
+		byte(midi.AllNotesOff),
+		0,
+	}
+}
+
+// silenceTargets are the places this set can sound, one entry per channel and device rather
+// than per voice: a drum kit of sixty voices shares ten channels, and silencing each voice
+// separately would send the same message six times over.
+func (p *Playback) silenceTargets() []silenceTarget {
+	if p.vb == nil {
+		return nil
+	}
+	var targets []silenceTarget
+	seen := make(map[silenceTarget]bool)
+	for _, voice := range p.vb.voices {
+		if voice == nil {
+			continue
+		}
+		// A voice with no channel cannot sound, so there is nothing to silence on one.
+		channel := voice.EffectiveChannel()
+		if channel == 0 {
+			continue
+		}
+		target := silenceTarget{
+			channel:     channel,
+			destination: midiDestination(eventDestination(Event{Voice: voice})),
+		}
+		if seen[target] {
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
+	return targets
+}
+
+// silenceAll releases every note on every channel this set can sound on. It runs after
+// releaseAll because the explicit note-offs and this are answering different questions:
+// releaseAll is precise about the notes the sequencer tracked, while this reaches the
+// instrument itself. Only chromatic notes are tracked, so a drum struck as the set ended,
+// and any note a path outside the worker wrote, survive releaseAll alone.
+func (p *Playback) silenceAll(aseq alsa.EventWriter) error {
+	if isNilMidiWriter(aseq) {
+		return nil
+	}
+	var firstErr error
+	for _, target := range p.silenceTargets() {
+		message := allNotesOffMidi(target.channel)
+		logOutbound("", target.destination, message)
+		logger.Debug("all notes off", "channel", target.channel, "destination", target.destination)
+		if err := aseq.Write(alsa.SeqEvent{SeqAddr: target.destination, Data: message}); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 func (p *Playback) activeNoteCount() int {
 	p.activeMu.Lock()
 	defer p.activeMu.Unlock()
@@ -374,6 +452,12 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter, clock stepCloc
 	logger.Info("playback start", "bpm", currentBPM(), "swing", currentSwingPct())
 	defer func() {
 		if err := p.releaseAll(aseq); runErr == nil {
+			runErr = err
+		}
+		// The set is over, so the channels it played on are silenced whether or not the
+		// sequencer was tracking everything on them. It goes before the transport stop so
+		// an instrument that resets on Stop cannot cut the sweep off.
+		if err := p.silenceAll(aseq); runErr == nil {
 			runErr = err
 		}
 		if started {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"cmp"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -125,6 +127,66 @@ func (w *captureMidiWriter) waitForEvents(t *testing.T, want int) []alsa.SeqEven
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// soundingInstrument stands in for the device at the far end of the wire: it keeps the set
+// of notes a synth would be holding, so a test can ask "is anything still ringing" without
+// asking the code that sent the notes. captureMidiWriter answers what went out, which is
+// not the same question — a note-off can be written and still leave the note up.
+//
+// It exists because the sequencer tracks only the notes it started itself, so asking the
+// playback whether it released everything would be asking the thing under test to vouch
+// for itself.
+type soundingInstrument struct {
+	mu       sync.Mutex
+	sounding map[[2]int]bool
+}
+
+func newSoundingInstrument() *soundingInstrument {
+	return &soundingInstrument{sounding: map[[2]int]bool{}}
+}
+
+func (i *soundingInstrument) Write(event alsa.SeqEvent) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if len(event.Data) != 3 {
+		return nil
+	}
+	// The key is the channel and the note rather than the whole status byte, because a
+	// note-off carries a different status from the note-on that started the note.
+	key := [2]int{int(event.Data[0]) & 0x0f, int(event.Data[1])}
+	switch {
+	case midi.IsNoteOn(event.Data[0]) && event.Data[2] > 0:
+		i.sounding[key] = true
+	case midi.IsNoteOff(event.Data[0]), midi.IsNoteOn(event.Data[0]) && event.Data[2] == 0:
+		delete(i.sounding, key)
+	case midi.IsCC(event.Data[0]) && event.Data[1] == midi.AllNotesOff:
+		for held := range i.sounding {
+			if held[0] == key[0] {
+				delete(i.sounding, held)
+			}
+		}
+	}
+	return nil
+}
+
+func (i *soundingInstrument) WritePort(event alsa.SeqEvent, _ int) error {
+	return i.Write(event)
+}
+
+// stillSounding lists the notes still held, so a failure names which ones were left rather
+// than only that some were.
+func (i *soundingInstrument) stillSounding() [][2]int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	held := make([][2]int, 0, len(i.sounding))
+	for key := range i.sounding {
+		held = append(held, key)
+	}
+	slices.SortFunc(held, func(a, b [2]int) int {
+		return cmp.Or(a[0]-b[0], a[1]-b[1])
+	})
+	return held
 }
 
 func chromaticTestVoice(t *testing.T, notes ...*int) (*Voice, *Device) {

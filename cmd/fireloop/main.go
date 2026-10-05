@@ -28,6 +28,19 @@ const (
 	defaultKitPath = "kit.json"
 )
 
+// The shutdown settle is a variable rather than a constant so the wait
+// can be retuned from the command line: how much patience the unit needs
+// before a shutdown is clean is a property of the hardware it is talking
+// to, and a flag answers that without a rebuild.
+var (
+	// shutdownSettleLinger is how long shutdown waits after blanking the
+	// unit and before the sequencer closes. A blackout is several dozen
+	// commands at once, and the unit takes them in at its own pace; a
+	// client that goes away with the burst still in flight leaves the last
+	// lit frame standing, which is what a shutdown with no wait produced.
+	shutdownSettleLinger = 250 * time.Millisecond
+)
+
 // Validate routing values before opening ports because invalid channels otherwise fail during playback.
 func validateDevices(devices []Device) error {
 	// A name is how the palette, the log and the display talk about a device, so two of
@@ -278,6 +291,12 @@ func (k *kitPaths) all() []string {
 // Closing is all it asks of the client, so that is all it takes. The notes are released
 // through the playback that is already running rather than written from here, so this does
 // not need the writing half at all.
+//
+// The settle after the blackout exists because the unit is the one thing
+// on the path that runs at its own pace: a blackout is several dozen
+// commands at once, and a client that goes away before the unit has taken
+// the whole burst in leaves the last lit frame standing. A wait before the
+// blackout was tried and bought nothing, so it is gone.
 func shutdown(c *Controller, aseq alsa.Closer) error {
 	var firstErr error
 	if err := c.stopPlayback(); err != nil {
@@ -286,9 +305,13 @@ func shutdown(c *Controller, aseq alsa.Closer) error {
 	if err := blankDevice(c); err != nil && firstErr == nil {
 		firstErr = err
 	}
+	logger.Debug("shutdown: blackout written, letting it settle",
+		"duration", shutdownSettleLinger)
+	time.Sleep(shutdownSettleLinger)
 	if err := aseq.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
+	logger.Debug("shutdown: sequencer closed")
 	return firstErr
 }
 
@@ -440,6 +463,7 @@ func run() error {
 	logFormat := flag.String("log-format", "text", "log format: text or json")
 	flag.BoolVar(&sharedMIDIDestination, "shared-midi-destination", false, "broadcast MIDI output to all connected destinations")
 	stateFile := flag.String("state", "", "session file: loaded at startup when it exists, saved on exit, saved and loaded from the panel")
+	flag.DurationVar(&shutdownSettleLinger, "shutdown-settle", shutdownSettleLinger, "time shutdown waits after blanking the unit and before the sequencer closes, so the unit has taken the whole blackout burst in")
 	flag.Parse()
 
 	level := slog.LevelInfo

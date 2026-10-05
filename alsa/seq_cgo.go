@@ -113,11 +113,22 @@ func (a *Seq) Close() error {
 	if a.seq == nil {
 		return nil
 	}
+	// Events waiting in the output buffer are discarded by the close, so
+	// flush them first: a write that returned success is only on its way to
+	// its destination once the buffer has drained. Events stamped
+	// SND_SEQ_QUEUE_DIRECT never wait in the buffer, so a writer that only
+	// sends direct events gets an immediate return here. The drain can block
+	// for as long as a queued event has left to run, which is the price of
+	// not dropping it.
+	drainErr := snderr2error(C.snd_seq_drain_output(a.seq))
 	err := snderr2error(C.snd_seq_close(a.seq))
 	a.seq = nil
 	a.output = nil
 	a.ports = nil
 	a.Port = -1
+	if err == nil {
+		err = drainErr
+	}
 	return err
 }
 
