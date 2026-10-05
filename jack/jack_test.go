@@ -9,6 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -81,6 +84,13 @@ func (p *fakePort) written() []MidiEvent {
 	return append([]MidiEvent{}, p.events...)
 }
 
+// samples is what the last cycle left in this port's audio buffer.
+func (p *fakePort) samples() []float32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]float32{}, p.audio...)
+}
+
 // fakeBuffer is the cycle buffer a fake port hands back. Nothing in this package reads
 // its bytes, so it only has to exist.
 type fakeBuffer struct {
@@ -94,22 +104,55 @@ type connection struct {
 	src, dst string
 }
 
+// registration records one PortRegister call, so a test can assert on what the package
+// asked the server for rather than only on what came back.
+type registration struct {
+	name, portType string
+	flags          uint64
+	bufferSize     uint64
+	// active records whether the client had been activated when the call was made.
+	// The realtime callbacks read the ports a registration produced, so registering
+	// after activation leaves that slice being filled while it is being read.
+	active bool
+}
+
 // fakeClient stands in for a JACK server: it keeps the callbacks it was given and
 // reports port registrations on demand.
 type fakeClient struct {
 	mu sync.Mutex
 
+	// clientName is the prefix the server puts on every port the package registers.
+	// The package relies on it to keep its own ports out of its own matches, so a fake
+	// that left it off would quietly stop testing that.
+	clientName string
+
 	activated bool
 	closed    bool
 	opened    bool
+	// opens counts the clients handed out, so a test can tell one client carrying two
+	// ports from two clients carrying one each.
+	opens int
 
 	sampleRate, bufferSize uint32
 
 	registration PortRegistrationCallback
 	process      ProcessCallback
 
-	internal *fakePort
-	existing []*fakePort
+	// internal is the first port the package registered, which is what the MIDI tests
+	// read what was written to. registered is every one of them, since a stereo port
+	// registers two and has to be told apart from a mono one.
+	internal      *fakePort
+	registered    []*fakePort
+	registrations []registration
+	existing      []*fakePort
+
+	// registerFailAt makes the nth PortRegister call hand back nothing, the way the
+	// server refuses a port it will not have. Zero means every call succeeds.
+	registerFailAt int
+
+	// portWriteErr is the midi write failure every port this client registers starts
+	// with, so a test can provoke one on a port the package creates itself.
+	portWriteErr error
 
 	connections []connection
 	connectErr  error
@@ -121,9 +164,9 @@ type fakeClient struct {
 
 func newFakeClient(name string) *fakeClient {
 	return &fakeClient{
+		clientName: name,
 		sampleRate: 48000,
 		bufferSize: 1024,
-		internal:   newFakePort(name + ":" + testPortName),
 	}
 }
 
@@ -161,7 +204,19 @@ func (c *fakeClient) Close() error {
 }
 
 func (c *fakeClient) PortRegister(name, portType string, flags, bufferSize uint64) JackPort {
-	return c.internal
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.registrations = append(c.registrations, registration{name, portType, flags, bufferSize, c.activated})
+	if c.registerFailAt == len(c.registrations) {
+		return nil
+	}
+	p := newFakePort(c.clientName + ":" + name)
+	p.writeErr = c.portWriteErr
+	c.registered = append(c.registered, p)
+	if c.internal == nil {
+		c.internal = p
+	}
+	return p
 }
 
 func (c *fakeClient) PortByID(id PortID) JackPort {
@@ -211,9 +266,25 @@ func (c *fakeClient) ConnectPorts(src, dst JackPort) error {
 func (c *fakeClient) SampleRate() uint32 { return c.sampleRate }
 func (c *fakeClient) BufferSize() uint32 { return c.bufferSize }
 
-// all lists every port the fake knows about, internal first.
+// all lists every port the fake knows about: the ones the package registered first,
+// then the ones other clients published. The package filters its own out by name.
 func (c *fakeClient) all() []*fakePort {
-	return append([]*fakePort{c.internal}, c.existing...)
+	return append(append([]*fakePort{}, c.registered...), c.existing...)
+}
+
+// made is a snapshot of the ports the package has registered.
+func (c *fakeClient) made() []registration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]registration{}, c.registrations...)
+}
+
+// own is the nth port the package registered, which is how a test sees what its
+// callback was handed rather than only what the callback did with it.
+func (c *fakeClient) own(n int) *fakePort {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.registered[n]
 }
 
 // wired is the list of connections made so far.
@@ -224,7 +295,8 @@ func (c *fakeClient) wired() []connection {
 }
 
 // add makes a port appear, reporting it to the registration callback the way JACK
-// would when another client publishes it.
+// would when another client publishes it. The name is already qualified: the prefix is
+// the publishing client's, not this one.
 func (c *fakeClient) add(name string) *fakePort {
 	p := newFakePort(name)
 	c.mu.Lock()
@@ -261,7 +333,7 @@ func (c *fakeClient) cycle(t *testing.T, nframes uint32) {
 	cb := c.process
 	c.mu.Unlock()
 	if cb == nil {
-		t.Fatal("no process callback registered")
+		require.FailNow(t, "no process callback registered")
 	}
 	cb(nframes)
 }
@@ -286,17 +358,22 @@ func portID(p *fakePort) PortID {
 }
 
 // opener returns an OpenClient that hands out the fake.
-func (c *fakeClient) opener(name string) (JackClient, error) {
+func (c *fakeClient) opener(string) (JackClient, error) {
 	if c.openErr != nil {
 		return nil, c.openErr
 	}
 	c.mu.Lock()
 	c.opened = true
+	c.opens++
 	c.mu.Unlock()
-	if c.internal.name == "" {
-		c.internal = newFakePort(name + ":" + testPortName)
-	}
 	return c, nil
+}
+
+// openCount is how many clients this fake has handed out.
+func (c *fakeClient) openCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.opens
 }
 
 // tracked is a snapshot of the external ports the package is holding on to. The
@@ -319,7 +396,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", what)
+	require.FailNow(t, "timed out waiting for "+what)
 }
 
 // waitWired blocks until the client has made n connections. The package connects from
@@ -347,12 +424,15 @@ func testConfig(c *fakeClient, pc PortConfig) PortConfig {
 func newTestPort(t *testing.T, c *fakeClient, pc PortConfig) *Port {
 	t.Helper()
 	p, err := NewWritePort(testConfig(c, pc))
-	if err != nil {
-		t.Fatalf("opening port: %v", err)
-	}
+	require.NoError(t, err, "opening port")
 	t.Cleanup(p.Close)
 	return p
 }
+
+// silentAudio is the callback for a test that is about routing or lifetime rather than
+// about what the callback does. A port with no callback at all is an error, so a test
+// that does not care still has to ask for one.
+func silentAudio([]float32) int { return 0 }
 
 // TestConnectionDirection covers both port directions. Which end of the connection
 // this package's own port sits on is the only thing that differs between them.
@@ -393,22 +473,12 @@ func TestConnectionDirection(t *testing.T) {
 			c := newFakeClient(testClientName)
 			c.existing = []*fakePort{newFakePort(tc.existing)}
 
-			p, err := tc.open(testConfig(c, PortConfig{MatchName: []string{tc.match}}))
-			if err != nil {
-				t.Fatalf("opening port: %v", err)
-			}
+			p, err := tc.open(testConfig(c, PortConfig{MatchName: []string{tc.match}, AudioCallback: silentAudio}))
+			require.NoError(t, err, "opening port")
 			defer p.Close()
 
-			wired := c.wired()
-			if len(wired) != 1 {
-				t.Fatalf("got %d connections, want 1", len(wired))
-			}
-			if want := (connection{tc.wantSrc, tc.wantDst}); wired[0] != want {
-				t.Errorf("connected %+v, want %+v", wired[0], want)
-			}
-			if got := len(tracked(p)); got != 1 {
-				t.Errorf("got %d external ports, want 1", got)
-			}
+			assert.Equal(t, []connection{{tc.wantSrc, tc.wantDst}}, c.wired())
+			assert.Len(t, tracked(p), 1, "external ports held")
 		})
 	}
 }
@@ -419,47 +489,35 @@ func TestSkipsPortsOfOurOwnClient(t *testing.T) {
 	// otherwise catch it must not produce a connection.
 	c.existing = []*fakePort{newFakePort(testClientName + ":out"), newFakePort("system:playback_1")}
 
-	newTestPort(t, c, PortConfig{MatchName: []string{"out", "system:playback"}})
+	newTestPort(t, c, PortConfig{MatchName: []string{"out", "system:playback"}, AudioCallback: silentAudio})
 
-	wired := c.wired()
-	if len(wired) != 1 {
-		t.Fatalf("got %d connections, want 1: %+v", len(wired), wired)
-	}
-	if wired[0].dst != "system:playback_1" {
-		t.Errorf("connected to %q, want system:playback_1", wired[0].dst)
-	}
+	assert.Equal(t, []connection{{testClientName + ":" + testPortName, playbackPort}}, c.wired())
 }
 
 func TestConnectsPortsThatAppearLater(t *testing.T) {
 	c := newFakeClient(testClientName)
-	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}})
+	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio})
 
-	if got := len(c.wired()); got != 0 {
-		t.Fatalf("got %d connections before anything registered, want 0", got)
-	}
+	assert.Empty(t, c.wired(), "connections made before anything registered")
 
 	c.add(playbackPort)
 
 	// The package connects from its own goroutine, so the assertion has to follow it.
 	waitWired(t, c, 1)
 	waitTracked(t, p, 1)
-	if _, ok := tracked(p)["system:playback_1"]; !ok {
-		t.Errorf("system:playback_1 is not tracked as external")
-	}
+	assert.Contains(t, tracked(p), playbackPort, "tracked external ports")
 }
 
 func TestIgnoresPortsThatDoNotMatch(t *testing.T) {
 	c := newFakeClient(testClientName)
-	newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}})
+	newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio})
 
 	c.add("system:capture_1")
 	c.add(playbackPort)
 
 	waitWired(t, c, 1)
-	wired := c.wired()
-	if wired[0].dst != "system:playback_1" {
-		t.Errorf("connected to %q, want system:playback_1", wired[0].dst)
-	}
+	assert.Equal(t, []connection{{testClientName + ":" + testPortName, playbackPort}}, c.wired(),
+		"a port that does not match must not be connected to")
 }
 
 func TestUnregisteringStopsThePortBeingUsed(t *testing.T) {
@@ -473,22 +531,16 @@ func TestUnregisteringStopsThePortBeingUsed(t *testing.T) {
 	waitTracked(t, p, 1)
 
 	c.cycle(t, testFrames)
-	if calls != 1 {
-		t.Fatalf("callback ran %d times while connected, want 1", calls)
-	}
+	require.Equal(t, 1, calls, "callback runs while connected")
 
 	c.remove(ext)
 
-	if got := len(tracked(p)); got != 0 {
-		t.Fatalf("got %d external ports after removal, want 0", got)
-	}
+	require.Empty(t, tracked(p), "external ports held after removal")
 
 	// JACK has dropped the other end, so the callback must stop rather than keep the
 	// program working against a device that is no longer there.
 	c.cycle(t, testFrames)
-	if calls != 1 {
-		t.Errorf("callback ran %d times after removal, want 1", calls)
-	}
+	assert.Equal(t, 1, calls, "callback runs after removal")
 }
 
 func TestAudioCallbackRunsOnceConnected(t *testing.T) {
@@ -509,20 +561,13 @@ func TestAudioCallbackRunsOnceConnected(t *testing.T) {
 	// Unconnected: the callback stays out of the way so a client does no work while
 	// JACK is throwing its samples away.
 	c.cycle(t, testFrames)
-	if gotFrames != 0 {
-		t.Fatalf("callback ran with %d frames while nothing was connected", gotFrames)
-	}
+	require.Zero(t, gotFrames, "callback ran while nothing was connected")
 
 	c.add(playbackPort)
 	waitFor(t, "the new port to be connected", func() bool { return len(c.wired()) == 1 })
 
 	c.cycle(t, testFrames)
-	if gotFrames != testFrames {
-		t.Errorf("callback got %d frames, want %d", gotFrames, testFrames)
-	}
-	if len(gotBuffer) != testFrames {
-		t.Errorf("callback got a %d sample buffer, want %d", len(gotBuffer), testFrames)
-	}
+	assert.Len(t, gotBuffer, testFrames, "samples handed to the callback")
 }
 
 func TestMidiCallbackWritesToPort(t *testing.T) {
@@ -540,22 +585,16 @@ func TestMidiCallbackWritesToPort(t *testing.T) {
 
 	port := c.internal
 	written := port.written()
-	if len(written) != len(msgs) {
-		t.Fatalf("got %d events written, want %d", len(written), len(msgs))
-	}
+	require.Len(t, written, len(msgs), "events written")
 	for i, msg := range msgs {
-		if string(written[i].Msg) != string(msg) {
-			t.Errorf("event %d is % x, want % x", i, written[i].Msg, msg)
-		}
+		assert.Equalf(t, msg, []byte(written[i].Msg), "event %d", i)
 	}
-	if port.cleared != testFrames {
-		t.Errorf("buffer cleared for %d frames, want %d", port.cleared, testFrames)
-	}
+	assert.Equal(t, uint32(testFrames), port.cleared, "frames the buffer was cleared for")
 }
 
 func TestMidiCallbackStopsOnWriteFailure(t *testing.T) {
 	c := newFakeClient(testClientName)
-	c.internal.writeErr = errWrite
+	c.portWriteErr = errWrite
 
 	var writes int
 	pc := PortConfig{
@@ -570,26 +609,18 @@ func TestMidiCallbackStopsOnWriteFailure(t *testing.T) {
 
 	// The callback is handed an io.Writer, so the only way it learns a port is gone is
 	// the error; that error has to reach it rather than being swallowed.
-	if writes != 0 {
-		t.Errorf("got %d successful writes, want 0", writes)
-	}
+	assert.Zero(t, writes, "successful writes")
 }
 
 func TestGetBufferAndServerParameters(t *testing.T) {
 	c := newFakeClient(testClientName)
 	c.sampleRate, c.bufferSize = 44100, 512
 
-	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}})
+	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio})
 
-	if got := p.SampleRate(); got != 44100 {
-		t.Errorf("sample rate %d, want 44100", got)
-	}
-	if got := p.BufferSize(); got != 512 {
-		t.Errorf("buffer size %d, want 512", got)
-	}
-	if got := len(p.GetBuffer(8)); got != 8 {
-		t.Errorf("got a %d sample buffer, want 8", got)
-	}
+	assert.Equal(t, uint32(44100), p.SampleRate())
+	assert.Equal(t, uint32(512), p.BufferSize())
+	assert.Len(t, p.GetBuffer(8), 8)
 }
 
 // TestOpenFailures covers every step that can fail while opening a port. Each has to
@@ -625,14 +656,12 @@ func TestOpenFailures(t *testing.T) {
 			}
 			wantErr := tc.break_(c)
 
-			_, err := NewWritePort(testConfig(c, PortConfig{MatchName: []string{playbackMatch}}))
-			if !errors.Is(err, wantErr) {
-				t.Errorf("got error %v, want %v", err, wantErr)
-			}
+			_, err := NewWritePort(testConfig(c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio}))
+			require.ErrorIs(t, err, wantErr)
 			// A client that never opened has nothing to close, so only one that was
 			// handed out can have been left running.
-			if c.wasOpened() && !c.isClosed() {
-				t.Error("the client was left open after the failure")
+			if c.wasOpened() {
+				assert.True(t, c.isClosed(), "the client was left open after the failure")
 			}
 		})
 	}
@@ -642,17 +671,13 @@ func TestCloseReleasesEverything(t *testing.T) {
 	c := newFakeClient(testClientName)
 	c.add(playbackPort)
 
-	p, err := NewWritePort(testConfig(c, PortConfig{MatchName: []string{playbackMatch}}))
-	if err != nil {
-		t.Fatalf("opening port: %v", err)
-	}
+	p, err := NewWritePort(testConfig(c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio}))
+	require.NoError(t, err, "opening port")
 	waitFor(t, "the new port to be connected", func() bool { return len(c.wired()) == 1 })
 
 	p.Close()
 
-	if !c.isClosed() {
-		t.Error("the client was not closed")
-	}
+	assert.True(t, c.isClosed(), "the client was closed")
 	// Close returns only once the goroutine feeding connections has stopped, which is
 	// what makes it safe to tear the rest of the program down behind it.
 	waitFor(t, "the connection channel to drain", func() bool {
@@ -667,7 +692,7 @@ func TestCloseReleasesEverything(t *testing.T) {
 
 func TestConnectsPortsAppearingAtTheSameTime(t *testing.T) {
 	c := newFakeClient(testClientName)
-	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}})
+	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio})
 
 	// A device commonly publishes several channels together. Refusing the ones that
 	// arrive while another is still being wired would strand them for good, since
@@ -678,9 +703,7 @@ func TestConnectsPortsAppearingAtTheSameTime(t *testing.T) {
 
 	waitWired(t, c, 3)
 	for _, name := range []string{"system:playback_1", "system:playback_2222", "system:playback_33333"} {
-		if _, ok := tracked(p)[name]; !ok {
-			t.Errorf("%s was not connected", name)
-		}
+		assert.Containsf(t, tracked(p), name, "%s was connected", name)
 	}
 }
 
@@ -716,14 +739,13 @@ func TestNoConnectAfterClientClosed(t *testing.T) {
 	for range 200 {
 		lc := &lateConnectClient{fakeClient: newFakeClient(testClientName)}
 		p, err := NewWritePort(PortConfig{
-			ClientName: testClientName,
-			PortName:   testPortName,
-			MatchName:  []string{"system:playback"},
-			OpenClient: func(string) (JackClient, error) { return lc, nil },
+			ClientName:    testClientName,
+			PortName:      testPortName,
+			MatchName:     []string{"system:playback"},
+			AudioCallback: silentAudio,
+			OpenClient:    func(string) (JackClient, error) { return lc, nil },
 		})
-		if err != nil {
-			t.Fatalf("opening port: %v", err)
-		}
+		require.NoError(t, err, "opening port")
 
 		lc.add(playbackPort)
 		p.Close()
@@ -731,29 +753,25 @@ func TestNoConnectAfterClientClosed(t *testing.T) {
 		lc.mu.Lock()
 		late := lc.lateCall
 		lc.mu.Unlock()
-		if late != 0 {
-			t.Fatalf("attempted %d connections after the client was closed", late)
-		}
+		assert.Zero(t, late, "connections attempted after the client was closed")
 	}
 }
 
 func TestCloseTwiceIsHarmless(t *testing.T) {
 	c := newFakeClient(testClientName)
-	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}})
+	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio})
 
 	p.Close()
 	// A program that closes a port explicitly and again through a defer must not die
 	// on the second close.
 	p.Close()
 
-	if got := len(c.connections); got != 0 {
-		t.Errorf("got %d connections, want 0", got)
-	}
+	assert.Empty(t, c.connections)
 }
 
 func TestPortAppearingAfterCloseIsIgnored(t *testing.T) {
 	c := newFakeClient(testClientName)
-	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}})
+	p := newTestPort(t, c, PortConfig{MatchName: []string{playbackMatch}, AudioCallback: silentAudio})
 
 	p.Close()
 
@@ -761,12 +779,8 @@ func TestPortAppearingAfterCloseIsIgnored(t *testing.T) {
 	// would be a send on the closed channel, which takes the process down.
 	c.add(playbackPort)
 
-	if got := len(c.wired()); got != 0 {
-		t.Errorf("got %d connections after close, want 0: %+v", got, c.wired())
-	}
-	if got := len(tracked(p)); got != 0 {
-		t.Errorf("got %d tracked ports after close, want 0", got)
-	}
+	assert.Empty(t, c.wired(), "connections after close")
+	assert.Empty(t, tracked(p), "tracked ports after close")
 }
 
 // writeAll writes every message, stopping at the first refusal.
