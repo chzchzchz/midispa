@@ -297,7 +297,7 @@ func shutdown(c *Controller, aseq alsa.Closer) error {
 // after the release because the release puts the step strip back, and a blackout suppresses
 // the display output that would undo it.
 func blankDevice(c *Controller) error {
-	return c.patbank.f.Blackout()
+	return c.patbank.pads.Blackout()
 }
 
 // handleIncomingEvent applies one Fire event. A failure stops playback and is reported

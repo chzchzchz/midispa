@@ -18,12 +18,12 @@ func (p *PatternBank) setLengthMode(active bool) error {
 	}
 	p.editingLength = active
 	if active {
-		if err := p.f.SetLed(NoteOverview, LEDRed); err != nil {
+		if err := p.pads.SetLed(NoteOverview, LEDRed); err != nil {
 			return err
 		}
 		return p.printLength()
 	}
-	if err := p.f.SetLed(NoteOverview, LEDOff); err != nil {
+	if err := p.pads.SetLed(NoteOverview, LEDOff); err != nil {
 		return err
 	}
 	return p.printStepStatus()

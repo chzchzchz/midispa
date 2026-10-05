@@ -130,10 +130,10 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 	p.playheadStep = noPlayheadStep
 	p.clearPadState()
 	if active {
-		if err := p.f.SetLed(NoteMode, LEDGreen); err != nil {
+		if err := p.pads.SetLed(NoteMode, LEDGreen); err != nil {
 			return err
 		}
-	} else if err := p.f.SetLed(NoteMode, LEDOff); err != nil {
+	} else if err := p.pads.SetLed(NoteMode, LEDOff); err != nil {
 		return err
 	}
 	return p.repaintEditView()

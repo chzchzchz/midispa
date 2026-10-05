@@ -13,7 +13,9 @@ type SongBank struct {
 	patternStart int
 	measureStart int
 	pb           *PatternBank
-	f            *Fire
+	// pads is this bank's own seam, so a test can redirect the arrangement's pads without
+	// also redirecting the pattern's.
+	pads unitScreen
 	// screen is where the arrangement text goes, for the same reason as PatternBank.screen:
 	// the Fire by default and a recorder in a test, so a test reads what a row says instead
 	// of decoding pixels.
@@ -25,8 +27,8 @@ func NewSongBank(f *Fire, pb *PatternBank) *SongBank {
 		Songs:      make(map[int]*Song),
 		selSongIdx: 1,
 		pb:         pb,
-		f:          f,
 		screen:     f,
+		pads:       f,
 	}
 	sb.Songs[sb.selSongIdx] = &Song{}
 	sb.resetArrangementView()
@@ -155,7 +157,7 @@ func (sb *SongBank) ToggleMeasure(x, y int) error {
 	if p != nil {
 		color = dimColor(patternColor(sb.pb.selPatIdx))
 	}
-	return sb.f.LightPadSlice([]akai.Pad{makePad(x, y, color)})
+	return sb.pads.LightPadSlice([]akai.Pad{makePad(x, y, color)})
 }
 
 func (sb *SongBank) ToggleMeasureBrightness(lastMeasure, nextMeasure int) error {
@@ -182,7 +184,7 @@ func (sb *SongBank) ToggleMeasureBrightness(lastMeasure, nextMeasure int) error 
 	if len(pads) == 0 {
 		return nil
 	}
-	return sb.f.LightPadSlice(pads)
+	return sb.pads.LightPadSlice(pads)
 }
 
 func (s *SongBank) SelectPattern(n int) error {
@@ -241,7 +243,7 @@ func (s *SongBank) DrawPadMeasures() error {
 		}
 		pads[i] = makePad(col, row, color)
 	}
-	return s.f.LightPadSlice(pads)
+	return s.pads.LightPadSlice(pads)
 }
 
 func (s *SongBank) DrawPadPatterns() error {
@@ -260,7 +262,7 @@ func (s *SongBank) DrawPadPatterns() error {
 		x, y := (i%4)+4*3, i/4
 		pads[i] = makePad(x, y, color)
 	}
-	return s.f.LightPadSlice(pads)
+	return s.pads.LightPadSlice(pads)
 }
 
 // patternColor is the colour one pattern is drawn in, taken from its bank index. Neighbouring

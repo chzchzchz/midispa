@@ -229,7 +229,7 @@ var errTestWrite = errors.New("test write failure")
 // A tap outside the window starts a new tempo instead of joining the old one, and the test
 // reaches that path in milliseconds rather than three seconds.
 func TestTraceTapTempoWindowResets(t *testing.T) {
-	_, patternBank, _ := useTestBanks(t)
+	_, patternBank, _, _ := useTestBanks(t)
 	previousWindow, previousBPM := tapTempoWindow, currentBPM()
 	t.Cleanup(func() {
 		tapTempoWindow = previousWindow

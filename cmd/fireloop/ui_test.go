@@ -54,7 +54,7 @@ func (r *ledRecorder) reset() {
 }
 
 // useTestBanks points the event handlers at a fresh pattern bank and song bank.
-func useTestBanks(t *testing.T) (*ledRecorder, *PatternBank, *SongBank) {
+func useTestBanks(t *testing.T) (*ledRecorder, *PatternBank, *SongBank, *Fire) {
 	t.Helper()
 	recorder := &ledRecorder{}
 	voices := make([]Voice, 8)
@@ -62,9 +62,12 @@ func useTestBanks(t *testing.T) (*ledRecorder, *PatternBank, *SongBank) {
 		voices[i] = Voice{Name: fmt.Sprintf("v%02d", i), Note: testNote(36 + i), Channel: 1}
 	}
 	voiceBank := NewVoiceBank([]Device{{Channel: 1, Voices: voices}})
-	controller := useController(t, NewFire(recorder.write), voiceBank)
+	fire := NewFire(recorder.write)
+	controller := useController(t, fire, voiceBank)
 	require.NoError(t, controller.songbank.Jump(0))
-	return recorder, controller.patbank, controller.songbank
+	// The unit comes back with the banks because a blackout is the unit's own state, not
+	// something a bank holds, so a test that wants to know asks the thing that has it.
+	return recorder, controller.patbank, controller.songbank, fire
 }
 
 // pressButton presses a control through the bank under test, which is the path a Fire
@@ -76,7 +79,7 @@ func pressButton(t *testing.T, bank *PatternBank, note int) {
 
 // Alt is a mode rather than a momentary modifier, so a clear action must not release it.
 func TestAltStaysEngagedAfterClear(t *testing.T) {
-	_, patternBank, _ := useTestBanks(t)
+	_, patternBank, _, _ := useTestBanks(t)
 	pressButton(t, patternBank, NoteAlt)
 	require.True(t, patternBank.controller.alt, "Alt did not engage")
 	patternBank.CurrentPattern().ToggleEvent(Event{Voice: patternBank.vb.voices[0], Beat: 0, Velocity: 100})
@@ -97,7 +100,7 @@ func TestAltStaysEngagedAfterClear(t *testing.T) {
 // A blackout is a display state: the lights go off, the controls keep their state, and
 // the next press brings everything back.
 func TestBlackoutHidesAndRestoresTheDisplay(t *testing.T) {
-	recorder, patternBank, _ := useTestBanks(t)
+	recorder, patternBank, _, fire := useTestBanks(t)
 	// The blackout is Shift plus Alt, so arm the rest first.
 	pressButton(t, patternBank, NoteMute2)
 	pressButton(t, patternBank, NoteShift)
@@ -108,7 +111,7 @@ func TestBlackoutHidesAndRestoresTheDisplay(t *testing.T) {
 	require.True(t, patternBank.editingLength)
 	require.NotNil(t, patternBank.controller.clipboard)
 	pressButton(t, patternBank, NoteAlt)
-	require.True(t, patternBank.f.IsDark(), "Shift plus Alt did not blackout")
+	require.True(t, fire.IsDark(), "Shift plus Alt did not blackout")
 	// The controls keep their state, and the display stays dark afterwards.
 	require.True(t, patternBank.controller.shift, "the blackout changed the control state")
 	require.Equal(t, 2, patternBank.selTrackRow, "the blackout changed the control state")
@@ -123,7 +126,7 @@ func TestBlackoutHidesAndRestoresTheDisplay(t *testing.T) {
 
 	// The next press wakes the display and still does what it says.
 	pressButton(t, patternBank, NoteMute3)
-	require.False(t, patternBank.f.IsDark(), "the display stayed black after a press")
+	require.False(t, fire.IsDark(), "the display stayed black after a press")
 	require.Equal(t, 3, patternBank.selTrackRow, "the waking press was not handled")
 	require.NotZero(t, recorder.clearsDisplay, "waking up did not redraw the display")
 	require.Equal(t, LEDRed, recorder.leds[NoteShift], "Shift keeps the state it was left in")
@@ -135,17 +138,17 @@ func TestBlackoutHidesAndRestoresTheDisplay(t *testing.T) {
 
 // The Alt light goes dark for a blackout and comes back to the state Alt is in.
 func TestBlackoutRestoresAltLight(t *testing.T) {
-	recorder, patternBank, _ := useTestBanks(t)
+	recorder, patternBank, _, fire := useTestBanks(t)
 	pressButton(t, patternBank, NoteAlt)
 	require.Equal(t, LEDYellow, recorder.leds[NoteAlt], "Alt light while engaged")
 	pressButton(t, patternBank, NoteShift)
 	pressButton(t, patternBank, NoteAlt)
-	require.True(t, patternBank.f.IsDark(), "Shift plus Alt did not blackout with Alt engaged")
+	require.True(t, fire.IsDark(), "Shift plus Alt did not blackout with Alt engaged")
 	require.True(t, patternBank.controller.alt, "the blackout released Alt")
 	require.Equal(t, LEDOff, recorder.leds[NoteAlt], "Alt light during a blackout")
 	// Waking up restores the light to the state Alt was left in.
 	pressButton(t, patternBank, NoteGridRight)
-	require.False(t, patternBank.f.IsDark(), "the display stayed dark")
+	require.False(t, fire.IsDark(), "the display stayed dark")
 	require.Equal(t, LEDYellow, recorder.leds[NoteAlt], "the engaged state was not restored")
 	// Releasing Alt, with Shift released first so the press is not a blackout, goes dark.
 	pressButton(t, patternBank, NoteShift)
@@ -156,7 +159,7 @@ func TestBlackoutRestoresAltLight(t *testing.T) {
 
 // The modifier buttons belong to pattern mode, so switching modes releases them.
 func TestModeSwitchReleasesModifiers(t *testing.T) {
-	recorder, patternBank, _ := useTestBanks(t)
+	recorder, patternBank, _, _ := useTestBanks(t)
 	pressButton(t, patternBank, NoteAlt)
 	pressButton(t, patternBank, NotePatternSong)
 	require.False(t, patternBank.controller.alt, "the mode switch carried Alt into song mode")

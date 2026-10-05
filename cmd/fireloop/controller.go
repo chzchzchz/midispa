@@ -158,5 +158,5 @@ func (c *Controller) setMode(mode viewMode, songLight int) error {
 		return err
 	}
 	c.mode = mode
-	return c.patbank.f.SetLed(NotePatternSong, songLight)
+	return c.patbank.pads.SetLed(NotePatternSong, songLight)
 }

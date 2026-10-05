@@ -506,7 +506,9 @@ func TestLeavingSavesAfterAPanic(t *testing.T) {
 	// The unit falls over while the handler is repainting the grid, which is after the edit
 	// has been made. That is the case the exit save exists for: a half-finished gesture
 	// reaching the disk rather than an untouched session.
-	controller.patbank.f = NewFire(func(data []byte) error {
+	// Every way the bank talks to the unit has to be the failing one, because which of
+	// the two seams a gesture happens to touch is not something this test should depend on.
+	falling := NewFire(func(data []byte) error {
 		// The pad repaint is the first thing the unit is sent after the edit lands, and
 		// lights leave as a SysEx block rather than as a note.
 		if isPadLight(data) {
@@ -514,6 +516,7 @@ func TestLeavingSavesAfterAPanic(t *testing.T) {
 		}
 		return nil
 	})
+	controller.patbank.screen, controller.patbank.pads = falling, falling
 
 	inc := make(chan alsa.SeqEvent, 1)
 	inc <- padMessage(54, 100) // a pad press, which adds a step to the first track

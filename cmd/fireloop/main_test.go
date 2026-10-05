@@ -325,9 +325,12 @@ func TestShutdownReleasesSoundingNotes(t *testing.T) {
 func TestShutdownBlanksTheUnit(t *testing.T) {
 	controller, _, _, sim := shutdownBank(t)
 	// Light something first, so "dark" is a change rather than the state it started in.
-	require.NoError(t, controller.patbank.f.SetLed(NoteMode, LEDGreen))
-	require.NoError(t, controller.patbank.f.LightPad(3, 1, 127, 127, 127))
-	require.NoError(t, controller.patbank.f.Print(0, 0, "Pattern 001"))
+	// It goes to the same recorder the bank writes through, which is all the assertion
+	// below needs: whether it was the bank's Fire or this one that lit it does not matter.
+	lit := NewFire(sim.write)
+	require.NoError(t, lit.SetLed(NoteMode, LEDGreen))
+	require.NoError(t, lit.LightPad(3, 1, 127, 127, 127))
+	require.NoError(t, lit.Print(0, 0, "Pattern 001"))
 
 	require.NoError(t, shutdown(controller, fake.New()))
 
@@ -365,7 +368,11 @@ func TestShutdownReportsCloseFailure(t *testing.T) {
 func TestHandlerFailureStopsPlaybackWithoutEndingTheProcess(t *testing.T) {
 	controller, playback, writer, _ := shutdownBank(t)
 	capture := useCaptureLog(t)
-	controller.patbank.f = NewFire(func([]byte) error { return errOutOfRange })
+	// The display goes wrong in every direction at once, because a handler writes the
+	// screen and the pads and the lights, and any one of them failing is a handler
+	// failure.
+	failing := NewFire(func([]byte) error { return errOutOfRange })
+	controller.patbank.screen, controller.patbank.pads = failing, failing
 
 	controller.handleIncomingEvent(nil, padMessage(NoteMute1, 100))
 
@@ -379,7 +386,8 @@ func TestHandlerFailureStopsPlaybackWithoutEndingTheProcess(t *testing.T) {
 func TestHandlerFailureReportsAFailedStop(t *testing.T) {
 	controller, playback, _, _ := shutdownBank(t)
 	playback.writer = &failingSequencerWriter{err: errOutOfRange}
-	controller.patbank.f = NewFire(func([]byte) error { return errOutOfRange })
+	failing := NewFire(func([]byte) error { return errOutOfRange })
+	controller.patbank.screen, controller.patbank.pads = failing, failing
 	capture := useCaptureLog(t)
 	// The stop handle is what fails here, so the release the stop asks for is the failing
 	// one rather than the handler.

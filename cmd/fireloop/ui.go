@@ -47,10 +47,10 @@ func (c *Controller) releaseModifiers() error {
 	c.alt = false
 	c.shift = false
 	c.pending = 0
-	if err := c.patbank.f.SetLed(NoteAlt, LEDOff); err != nil {
+	if err := c.patbank.pads.SetLed(NoteAlt, LEDOff); err != nil {
 		return err
 	}
-	return c.patbank.f.SetLed(NoteShift, LEDOff)
+	return c.patbank.pads.SetLed(NoteShift, LEDOff)
 }
 
 // restoreIndicators re-applies the button lights, which a blackout turned off, so each
@@ -94,7 +94,7 @@ func (c *Controller) restoreIndicators() error {
 		lights[CCMuteLED1+c.patbank.selTrackRow-1] = LEDGreen
 	}
 	for control, value := range lights {
-		if err := c.patbank.f.SetLed(control, value); err != nil {
+		if err := c.patbank.pads.SetLed(control, value); err != nil {
 			return err
 		}
 	}
@@ -107,7 +107,7 @@ func (c *Controller) restoreIndicators() error {
 // rather than Jump because the playback worker reads the selected pattern index, and a
 // blackout can happen while a pattern is playing.
 func (c *Controller) wakeBlackout() error {
-	if !c.patbank.f.Wake() {
+	if !c.patbank.pads.Wake() {
 		return nil
 	}
 	logger.Info("wake from blackout")
@@ -149,7 +149,7 @@ func (c *Controller) tapTempo() error {
 	tempo := int(60.0 / dur.Seconds())
 	setBPM(tempo)
 	s := fmt.Sprintf("Tempo: %03d", tempo)
-	return c.patbank.f.Print(4, 3, s)
+	return c.patbank.printText(4, 3, s, false)
 }
 
 func (c *Controller) handleSongGrid(x, y int) error {
@@ -166,9 +166,9 @@ func (c *Controller) toggleAlt() error {
 	c.alt = !c.alt
 	logger.Debug("alt", "on", c.alt, "shift", c.shift)
 	if c.alt {
-		return c.patbank.f.SetLed(NoteAlt, LEDYellow)
+		return c.patbank.pads.SetLed(NoteAlt, LEDYellow)
 	}
-	return c.patbank.f.SetLed(NoteAlt, 0)
+	return c.patbank.pads.SetLed(NoteAlt, 0)
 }
 
 // The two handlers below are what a Fire event reaches once the controller has picked the
@@ -210,9 +210,9 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 	case NoteShift:
 		c.shift = !c.shift
 		if c.shift {
-			return c.songbank.f.SetLed(NoteShift, LEDRed)
+			return c.songbank.pads.SetLed(NoteShift, LEDRed)
 		} else {
-			return c.songbank.f.SetLed(NoteShift, 0)
+			return c.songbank.pads.SetLed(NoteShift, 0)
 		}
 	// In song mode these controls navigate viewports; pads still edit the arrangement.
 	case NotePatternUp:
@@ -411,7 +411,7 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 		c.shift = !c.shift
 		logger.Debug("shift", "on", c.shift, "alt", c.alt)
 		if !c.shift {
-			if err := c.patbank.f.SetLed(NoteShift, 0); err != nil {
+			if err := c.patbank.pads.SetLed(NoteShift, 0); err != nil {
 				return err
 			}
 			if c.pending > 20 && c.pending < 300 {
@@ -420,7 +420,7 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 				return c.patbank.redraw()
 			}
 		} else {
-			return c.patbank.f.SetLed(NoteShift, LEDRed)
+			return c.patbank.pads.SetLed(NoteShift, LEDRed)
 		}
 	// Overview exposes the per-pattern length while the encoder changes steps.
 	case NoteOverview:
@@ -453,7 +453,7 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 			// Blackout. The controls keep their state, so the next press brings the
 			// lights and screen back to it, the Alt light included.
 			logger.Info("blackout")
-			return c.patbank.f.Blackout()
+			return c.patbank.pads.Blackout()
 		}
 		return c.toggleAlt()
 	case NoteMute1:
@@ -488,7 +488,7 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 				return err
 			}
 			c.clipboard = nil
-			return c.patbank.f.SetLed(NoteRecord, LEDOff)
+			return c.patbank.pads.SetLed(NoteRecord, LEDOff)
 		}
 		if !c.playing() {
 			c.startPlayback(aseq, c.patbank.newPlayback())
@@ -504,10 +504,10 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 	case NoteRecord:
 		if c.clipboard != nil {
 			c.clipboard = nil
-			return c.patbank.f.SetLed(NoteRecord, LEDOff)
+			return c.patbank.pads.SetLed(NoteRecord, LEDOff)
 		}
 		c.clipboard = c.patbank.CurrentPattern().Copy()
-		return c.patbank.f.SetLed(NoteRecord, LEDGreen)
+		return c.patbank.pads.SetLed(NoteRecord, LEDGreen)
 	case NotePatternSong:
 		if err := c.setMode(songView, LEDGreen); err != nil {
 			return err

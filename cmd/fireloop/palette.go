@@ -152,7 +152,7 @@ func (p *PatternBank) drawStepCell(step int) error {
 		return nil
 	}
 	color := p.stepCellPaintColor(pattern, voice, step)
-	return p.f.LightPadColor(col, row, color)
+	return p.pads.LightPadColor(col, row, color)
 }
 
 // drawStepPlayhead moves the note-edit playhead along the step strip. The column playhead
@@ -306,7 +306,7 @@ func (p *PatternBank) drawNotePalette() error {
 			pads = append(pads, makePad(col, row, color))
 		}
 	}
-	return p.f.LightPadSlice(pads)
+	return p.pads.LightPadSlice(pads)
 }
 
 // chromaticStepAt maps a pad in the right-hand block to the step it stands for, or -1 when

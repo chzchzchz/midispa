@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"sync"
+
+	"github.com/chzchzchz/midispa/sysex/akai"
 )
 
 // padRows is the number of hardware pad rows. The track window shows one track per row.
@@ -26,11 +28,14 @@ type PatternBank struct {
 	pressedPads       uint64
 	rowPadMasks       [padRows]uint16
 	trackVoices       []int
-	f                 *Fire
 	// screen is where text goes. It is the Fire by default and a recorder in tests, so a
 	// test reads what a row says instead of decoding pixels.
 	screen textScreen
-	vb     *VoiceBank
+	// pads is where everything the unit shows rather than says goes. It is the Fire in
+	// production and a recorder in a test, so a pad or a light can be asserted without
+	// running an event through the handler that set it.
+	pads unitScreen
+	vb   *VoiceBank
 	// controller is the owner of this bank, set when the controller takes it. A bank built
 	// on its own, as a test builds one, has none: nothing is playing, so there is nothing
 	// to ask and no event to route.
@@ -65,8 +70,8 @@ func NewPatternBank(f *Fire, vb *VoiceBank) *PatternBank {
 		chromaticVelocity: defaultStepVelocity,
 		playheadStep:      noPlayheadStep,
 		noteEditHeldStep:  noHeldStep,
-		f:                 f,
 		screen:            f,
+		pads:              f,
 		vb:                vb,
 	}
 	ret.trackVoices = make([]int, padRows)
@@ -244,7 +249,7 @@ func (p *PatternBank) forEachRowWithVoice(voice *Voice, fn func(row int) error) 
 func (p *PatternBank) leaveNoteEdit() error {
 	p.editingNote = false
 	p.clearPadState()
-	return p.f.SetLed(NoteMode, LEDOff)
+	return p.pads.SetLed(NoteMode, LEDOff)
 }
 
 // resetEditState returns the view to where a pattern starts being worked on: nothing being
@@ -428,7 +433,7 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 	}
 	// Deselect currently selected row, if any.
 	if p.selTrackRow > 0 {
-		if err := p.f.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
+		if err := p.pads.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
 			return err
 		}
 		if err := p.printTrackRow(p.selTrackRow, false); err != nil {
@@ -447,7 +452,7 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 	if err := p.printTrackRow(row, true); err != nil {
 		return err
 	}
-	if err := p.f.SetLed(CCMuteLED1+(row-1), LEDGreen); err != nil {
+	if err := p.pads.SetLed(CCMuteLED1+(row-1), LEDGreen); err != nil {
 		return err
 	}
 	if err := p.redrawTrackPads(row); err != nil {
@@ -467,6 +472,28 @@ type textScreen interface {
 	Print(x, y int, s string) error
 	PrintInvert(x, y int, s string) error
 	ClearOLEDRows(y, n int) error
+}
+
+// unitScreen is everything about how the unit looks rather than what it says: the pads,
+// the button lights, and the blackout that suppresses both until a press wakes them.
+//
+// It is a seam of its own rather than more of textScreen because the two are wanted for
+// opposite things. A test that reads the screen wants the pads and lights left where the
+// Fire put them, so swapping the text layer alone must not redirect them; a test that
+// wants to know what a method painted swaps this instead. Keeping them apart is what lets
+// one recorder read text while the hardware keeps the rest.
+//
+// *Fire is the whole thing in production. A bank holds one of these and nothing else that
+// reaches the unit, so there is a single record of where a pad went and a test stands in
+// front of exactly one field.
+type unitScreen interface {
+	LightPadSlice(pads []akai.Pad) error
+	LightPadColor(x, y int, color [3]int) error
+	LightPadRow(row int, vals [16][3]int) error
+	LightPadColumn(col int, vals [4][3]int) error
+	SetLed(n, v int) error
+	Blackout() error
+	Wake() bool
 }
 
 // displayPrint writes text at a row and column, inverted when asked. Both banks draw
@@ -569,7 +596,7 @@ func (p *PatternBank) redrawTrackPads(row int) error {
 			rgb[p.stepCursor] = markCursorColor(rgb[p.stepCursor])
 		}
 	}
-	return p.f.LightPadRow(row-1, rgb)
+	return p.pads.LightPadRow(row-1, rgb)
 }
 
 // drawPadColumn repaints a column the playhead has moved off, so each step goes back to
@@ -645,7 +672,7 @@ func (p *PatternBank) drawPadColumnColor(col int, invert bool) error {
 			}
 		}
 	}
-	return p.f.LightPadColumn(col, rgb)
+	return p.pads.LightPadColumn(col, rgb)
 }
 
 // ToggleEvent edits the track shown on a zero-based pad row.
@@ -682,7 +709,7 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 		color = [3]int{}
 	}
 	if err := p.forEachRowWithVoice(voice, func(row int) error {
-		return p.f.LightPadColor(col, row, color)
+		return p.pads.LightPadColor(col, row, color)
 	}); err != nil {
 		return ev, err
 	}

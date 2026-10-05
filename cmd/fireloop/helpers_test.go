@@ -8,6 +8,8 @@ import (
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
+
+	"github.com/chzchzchz/midispa/sysex/akai"
 )
 
 // The setup every test starts from: a kit, a bank on it with the package globals pointed at
@@ -153,4 +155,80 @@ func assertMidiData(t *testing.T, event alsa.SeqEvent, want []byte) {
 	if !bytes.Equal(event.Data, want) {
 		t.Fatalf("MIDI data = %v, want %v", event.Data, want)
 	}
+}
+
+// padRecorder stands in for the pads and the button lights. It records what the bank asked
+// for rather than drawing it, which is what the seam is for: a test can read what a method
+// left showing without running an event through the handler that made it, and without the
+// display being involved at all.
+type padRecorder struct {
+	pads [padRows][padColumns][3]int
+	leds map[int]int
+}
+
+func (r *padRecorder) LightPadRow(row int, vals [padColumns][3]int) error {
+	if row >= 0 && row < padRows {
+		r.pads[row] = vals
+	}
+	return nil
+}
+
+func (r *padRecorder) LightPadColumn(col int, vals [padRows][3]int) error {
+	if col >= 0 && col < padColumns {
+		for row := range r.pads {
+			r.pads[row][col] = vals[row]
+		}
+	}
+	return nil
+}
+
+func (r *padRecorder) LightPadColor(x, y int, color [3]int) error {
+	if x >= 0 && x < padColumns && y >= 0 && y < padRows {
+		r.pads[y][x] = color
+	}
+	return nil
+}
+
+func (r *padRecorder) LightPadSlice(pads []akai.Pad) error {
+	for _, pad := range pads {
+		x, y := pad.Idx%padColumns, pad.Idx/padColumns
+		if x >= 0 && x < padColumns && y >= 0 && y < padRows {
+			r.pads[y][x] = [3]int{pad.Red, pad.Green, pad.Blue}
+		}
+	}
+	return nil
+}
+
+// A recorder never really blanks the unit, so it is never dark unless a test says so.
+func (r *padRecorder) Blackout() error { return nil }
+
+func (r *padRecorder) Wake() bool { return false }
+
+func (r *padRecorder) SetLed(n, v int) error {
+	if r.leds == nil {
+		r.leds = make(map[int]int)
+	}
+	r.leds[n] = v
+	return nil
+}
+
+// led reads one button light. It is a method so a test reads it the way it wrote it.
+func (r *padRecorder) led(note int) int {
+	return r.leds[note]
+}
+
+// pad reads one pad's colour, with y counting rows from the top of the grid and x columns
+// from its left.
+func (r *padRecorder) pad(x, y int) [3]int {
+	return r.pads[y][x]
+}
+
+// usePadRecorder points a bank's pads and lights at a recorder for the duration of a test.
+func usePadRecorder(t *testing.T, pads *unitScreen) *padRecorder {
+	t.Helper()
+	recorder := &padRecorder{}
+	previous := *pads
+	*pads = recorder
+	t.Cleanup(func() { *pads = previous })
+	return recorder
 }
