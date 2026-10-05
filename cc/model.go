@@ -1292,10 +1292,10 @@ type Microkorg2 struct {
 	// mixtures of the types either side, so there is no way to have pure
 	// 24 dB/octave filtering without also having some of the next type in it
 	// (manual p. 62).
-	FilterType      Control `cc:"27"` // 0 LP4 (-24 dB/oct LPF), 32 LP2 (-12 dB/oct LPF), 64 BP2 (-12 dB/oct BPF), 96 HP2 (-12 dB/oct HPF), 127 HP4 (-24 dB/oct HPF)
-	Cutoff          Control `cc:"74"` // Parameter range 0...127 (manual p. 63)
-	Resonance       Control `cc:"71"` // Parameter range 0...127 (manual p. 63)
-	FilterDrive     Control `cc:"83"` // Parameter range 0...127 (manual p. 63)
+	FilterType     Control `cc:"27"` // 0 LP4 (-24 dB/oct LPF), 32 LP2 (-12 dB/oct LPF), 64 BP2 (-12 dB/oct BPF), 96 HP2 (-12 dB/oct HPF), 127 HP4 (-24 dB/oct HPF)
+	Cutoff         Control `cc:"74"` // Parameter range 0...127 (manual p. 63)
+	Resonance      Control `cc:"71"` // Parameter range 0...127 (manual p. 63)
+	FilterDrive    Control `cc:"83"` // Parameter range 0...127 (manual p. 63)
 	FilterKeytrack Control `cc:"28"` // Parameter range -200.0...0.0...200.0 % of the pitch change, measured from C4 (manual p. 63)
 
 	// AMP EG. The velocity sensitivity is on this envelope rather than on
@@ -2754,6 +2754,269 @@ type Pro800 struct {
 	AbandonedParameter Control `cc:"118"` // 0x00 to 0x1f
 }
 
+// Liven8BitWarps is the Sonicware LIVEN 8bit warps, a groovebox with a
+// keyboard, a step sequencer and a four track looper as well as the synth
+// below. Its control change surface reaches the synth nearly end to end and
+// the sequencer only where a setting outlives the step being edited: the gate
+// time, the swing, the sequencer mode and whether recorded parameter locks
+// are applied at all.
+//
+// Two documents supply it, and neither is complete on its own. The
+// instrument's "LIVEN 8bit warps MIDI implementation chart"
+// (8bw_manual_MIDI_en_r1.pdf) gives every controller number it answers to, and
+// nothing else: it states for each one that it is both transmitted and
+// recognized, and it never says what a value means. The user's manual,
+// document LVN-010-UM-01-EN (8bw_manual_en_r2.pdf), says what each parameter
+// does and what range it covers but never mentions a controller number. The
+// numbers below are the chart's and the meanings are the manual's, joined
+// through the parameter names the chart prints in its Remarks column, which
+// match the panel labels the manual describes.
+//
+// Every field is a direct control change. The chart lists no non-registered
+// parameter, so there is nothing for the nrpn tag to address here and a caller
+// that builds NRPN controls for this model gets nil back.
+//
+// The chart records no value encoding for anything, which shapes every
+// comment below. The enumerations are written in the order the manual lists
+// their entries starting at 0: that is the panel's own ordering, but nothing in
+// either document states that the wire format numbers them that way, so it is
+// an assumption the two documents together support rather than one either of
+// them makes. The ranges are the manual's own, and a parameter narrower than
+// 0...127 says so on its field. The switches below are on and off and the
+// chart does not say whether that is 0 and 1, 0...63 and 64...127, or
+// something else, so their fields say only what they switch.
+//
+// Three properties of the instrument decide what a value means, and each of
+// them puts several parameters behind the same physical control.
+//
+// Every knob on the panel carries two labels, an uppercase one and a lowercase
+// one, and which of the two a knob is editing is decided by a mode button held
+// down while it is turned. Nine of the panel's knobs are each a pair of
+// parameters, which is 18 of the fields below; the four main knobs are three
+// more pairs plus main knob 4, another two. The remaining 11 fields are the
+// buttons, which have no knob to hide a second parameter behind.
+//
+// SynthParameter1 to 3 are the unshifted main knobs 1 to 3 and
+// SynthParameter4 to 6 are the same knobs shifted; Detune and MemoryLevel are
+// main knob 4 the same way. The remaining pairs are named for what they select
+// once the engine is known, which is why SynthParameter1 to 6 carry no such
+// name.
+//
+// SynthParameter1 to 6 mean something different in each of the four synth
+// engines, and SynthParameter4 to 6 mean nothing at all in two of them. The
+// per-engine table is in the comments on the fields; the engine it applies to
+// is whichever SynthEngine names.
+//
+// SynthEngine's own selection decides what the rest of the patch can be
+// playing, so the six synth parameters and the FM engine's own LFO among them
+// are inert under the wrong engine rather than merely differently scaled.
+//
+// The instrument answers none of the General MIDI controllers the other models
+// here carry. Its chart marks the modulation wheel, the channel volume, the
+// expression pedal, the sustain pedal, bank select, the NRPN selectors and all
+// three channel voice messages as neither transmitted nor recognized, and it
+// marks aftertouch, active sensing and all-notes-off the same way, so none of
+// them is a field here and sending one does nothing to the instrument.
+//
+// Two General MIDI numbers are spent on parameters of its own anyway: CC#32,
+// which General MIDI gives to bank select LSB, is this instrument's filter
+// type, and CC#38, which it gives to data entry LSB, is the envelope
+// generator's attack. The reuse is unambiguous only because the chart says
+// the instrument never implemented either message, so a sender who meant the
+// General MIDI one had no way to reach it. The same reasoning covers the two
+// non-control-change routes the instrument does answer, a Program Change that
+// selects a patch memory or a pattern and a System Exclusive dump carrying
+// patch, pattern and waveform data: both are real, and neither is something
+// this package's tags can address.
+//
+// The numbers the chart does not mention at all, 0 to 4, 6 to 19 and 56 to 127,
+// are the chart's silence rather than a measured silence from the instrument.
+// That is not evidence that the firmware ignores them, and it is not a reason
+// to treat them as free.
+type Liven8BitWarps struct {
+	// The engine is selected rather than morphed through: SynthEngine picks
+	// which of the six synth parameters below are live and what they mean.
+	// The four engines are WARP, which crossfades between two waveforms,
+	// ATTACK, which switches waveforms a set time after a key is played,
+	// MORPH, which morphs through three in order, and FM (manual p. 8).
+	SynthEngine Control `cc:"20"` // 0 WARP, 1 ATTACK, 2 MORPH, 3 FM
+
+	// The octave shifts the whole instrument's pitch and is the one
+	// performance control here with no knob behind it: the panel drives it
+	// with two buttons whose colours mark how far it has moved, and the
+	// manual gives no adjustment range for the control change (manual p. 7).
+	Octave Control `cc:"21"` // Plus or minus 3 octaves from standard
+
+	// Velocity is the level every note is played at, including notes arriving
+	// over MIDI, so it is a patch parameter rather than a keyboard
+	// performance control. 0...127 (manual p. 7).
+	Velocity Control `cc:"22"` // 0-127
+
+	// Detune is main knob 4 unshifted, and is the width of the detuning
+	// applied to the voice. Centre-zero over -16...+16 (manual p. 8).
+	Detune Control `cc:"23"` // -16...0...+16
+
+	// The six synth parameters are main knobs 1 to 3, unshifted and then
+	// shifted, so what one of them selects is decided twice over: by the
+	// engine and by whether shift is held. The engine parameter lists below
+	// are the manual's appendix Table 1 (p. 30).
+	//
+	// The three morphing engines pick waveforms with main knobs 1 and 2.
+	// Each of those knobs selects MEM, a preset waveform numbered 1 to 63,
+	// or a user waveform numbered U-01 to U-64, in that order. The list
+	// totals 128 entries, which is exactly the controller's own 0...127
+	// range, though neither document says how the two are lined up. FM picks
+	// a frequency ratio and an output level instead, and the engine's own
+	// LFO rate and depth sit on main knob 3 and on the shifted knob 1.
+	SynthParameter1 Control `cc:"24"` // WARP/ATTACK/MORPH: Waveform 1; FM: Ratio 0.5-32
+	SynthParameter2 Control `cc:"25"` // WARP/ATTACK/MORPH: Waveform 2; FM: Level 0-127
+	// Main knob 3 unshifted, which is where the three engines put the one
+	// time constant each of them is built around. Only WARP's is bipolar.
+	SynthParameter3 Control `cc:"26"` // WARP: Crossfade -63...0...+63; ATTACK: waveform switching time 0-127; MORPH: morphing time 0-127; FM: LFO rate 0-127
+	// Main knobs 1 to 3 shifted. Table 1 leaves WARP and ATTACK with no
+	// second layer, so for those two engines these three do nothing at all
+	// and a patch that randomizes them leaves them inert rather than wrong.
+	SynthParameter4 Control `cc:"27"` // MORPH: Waveform 3; FM: Ratio depth 0-127; unused on WARP and ATTACK
+	// Morphing mode is a count of waveforms in the cycle rather than a
+	// choice of a pattern, so 2 cycles between waveforms 1 and 2 and 3
+	// cycles through all three.
+	SynthParameter5 Control `cc:"28"` // MORPH: Morphing mode, 2 or 3 waveforms per cycle; FM: Level depth 0-127; unused on WARP and ATTACK
+	// The FM engine's LFO has eight shapes where the instrument's single
+	// global LFO has one, which is why this is a list and LfoRate below is
+	// not.
+	SynthParameter6 Control `cc:"29"` // FM: Waveform, 0 SINE, 1 SQAR, 2 TRI, 3 SAW, 4 R.SAW, 5 RAND, 6 LOG, 7 R.LOG; unused on WARP, ATTACK and MORPH
+
+	// AliasNoise mixes the aliasing artefacts of the 8-bit conversion back
+	// into the output. On an engine built from short waveforms it is what
+	// turns the raw digital edge into a deliberate character rather than a
+	// defect (manual p. 8).
+	AliasNoise Control `cc:"30"` // On or off
+
+	// The filter is switched on by one button and its type chosen by the
+	// filter buttons, which is why these are two controller numbers rather
+	// than one selection with an off position. FilterActive off leaves
+	// FilterType, FilterCutoff and FilterResonance inert (manual p. 9).
+	FilterActive Control `cc:"31"` // On or off
+	// BPF is selected by pressing the LPF and HPF buttons together, and the
+	// manual notes both of their LEDs light red for it, so it is a
+	// combination rather than a button of its own.
+	FilterType Control `cc:"32"` // 0 LPF, 1 HPF, 2 BPF
+
+	// FilterCutoff is 70 Hz to 21.6 kHz over the controller's 0...127
+	// (manual p. 9).
+	FilterCutoff Control `cc:"33"` // 0-127
+
+	// Resonance reads as bandwidth rather than emphasis when the filter is
+	// in BPF, and the two are not the same control: the resonance itself
+	// runs 0.1 to 10 while the BPF bandwidth runs 0.1 to 2.0 octaves
+	// (manual p. 9).
+	FilterResonance Control `cc:"34"` // 0-127
+
+	// The chart calls this FILTER CO and the panel calls the knob FLTR CO,
+	// which is the amount of the global LFO applied to the filter cutoff.
+	// It is a destination rather than a filter control: raising it makes
+	// the cutoff move at the LFO's rate (manual p. 9).
+	LfoToFilterCutoff Control `cc:"35"` // 0-127
+
+	// The instrument has one LFO and it produces a sine wave at all times,
+	// which is why there is no LFO wave field. 0.1 to 30 Hz (manual p. 9).
+	LfoRate Control `cc:"36"` // 0-127
+
+	// LfoToPitch is the depth of the same LFO applied to pitch, up to two
+	// octaves at full (manual p. 9).
+	LfoToPitch Control `cc:"37"` // 0-127
+
+	// The single envelope generator drives the amplifier and is always a
+	// decaying envelope: there is no hold gate, so sustain is the level the
+	// voice rests at once the decay runs out rather than a switch. Attack,
+	// decay and release are each a 0 to 5000 ms time and sustain is a level
+	// of 0 to 100% (manual p. 9).
+	EgAttack  Control `cc:"38"` // 0-127
+	EgDecay   Control `cc:"39"` // 0-127
+	EgSustain Control `cc:"40"` // 0-127
+	EgRelease Control `cc:"41"` // 0-127
+
+	// Sweep runs the notes being played up or down past the keys, and it is
+	// held rather than latched: the panel needs shift down while a sweep
+	// button is pressed, and the sweep ends when neither is (manual p. 7).
+	// A pattern recorded with sweep active sweeps during playback too.
+	//
+	// The panel has a button for each direction and the chart gives them one
+	// number between them, so a single value has to carry both which way the
+	// sweep runs and whether it is running. The chart does not say how it
+	// divides the controller's range between the two.
+	Sweep Control `cc:"42"`
+
+	// The time one sweep step takes is a stepped parameter rather than a
+	// continuous one, seven speeds from 7.8 ms to 54.7 ms (manual p. 10).
+	SweepSpeed Control `cc:"43"` // 1-7: 7.8, 15.6, 23.4, 31.3, 39.1, 46.9, 54.7 ms per step
+
+	// How far past the played notes a sweep travels (manual p. 10).
+	SweepShift Control `cc:"44"` // 0-7
+
+	// The effect is a single slot chosen by a button rather than a chain of
+	// slots, so FxSpeed and FxAmount below are meaningless until this names
+	// one of the four active types (manual p. 10).
+	FxType Control `cc:"45"` // 0 OFF, 1 CHORUS, 2 FLANGER, 3 DELAY, 4 CRUSH
+
+	// FxSpeed sets the effect's time and FxAmount its strength, so neither
+	// means anything without FxType. 0...127 (manual p. 10).
+	FxSpeed  Control `cc:"46"` // 0-127
+	FxAmount Control `cc:"47"` // 0-127
+
+	// The reverb is chosen by a button and has its own slot, running
+	// alongside the effect rather than after it (manual p. 10).
+	ReverbType Control `cc:"48"` // 0 OFF, 1 HALL, 2 ROOM, 3 ARENA, 4 PLAT, 5 TUNNEL, 6 INFINITY, 7 TAPE
+
+	// ReverbAmount is the reverb's mix against the dry sound, except under
+	// the TAPE reverb where it is the noise and wow/flutter mix instead,
+	// which is what makes that type sound like a tape rather than like a
+	// room. 0...127 (manual p. 10).
+	ReverbAmount Control `cc:"49"` // 0-127
+
+	// GateTime is shared by the step sequencer and the arpeggiator, so it
+	// sets both note lengths from one control, and it applies under every
+	// sequencer mode including STUTTER. 10 to 90% (manual p. 18).
+	GateTime Control `cc:"50"` // 10-90%
+
+	// Swing delays every other step, and unlike GateTime the panel reaches it
+	// only with the sequencer's mode button held down. The manual documents
+	// it solely under the step sequencer and never says whether the
+	// arpeggiator's notes are swung as well (manual p. 18).
+	Swing Control `cc:"51"` // 0-75%
+
+	// VoiceMode decides how held keys are played, and it is what makes the
+	// arpeggiator exist at all: in ARP mode the held keys are played one at
+	// a time, and GlideOrArpType below is read as an arpeggiator type
+	// rather than as a glide time (manual p. 11).
+	VoiceMode Control `cc:"52"` // 0 POLY (6 voices), 1 MONO (1 voice), 2 ARPEGGIATOR
+
+	// SeqMode changes how the step sequencer plays its steps back and can be
+	// changed mid-playback. Changing or reloading a pattern resets it to
+	// NORMAL (manual p. 18).
+	SeqMode Control `cc:"53"` // 0 NORMAL, 1 SLICE, 2 RANDOM, 3 STUTTER
+
+	// MemoryLevel is main knob 4 shifted: the level of the selected patch
+	// memory against the sound being played, which is how a performance
+	// ducks one patch under another. Centre-zero, from -inf dB to +12 dB
+	// (manual p. 11).
+	MemoryLevel Control `cc:"54"` // -inf...0...+12 dB
+
+	// ParameterLock decides whether the parameter changes recorded against
+	// the steps of a pattern are applied while that pattern plays: on, they
+	// are applied, and off, they are not (manual p. 16).
+	ParameterLock Control `cc:"55"` // On or off
+
+	// GlideOrArpType is one knob with two jobs, and which job it is doing
+	// is decided by VoiceMode above. In MONO it is the glide time between
+	// notes, 0 to 10000 ms over the controller's own 0...127. In
+	// ARPEGGIATOR it selects which of twelve orders the arpeggiator plays
+	// held keys in, and at that point a value of 0 to 11 is an index rather
+	// than a time. Nothing on the panel names one parameter that is two, so
+	// the two readings are kept on one field (manual p. 11).
+	GlideOrArpType Control `cc:"5"` // MONO: glide 0-10000 ms; ARPEGGIATOR: 0 UP, 1 DOWN, 2 UP DOWN, 3 DOWN UP, 4 UP&DOWN, 5 DOWN&UP, 6 RANDOM, 7 UP+1, 8 UP+2, 9 DOWN-1, 10 DOWN-2, 11 PLAY ORDER
+}
+
 type Model struct {
 	Model               string
 	*GMController       `json:"GMController,omitempty"`
@@ -2777,6 +3040,7 @@ type Model struct {
 	*ProVSMini          `json:"ProVSMini,omitempty"`
 	*MicroKorg          `json:"MicroKorg,omitempty"`
 	*Pro800             `json:"Pro800,omitempty"`
+	*Liven8BitWarps     `json:"Liven8BitWarps,omitempty"`
 }
 
 var modelNames = []string{
@@ -2801,6 +3065,7 @@ var modelNames = []string{
 	"Perform-VE",
 	"MiniNova",
 	"Pro 800",
+	"Liven 8bit warps",
 }
 
 // ModelNames returns the canonical model names accepted by NewModelParams.
@@ -2927,6 +3192,11 @@ func (m *Model) MidiParams() any {
 			m.Pro800 = &Pro800{}
 		}
 		return m.Pro800
+	case "Liven 8bit warps":
+		if m.Liven8BitWarps == nil {
+			m.Liven8BitWarps = &Liven8BitWarps{}
+		}
+		return m.Liven8BitWarps
 	default:
 		panic("unknown model " + m.Model)
 	}
