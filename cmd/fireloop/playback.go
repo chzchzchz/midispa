@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"sync"
 	"time"
@@ -76,49 +75,6 @@ func patternDuration(pattern *Pattern, bpm int) time.Duration {
 		return 0
 	}
 	return time.Duration(float64(pattern.Beats()) * float64(beatDuration(bpm)))
-}
-
-func (p *Playback) Start(aseq sequencerWriter) playbackStopFunc {
-	if isNilMidiWriter(aseq) {
-		p.reset()
-		return func() error { return nil }
-	}
-	return p.start(aseq)
-}
-
-func (p *Playback) start(aseq sequencerWriter) playbackStopFunc {
-	p.reset()
-	p.writer = aseq
-	// An instrument has to be set up before its first note, so the kit's patches go out
-	// here, ahead of the worker that plays the pattern. A patch that cannot be sent is
-	// logged rather than returned: playback that starts with the wrong settings is
-	// still playback, and an error escaping to the button handler would stop the
-	// process outright. A dump is not a channel message, so the worker waits out the
-	// settle the send asked for before it plays anything.
-	settle, err := sendKitPatches(aseq, p.vb)
-	p.settle = settle
-	if err != nil {
-		logger.Error("kit patches", "error", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	var runErr error
-	// The clock is handed to the loop rather than left on the playback, so where the time
-	// comes from is an argument at every call rather than a field a test has to remember
-	// to set and a nil check has to cover when it forgets.
-	clock := &realStepClock{}
-	go func() {
-		runErr = p.run(ctx, aseq, clock)
-		if runErr != nil && ctx.Err() == nil {
-			log.Printf("fireloop playback stopped: %v", runErr)
-		}
-		close(done)
-	}()
-	return func() error {
-		cancel()
-		<-done
-		return runErr
-	}
 }
 
 func (p *Playback) reset() {
@@ -535,10 +491,12 @@ func (p *Playback) patternForBeat(songBeat float32) *Pattern {
 	return p.nextPattern(songBeat)
 }
 
-// The writer is an interface so a test can drive the real sequencer loop with a stub
-// instead of a port. A missing writer still means nothing to drive: the painters are built
-// and published, but no worker starts, which is what Playback.Start's nil check did.
-func (pb *PatternBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
+// newPlayback builds the playback this bank would run: which pattern answers each beat,
+// and how the playhead is drawn as it moves. It starts nothing and claims nothing, because
+// a bank says what it would play and the controller decides that something is. The writer
+// is an interface so a test can drive the real sequencer loop with a stub instead of a
+// port.
+func (pb *PatternBank) newPlayback() *Playback {
 	var lastColumn int
 	// Reset to start of pattern.
 	next := func(beat float32) *Pattern {
@@ -568,18 +526,13 @@ func (pb *PatternBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
 		lastColumn = thisColumn
 		return pb.drawPadColumnInvert(thisColumn)
 	}
-	p := &Playback{updatePads: update, nextPattern: next, vb: pb.vb}
-	pb.playback = p
-	if isNilMidiWriter(aseq) {
-		p.reset()
-		return func() error { return nil }
-	}
-	return p.start(aseq)
+	return &Playback{updatePads: update, nextPattern: next, vb: pb.vb}
 }
 
-func (sb *SongBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
+// newPlayback is the song bank's counterpart. It measures against the song rather than
+// against a pattern, and it is where the running measure readout comes from.
+func (sb *SongBank) newPlayback() *Playback {
 	p := &Playback{vb: sb.kit()}
-	sb.playback = p
 	// Move to next song pattern.
 	p.nextPattern = func(beat float32) *Pattern {
 		pat, _ := sb.CurrentSong().BeatToPattern(beat)
@@ -607,5 +560,5 @@ func (sb *SongBank) startSequencer(aseq sequencerWriter) playbackStopFunc {
 		pidx := sb.pb.PatternIdxMap()[pat]
 		return sb.printRow(5, fmt.Sprintf("Pat-bar %03d", pidx))
 	}
-	return p.Start(aseq)
+	return p
 }

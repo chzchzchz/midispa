@@ -14,7 +14,6 @@ type SongBank struct {
 	measureStart int
 	pb           *PatternBank
 	f            *Fire
-	playback     *Playback
 	// screen is where the arrangement text goes, for the same reason as PatternBank.screen:
 	// the Fire by default and a recorder in a test, so a test reads what a row says instead
 	// of decoding pixels.
@@ -109,14 +108,17 @@ func (s *SongBank) Jump(n int) error {
 	return s.DrawPadPatterns()
 }
 
+// JumpMeasure seeks the running set to the measure under the grid. A seek with nothing
+// playing has nothing to schedule, so the gesture does nothing at all rather than reporting
+// a position it did not move to.
 func (s *SongBank) JumpMeasure(x, y int) error {
 	idx, ok := s.measureIndex(x, y)
-	if !ok || s.playback == nil {
+	if !ok || !s.pb.controller.playing() {
 		return nil
 	}
 	// Determine beat from grid position.
 	b := s.CurrentSong().IndexToBeat(idx)
-	lastSongBeat := s.playback.JumpSongBeat(b)
+	lastSongBeat := s.pb.controller.seekSongBeat(b)
 	lastMeasure := -1
 	if lastSongBeat >= 0 {
 		_, lastMeasure = s.CurrentSong().BeatToPattern(lastSongBeat)

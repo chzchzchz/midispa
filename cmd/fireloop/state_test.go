@@ -339,7 +339,7 @@ func TestStateLoadKeepsTheSelectedSong(t *testing.T) {
 	require.NotNilf(t, songs.CurrentSong(), "selected song %d is nil after the load; the bank holds %v",
 		songs.selSongIdx, songs.Songs)
 	// The arrangement view has to work against it, which is what reads the selected song.
-	songs.playback = &Playback{}
+	// A seek with nothing playing schedules nothing and is not an error.
 	songs.JumpMeasure(0, 0)
 }
 
@@ -591,7 +591,7 @@ func TestStateSaveWhilePlayingMatchesSaveAtRest(t *testing.T) {
 
 	writer := &captureMidiWriter{}
 	controller := bank.controller
-	controller.playback = bank.startSequencer(writer)
+	controller.startPlayback(writer, bank.newPlayback())
 	// Let the worker get into the pattern and start moving the playhead.
 	time.Sleep(20 * time.Millisecond)
 	playing := stateFrom(bank, songs, nil)

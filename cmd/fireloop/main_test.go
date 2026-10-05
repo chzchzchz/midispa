@@ -221,10 +221,9 @@ func shutdownBank(t *testing.T) (*Controller, *Playback, *captureMidiWriter, *fi
 	sim := newFireSim()
 	kit := trackWindowKit(4, 0)
 	controller := useController(t, NewFire(sim.write), kit)
-	bank := controller.patbank
 	writer := &captureMidiWriter{}
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
-	bank.playback = playback
+	controller.playback = stubSession(playback, nil)
 	require.NoError(t, playback.playChromaticEvent(writer, Event{
 		Voice: kit.voices[0], ChromaticNote: 60, Velocity: 100,
 	}))
@@ -307,10 +306,9 @@ func TestHandlerFailureReportsAFailedStop(t *testing.T) {
 	playback.writer = &failingSequencerWriter{err: errOutOfRange}
 	controller.patbank.f = NewFire(func([]byte) error { return errOutOfRange })
 	capture := useCaptureLog(t)
-	controller.patbank.playback = playback
 	// The stop handle is what fails here, so the release the stop asks for is the failing
 	// one rather than the handler.
-	controller.playback = func() error { return errOutOfRange }
+	controller.playback = stubSession(playback, func() error { return errOutOfRange })
 
 	controller.handleIncomingEvent(nil, padMessage(NoteMute1, 100))
 

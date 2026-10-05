@@ -28,39 +28,6 @@ func setBPM(value int) {
 	bpm.Store(int64(value))
 }
 
-func (c *Controller) stopPlayback() error {
-	var firstErr error
-	if c.playback != nil {
-		if err := c.playback(); err != nil {
-			firstErr = err
-		}
-		c.playback = nil
-	}
-	if c.patbank != nil {
-		if playback := c.patbank.playback; playback != nil {
-			if err := playback.releaseAll(playback.writer); err != nil && firstErr == nil {
-				firstErr = err
-			}
-			c.patbank.playback = nil
-		}
-		c.patbank.clearPadState()
-		// A playhead left lit on the step strip would outlive the playback that put it
-		// there, so put it back.
-		if err := c.patbank.clearStepPlayhead(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if c.songbank != nil {
-		if playback := c.songbank.playback; playback != nil {
-			if err := playback.releaseAll(playback.writer); err != nil && firstErr == nil {
-				firstErr = err
-			}
-			c.songbank.playback = nil
-		}
-	}
-	return firstErr
-}
-
 func (c *Controller) exitPatternEditModes() error {
 	if c.patbank.editingNote {
 		if err := c.patbank.setNoteEdit(false); err != nil {
@@ -235,8 +202,8 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 	}
 	switch int(ev.Data[1]) {
 	case NotePlay:
-		if c.playback == nil {
-			c.playback = c.songbank.startSequencer(aseq)
+		if !c.playing() {
+			c.startPlayback(aseq, c.songbank.newPlayback())
 		}
 	case NoteStop:
 		return c.stopPlayback()
@@ -282,11 +249,9 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 func (c *Controller) handlePatternMute(n int) error {
 	if c.alt {
 		// Clearing a row removes the notes it holds, which the pattern cannot do while it
-		// is being played, so that one stops playback. Alt stays engaged, so a run of rows
-		// can be cleared without pressing it again.
-		if err := c.stopPlayback(); err != nil {
-			return err
-		}
+		// is being played, so that one stops playback. ClearTrackRow stops it and only stops
+		// it for a row that holds a track, which is the only case where the set changes.
+		// Alt stays engaged, so a run of rows can be cleared without pressing it again.
 		return c.patbank.ClearTrackRow(n)
 	}
 	return c.patbank.SelectTrackRow(n)
@@ -406,7 +371,7 @@ func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) erro
 	if err != nil {
 		return err
 	}
-	if c.playback != nil || patEv.Velocity == 0 {
+	if c.playing() || patEv.Velocity == 0 {
 		return nil
 	}
 	return writeMidiMsgs(aseq, eventDestination(patEv), patEv.ToMidi())
@@ -475,16 +440,12 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 		if c.alt {
 			return c.patbank.ScrollTracks(1)
 		}
-		if err := c.stopPlayback(); err != nil {
-			return err
-		}
+		// Jump stops the set for a selection that moves, and not for one that is already at
+		// the end of the list. Going nowhere changes nothing that is playing.
 		return c.patbank.Jump(1)
 	case NotePatternDown:
 		if c.alt {
 			return c.patbank.ScrollTracks(-1)
-		}
-		if err := c.stopPlayback(); err != nil {
-			return err
 		}
 		return c.patbank.Jump(-1)
 	case NoteAlt:
@@ -521,25 +482,20 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 		return c.patbank.JogSelect(dir)
 	case NotePlay:
 		if c.clipboard != nil {
-			// Copy and paste.
-			if err := c.stopPlayback(); err != nil {
-				return err
-			}
+			// Copy and paste. SetPattern stops the set for itself, because it is the thing
+			// about to replace what the worker reads.
 			if err := c.patbank.SetPattern(c.clipboard); err != nil {
 				return err
 			}
 			c.clipboard = nil
 			return c.patbank.f.SetLed(NoteRecord, LEDOff)
 		}
-		if c.playback == nil {
-			c.playback = c.patbank.startSequencer(aseq)
+		if !c.playing() {
+			c.startPlayback(aseq, c.patbank.newPlayback())
 		}
 	case NoteStop:
 		if c.alt {
 			// Clear pattern. Alt stays engaged, so the track buttons keep scrolling.
-			if err := c.stopPlayback(); err != nil {
-				return err
-			}
 			return c.patbank.SetPattern(&Pattern{})
 		}
 		return c.stopPlayback()

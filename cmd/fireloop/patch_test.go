@@ -339,7 +339,7 @@ func TestPlaybackStartsWithTheKitPatch(t *testing.T) {
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[0], 60, 100)
 
 	writer := &captureMidiWriter{}
-	bank.controller.playback = bank.startSequencer(writer)
+	bank.controller.startPlayback(writer, bank.newPlayback())
 	// The worker writes the note a moment after start returns, so wait for it rather
 	// than racing it.
 	events := writer.waitForEvents(t, 4)
@@ -360,7 +360,7 @@ func TestPlaybackStartsWithTheKitPatch(t *testing.T) {
 	// Starting again sends the patch again, because the point is to put the instrument
 	// back the way the kit says even if something else moved it in between.
 	restarted := &captureMidiWriter{}
-	bank.controller.playback = bank.startSequencer(restarted)
+	bank.controller.startPlayback(restarted, bank.newPlayback())
 	again := restarted.waitForEvents(t, 2)
 	assertMidiData(t, again[0], []byte{midi.MakeCC(1), 74, 90})
 	assertMidiData(t, again[1], []byte{midi.MakePgm(1), 42})
@@ -374,7 +374,9 @@ func TestSongPlaybackStartsWithTheKitPatch(t *testing.T) {
 	songs := NewSongBank(NewFire(func([]byte) error { return nil }), bank)
 
 	writer := &captureMidiWriter{}
-	songs.startSequencer(writer)()
+	songSession := newPlaybackSession(songs.newPlayback())
+	songSession.Start(writer)
+	require.NoError(t, songSession.Stop())
 	// Only the patch is checked here: stopping the song also writes the transport's
 	// Start and Stop to the sync port, and the timing between them is another test's job.
 	events := writer.snapshot()
@@ -483,7 +485,7 @@ func TestSettleKeepsTheFirstNoteBack(t *testing.T) {
 
 	writer := &captureMidiWriter{}
 	start := time.Now()
-	bank.controller.playback = bank.startSequencer(writer)
+	bank.controller.startPlayback(writer, bank.newPlayback())
 	// The dump is written before the worker starts, so it is the only thing on the wire
 	// while the instrument loads.
 	require.Len(t, writer.snapshot(), 1, "only the dump is on the wire while the instrument loads")
@@ -504,9 +506,10 @@ func TestStopDuringPatchSettleReturnsPromptly(t *testing.T) {
 	device.Settle = Settle(30 * time.Second)
 	bank, _ := quietBank(t, NewVoiceBank([]Device{device}))
 
-	stop := bank.startSequencer(&captureMidiWriter{})
+	session := newPlaybackSession(bank.newPlayback())
+	session.Start(&captureMidiWriter{})
 	stopped := make(chan error, 1)
-	go func() { stopped <- stop() }()
+	go func() { stopped <- session.Stop() }()
 	select {
 	case err := <-stopped:
 		require.NoError(t, err, "the playback should end quietly rather than report the settle")
@@ -525,7 +528,7 @@ func TestUnreadablePatchDoesNotStopPlayback(t *testing.T) {
 	require.NoError(t, os.Remove(device.Patch))
 
 	writer := &captureMidiWriter{}
-	bank.controller.playback = bank.startSequencer(writer)
+	bank.controller.startPlayback(writer, bank.newPlayback())
 	require.NotNil(t, bank.controller.playback, "playback did not start")
 	require.NoError(t, bank.controller.stopPlayback(),
 		"an unreadable patch must not be reported as a failure to stop")

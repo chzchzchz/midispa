@@ -56,10 +56,10 @@ func TestModeDoesNotStopPlayback(t *testing.T) {
 	bank, _ := chromaBank(t)
 	require.NoError(t, bank.SelectTrackRow(1))
 	stopCalled := false
-	bank.controller.playback = func() error {
+	bank.controller.playback = stubSession(&Playback{}, func() error {
 		stopCalled = true
 		return nil
-	}
+	})
 	require.NoError(t, dispatch(bank, padMessage(NoteMode, 100)))
 	require.False(t, stopCalled, "Mode stopped active playback")
 	require.NotNil(t, bank.controller.playback, "Mode cleared active playback")

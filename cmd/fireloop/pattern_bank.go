@@ -29,9 +29,8 @@ type PatternBank struct {
 	f                 *Fire
 	// screen is where text goes. It is the Fire by default and a recorder in tests, so a
 	// test reads what a row says instead of decoding pixels.
-	screen   textScreen
-	vb       *VoiceBank
-	playback *Playback
+	screen textScreen
+	vb     *VoiceBank
 	// controller is the owner of this bank, set when the controller takes it. A bank built
 	// on its own, as a test builds one, has none: nothing is playing, so there is nothing
 	// to ask and no event to route.

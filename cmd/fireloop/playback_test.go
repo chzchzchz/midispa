@@ -69,9 +69,9 @@ func TestWriteSequencerPort(t *testing.T) {
 
 func TestPlaybackStopReturnsRunError(t *testing.T) {
 	expected := errors.New("start failed")
-	playback := &Playback{}
-	stop := playback.start(&failingSequencerWriter{portErr: expected})
-	require.ErrorIs(t, stop(), expected)
+	session := newPlaybackSession(&Playback{})
+	session.Start(&failingSequencerWriter{portErr: expected})
+	require.ErrorIs(t, session.Stop(), expected)
 }
 
 func TestPlaybackReturnsEventErrorAndStops(t *testing.T) {
@@ -81,8 +81,9 @@ func TestPlaybackReturnsEventErrorAndStops(t *testing.T) {
 	expected := errors.New("event write failed")
 	writer := &failingSequencerWriter{err: expected}
 	playback := &Playback{nextPattern: func(float32) *Pattern { return pattern }}
-	stop := playback.start(writer)
-	require.ErrorIs(t, stop(), expected)
+	session := newPlaybackSession(playback)
+	session.Start(writer)
+	require.ErrorIs(t, session.Stop(), expected)
 	require.Len(t, writer.port, 2, "the sync port takes a Start and a Stop")
 	require.Equal(t, byte(midi.Start), writer.port[0].Data[0])
 	require.Equal(t, byte(midi.Stop), writer.port[1].Data[0])
@@ -212,7 +213,7 @@ func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	require.NoError(t, playback.playChromaticEvent(writer, Event{Voice: voice, ChromaticNote: 72, Velocity: 88}))
 	controller := useController(t, NewFire(func([]byte) error { return nil }), stateKit())
-	controller.patbank.playback = playback
+	controller.playback = stubSession(playback, nil)
 	controller.stopPlayback()
 	require.Zero(t, playback.activeNoteCount(), "stop left an active chromatic note")
 	require.Len(t, writer.events, 2, "stop writes a note-on and a note-off")

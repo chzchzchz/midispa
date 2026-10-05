@@ -69,6 +69,35 @@ func dispatch(bank *PatternBank, ev alsa.SeqEvent) error {
 	return bank.controller.Handle(nil, ev)
 }
 
+// stubSession installs a set with no worker behind it. Nothing is playing, but stopping it
+// releases the notes the playback holds and then calls the handle given, which is what a
+// worker does on its way out and is how a test hears whether a handler stopped playback
+// without running a worker to stop.
+func stubSession(playback *Playback, stop playbackStopFunc) *PlaybackSession {
+	if stop == nil {
+		stop = func() error { return nil }
+	}
+	session := newPlaybackSession(playback)
+	session.stop = func() error {
+		if err := stop(); err != nil {
+			return err
+		}
+		return playback.releaseAll(playback.writer)
+	}
+	close(session.done)
+	return session
+}
+
+// installedPlayback is the playback behind whatever set the controller has installed, and
+// it does not insist that a worker is running: a press of Play with no port behind it
+// publishes the painters and starts nothing, which is the state a test wants when it is
+// driving the playhead by hand rather than waiting for a worker to move it.
+func installedPlayback(t *testing.T, controller *Controller) *Playback {
+	t.Helper()
+	require.NotNil(t, controller.playback, "nothing is installed")
+	return controller.playback.playback
+}
+
 func assertVisibleTracks(t *testing.T, bank *PatternBank, first int) {
 	t.Helper()
 	for row := 1; row <= padRows; row++ {
@@ -338,7 +367,7 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 	previousBPM := currentBPM()
 	setBPM(300)
 	t.Cleanup(func() { setBPM(previousBPM) })
-	bank.controller.playback = bank.startSequencer(&captureMidiWriter{})
+	bank.controller.startPlayback(&captureMidiWriter{}, bank.newPlayback())
 	// Wait for the worker to move the playhead a few steps, so the switches below land on
 	// top of it rather than in the first moments of playback.
 	waitFor(t, "the playhead to move", func() bool { return writes.Load() > stepPaints })
@@ -363,6 +392,43 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 	require.Nil(t, bank.controller.playback, "stopping left the sequencer armed")
 }
 
+// A press that cannot change the set must not end it. The pattern buttons stop playback
+// because moving between patterns rewrites what the worker reads, but at the end of the
+// list there is nowhere to move to, and the stop belongs to the bank that knows whether the
+// selection moved rather than to the handler that asked.
+func TestAPressThatChangesNothingDoesNotStopTheSet(t *testing.T) {
+	bank, _ := quietBank(t, trackWindowKit(8, 0))
+	require.Equal(t, 1, bank.selPatIdx, "the test needs the first pattern selected to start with")
+
+	stopped := 0
+	install := func() {
+		bank.controller.playback = stubSession(&Playback{}, func() error {
+			stopped++
+			return nil
+		})
+	}
+
+	// Pattern indices start at one, so up from the first is the move.
+	install()
+	require.NoError(t, dispatch(bank, padMessage(NotePatternUp, 100)))
+	require.Equal(t, 2, bank.selPatIdx, "the pattern did not move")
+	require.Positive(t, stopped, "moving to another pattern left the set playing")
+
+	// Down moves back, which changes what would be played just as much.
+	stopped = 0
+	install()
+	require.NoError(t, dispatch(bank, padMessage(NotePatternDown, 100)))
+	require.Equal(t, 1, bank.selPatIdx, "the pattern did not move back")
+	require.Positive(t, stopped, "moving back to the first pattern left the set playing")
+
+	// And now there is nothing before the first one.
+	stopped = 0
+	install()
+	require.NoError(t, dispatch(bank, padMessage(NotePatternDown, 100)))
+	require.Equal(t, 1, bank.selPatIdx, "the selection moved past the first pattern")
+	require.Zero(t, stopped, "pressing down at the end of the pattern list stopped the set")
+}
+
 // Alt plus a solo button clears the row's notes, which changes what is being played, so
 // that one does stop playback. It must not drag the plain selection path down with it.
 func TestAltSoloStillStopsPlayback(t *testing.T) {
@@ -370,10 +436,10 @@ func TestAltSoloStillStopsPlayback(t *testing.T) {
 	voice := kit.voices[0]
 	bank.CurrentPattern().ToggleEvent(Event{Voice: voice, Beat: stepBeat(0), Velocity: 100})
 	stopped := 0
-	bank.controller.playback = func() error {
+	bank.controller.playback = stubSession(&Playback{}, func() error {
 		stopped++
 		return nil
-	}
+	})
 	bank.controller.alt = true
 	require.NoError(t, dispatch(bank, padMessage(NoteMute1, 100)))
 	require.Positive(t, stopped, "clearing a row left the pattern playing")
@@ -381,10 +447,10 @@ func TestAltSoloStillStopsPlayback(t *testing.T) {
 	require.False(t, cleared, "Alt plus the solo button did not clear the row")
 
 	// The same button without Alt is a selection, and it leaves the sequencer alone.
-	bank.controller.playback = func() error {
+	bank.controller.playback = stubSession(&Playback{}, func() error {
 		stopped++
 		return nil
-	}
+	})
 	bank.controller.alt = false
 	require.NoError(t, dispatch(bank, padMessage(NoteMute1, 100)))
 	require.Equal(t, 1, stopped, "only the clear should have stopped playback")
