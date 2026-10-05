@@ -66,7 +66,7 @@ func useTestBanks(t *testing.T) (*ledRecorder, *PatternBank, *SongBank, *Fire) {
 	controller := useController(t, fire, voiceBank)
 	require.NoError(t, controller.songbank.Jump(0))
 	// The unit comes back with the banks because a blackout is the unit's own state, not
-	// something a bank holds, so a test that wants to know asks the thing that has it.
+	// something a bank holds, and a test that wants to know asks the thing that has it.
 	return recorder, controller.patbank, controller.songbank, fire
 }
 

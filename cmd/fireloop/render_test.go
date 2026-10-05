@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,4 +44,16 @@ func TestAPadRepaintIsReadableWithoutAnEvent(t *testing.T) {
 	require.NoError(t, bank.redrawTrackPads(1))
 	require.NotEqual(t, dark, pads.pad(1, 0), "a step holding a note should not be dark")
 	require.Equal(t, [3]int{}, pads.pad(2, 0), "the step next to it should still be dark")
+}
+
+// The unit has more buttons than fireloop binds, and a press on one of those is said out
+// loud rather than swallowed. This matters because NoteSnap, Play and Record and several
+// others share a value, so a constant that stops being routed looks identical to a button
+// that is merely not ours.
+func TestAnUnboundControlIsReportedRatherThanSwallowed(t *testing.T) {
+	bank, _ := quietBank(t, trackWindowKit(4, -1))
+	capture := useCaptureLog(t)
+
+	require.NoError(t, dispatch(bank, padMessage(NoteSnap, 100)), "an unbound control should not fail a press")
+	assert.Contains(t, capture.messages(), "unbound control", "a press on an unbound control was swallowed")
 }

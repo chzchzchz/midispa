@@ -17,7 +17,7 @@ func TestChromaticPaletteAndModeEditing(t *testing.T) {
 	})
 	require.NoError(t, bank.SelectTrackRow(1))
 	require.NoError(t, dispatch(bank, padMessage(NoteMode, 100)))
-	require.True(t, bank.NoteEditActive(), "Mode did not enter note-edit mode")
+	require.True(t, bank.noteEditActive(), "Mode did not enter note-edit mode")
 	require.NoError(t, bank.controller.handlePatternGrid(nil, 1, 0, 100))
 
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
@@ -249,7 +249,7 @@ func TestSelectKnobJogsVoiceOutsideNoteEdit(t *testing.T) {
 	require.NoError(t, dispatch(bank, selectKnobCC(EncoderRight)))
 	require.NotEqual(t, before, bank.trackVoice(1), "the knob did not jog the track's voice")
 	require.Equal(t, 0, bank.paletteOctave, "the palette is untouched outside note-edit mode")
-	require.False(t, bank.NoteEditActive(), "the knob entered note-edit mode")
+	require.False(t, bank.noteEditActive(), "the knob entered note-edit mode")
 }
 
 // The right-hand block stands for the steps themselves: it reads in the same order as the
@@ -360,7 +360,7 @@ func TestPalettePadThatSelectedTheStepIsRefused(t *testing.T) {
 	press(row, col, 100)
 	press(row, col, 0)
 	require.Equal(t, 6, bank.StepCursor(), "the step press moved the cursor")
-	require.False(t, bank.NoteEditActive(), "the step press entered note-edit mode")
+	require.False(t, bank.noteEditActive(), "the step press entered note-edit mode")
 
 	// Enter note selection. The step's note must survive the same pad being pressed.
 	require.NoError(t, dispatch(bank, padMessage(NoteMode, 100)))

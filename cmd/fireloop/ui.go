@@ -406,7 +406,65 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 	if onGrid {
 		return c.handlePatternGrid(aseq, x, y, velocity)
 	}
-	switch int(ev.Data[1]) {
+	note := int(ev.Data[1])
+	// The dispatcher only decides which family a control belongs to; each family then
+	// answers for its own controls. Splitting them here is what keeps a button from being
+	// a case buried in a switch that also has to work out what kind of event arrived.
+	// Every bound control is named here, so a control added to a handler without being
+	// added here shows up as unbound rather than being quietly swallowed by whatever
+	// family happens to be the last one tried.
+	switch note {
+	case NotePlay, NoteStop, NoteTap:
+		return c.handleTransport(aseq, note)
+	case NoteShift, NoteAlt, NoteMute1, NoteMute2, NoteMute3, NoteMute4, CCVolume, CCSelect:
+		return c.handleEditing(aseq, ev, note)
+	case NoteOverview, NoteMode, NoteGridLeft, NoteGridRight,
+		NotePatternUp, NotePatternDown, NoteRecord, NotePatternSong,
+		NoteBrowser, NoteAccent:
+		return c.handleNavigation(aseq, note)
+	}
+	// The unit has more buttons than the program binds. Saying so once is better than a
+	// control that looks handled and is not.
+	logger.Debug("unbound control", "note", note)
+	return nil
+}
+
+// handleTransport answers Play, Stop and Tap: the controls that start, end or set the tempo
+// of a set rather than changing anything about what is written down.
+func (c *Controller) handleTransport(aseq sequencerWriter, note int) error {
+	switch note {
+	case NotePlay:
+		if c.clipboard != nil {
+			// Copy and paste. SetPattern stops the set for itself, because it is the thing
+			// about to replace what the worker reads.
+			if err := c.patbank.SetPattern(c.clipboard); err != nil {
+				return err
+			}
+			c.clipboard = nil
+			return c.patbank.pads.SetLed(NoteRecord, LEDOff)
+		}
+		if !c.playing() {
+			c.startPlayback(aseq, c.patbank.newPlayback())
+		}
+		return nil
+	case NoteStop:
+		if c.alt {
+			// Clear pattern. Alt stays engaged, so the track buttons keep scrolling.
+			return c.patbank.SetPattern(&Pattern{})
+		}
+		return c.stopPlayback()
+	case NoteTap:
+		return c.tapTempo()
+	default:
+		return nil
+	}
+}
+
+// handleEditing answers the controls that change notes or hold a modifier: Shift, Alt, the
+// four track rows, and the two encoders.
+func (c *Controller) handleEditing(aseq sequencerWriter, ev alsa.SeqEvent, note int) error {
+	velocity := int(ev.Data[2])
+	switch note {
 	case NoteShift:
 		c.shift = !c.shift
 		logger.Debug("shift", "on", c.shift, "alt", c.alt)
@@ -422,32 +480,6 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 		} else {
 			return c.patbank.pads.SetLed(NoteShift, LEDRed)
 		}
-	// Overview exposes the per-pattern length while the encoder changes steps.
-	case NoteOverview:
-		if err := c.stopPlayback(); err != nil {
-			return err
-		}
-		return c.patbank.ToggleLengthMode()
-	case NoteMode:
-		return c.patbank.ToggleNoteMode()
-	case NoteGridLeft:
-		return c.patbank.MoveStepCursor(-1)
-	case NoteGridRight:
-		return c.patbank.MoveStepCursor(1)
-	case NotePatternUp:
-		// Alt reuses the pattern buttons for the track window, which is why Alt
-		// stays lit until it is pressed again.
-		if c.alt {
-			return c.patbank.ScrollTracks(1)
-		}
-		// Jump stops the set for a selection that moves, and not for one that is already at
-		// the end of the list. Going nowhere changes nothing that is playing.
-		return c.patbank.Jump(1)
-	case NotePatternDown:
-		if c.alt {
-			return c.patbank.ScrollTracks(-1)
-		}
-		return c.patbank.Jump(-1)
 	case NoteAlt:
 		if c.shift {
 			// Blackout. The controls keep their state, so the next press brings the
@@ -474,33 +506,51 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 		if c.patbank.lengthEditActive() {
 			return c.patbank.AdjustLength(dir)
 		}
-		if c.patbank.NoteEditActive() {
+		if c.patbank.noteEditActive() {
 			// In note-edit mode the knob moves the palette by an octave rather than the
 			// track's voice, so the pitch being chosen stays on screen while it moves.
 			return c.patbank.ShiftPaletteOctave(dir)
 		}
 		return c.patbank.JogSelect(dir)
-	case NotePlay:
-		if c.clipboard != nil {
-			// Copy and paste. SetPattern stops the set for itself, because it is the thing
-			// about to replace what the worker reads.
-			if err := c.patbank.SetPattern(c.clipboard); err != nil {
-				return err
-			}
-			c.clipboard = nil
-			return c.patbank.pads.SetLed(NoteRecord, LEDOff)
+	}
+	// Shift with nothing typed into it is the one control that has nothing to do, and
+	// saying so is cheaper than making every path through it return.
+	return nil
+}
+
+// handleNavigation answers everything that moves the view without changing a note: the
+// pattern buttons, the step cursor, the two edit modes, and the way into the arrangement.
+// These are the controls that stay live while a set plays, because none of them writes
+// state the playback worker reads.
+func (c *Controller) handleNavigation(aseq sequencerWriter, note int) error {
+	switch note {
+	// Overview exposes the per-pattern length while the encoder changes steps. It stops
+	// the set first, because a length edit moves where the playhead should be.
+	case NoteOverview:
+		if err := c.stopPlayback(); err != nil {
+			return err
 		}
-		if !c.playing() {
-			c.startPlayback(aseq, c.patbank.newPlayback())
-		}
-	case NoteStop:
+		return c.patbank.ToggleLengthMode()
+	case NoteMode:
+		return c.patbank.ToggleNoteMode()
+	case NoteGridLeft:
+		return c.patbank.MoveStepCursor(-1)
+	case NoteGridRight:
+		return c.patbank.MoveStepCursor(1)
+	case NotePatternUp:
+		// Alt reuses the pattern buttons for the track window, which is why Alt
+		// stays lit until it is pressed again.
 		if c.alt {
-			// Clear pattern. Alt stays engaged, so the track buttons keep scrolling.
-			return c.patbank.SetPattern(&Pattern{})
+			return c.patbank.ScrollTracks(1)
 		}
-		return c.stopPlayback()
-	case NoteTap:
-		return c.tapTempo()
+		// Jump stops the set for a selection that moves, and not for one that is
+		// already at the end of the list. Going nowhere changes nothing playing.
+		return c.patbank.Jump(1)
+	case NotePatternDown:
+		if c.alt {
+			return c.patbank.ScrollTracks(-1)
+		}
+		return c.patbank.Jump(-1)
 	case NoteRecord:
 		if c.clipboard != nil {
 			c.clipboard = nil
@@ -513,8 +563,9 @@ func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 			return err
 		}
 		return c.songbank.redraw()
-	case NoteBrowser, NoteAccent:
-		return c.handleStateButton(int(ev.Data[1]))
+	default:
+		// Browser and Accent take Shift to reach the session file, and do nothing
+		// without it.
+		return c.handleStateButton(note)
 	}
-	return nil
 }

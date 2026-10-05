@@ -26,10 +26,6 @@ func (p *PatternBank) StepCursor() int {
 	return p.stepCursor
 }
 
-func (p *PatternBank) NoteEditActive() bool {
-	return p.mode == noteEdit
-}
-
 // noteEditActive and lengthEditActive are the two ways of asking what mode the grid is in.
 // They exist so a reader states which mode it means rather than reading a bare flag.
 func (p *PatternBank) noteEditActive() bool {
@@ -64,8 +60,10 @@ func (p *PatternBank) clampStepCursor() {
 	}
 }
 
-// redrawPatternRows keeps all step rows synchronized after a cursor or note edit.
-func (p *PatternBank) redrawPatternRows() error {
+// redrawStepRows repaints every row's steps together, which is what a cursor or a note
+// edit needs: the rows are one grid on the unit, so a row left showing where it was reads
+// as a note that is not there.
+func (p *PatternBank) redrawStepRows() error {
 	for row := 1; row <= padRows; row++ {
 		if err := p.redrawTrackPads(row); err != nil {
 			return err
@@ -115,7 +113,7 @@ func (p *PatternBank) repaintEditView() error {
 		}
 		return p.printStepStatus()
 	}
-	if err := p.redrawPatternRows(); err != nil {
+	if err := p.redrawStepRows(); err != nil {
 		return err
 	}
 	return p.printStepStatus()

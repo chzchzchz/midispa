@@ -435,45 +435,59 @@ func (p *PatternBank) ClearTrackRow(row int) error {
 	return p.printStepStatus()
 }
 
-// SelectTrackRow moves the selection to a pad row and keeps the pattern playing. Choosing
-// a track to edit is a view change rather than an edit, so stopping to do it would cut a
-// performance short every time the row moved. The selection is not something the playback
-// worker reads, so this stays safe while a pattern runs.
+// SelectTrackRow moves the selection to a pad row, or clears it when the row is pressed
+// again, and keeps the pattern playing. Choosing a track to edit is a view change rather
+// than an edit, so stopping to do it would cut a performance short every time the row
+// moved. The selection is not something the playback worker reads, so this stays safe
+// while a pattern runs.
 //
 // Note editing is left alone, which is also what keeps it safe: the worker reads whether
 // note editing owns the pad grid, and a playing pattern makes that a shared read. The
 // palette simply follows the selection, editing the voice now on the selected row; the
 // status row and the step guard already report that voice. Press Mode to leave.
+//
+// Only the selection changes here. What the unit shows afterwards is the render's job, so
+// the state can be set and read without drawing and the drawing fails on its own.
 func (p *PatternBank) SelectTrackRow(row int) error {
 	if p.trackForPadRow(row) == 0 {
 		return nil
 	}
-	// Deselect currently selected row, if any.
-	if p.selTrackRow > 0 {
-		if err := p.pads.SetLed(CCMuteLED1+(p.selTrackRow-1), 0); err != nil {
-			return err
-		}
-		if err := p.printTrackRow(p.selTrackRow, false); err != nil {
-			return err
-		}
-	}
 	// A pad held for the previous selection would complete a gesture against the wrong
-	// voice, so the held pads go; the note itself is untouched.
+	// voice, so the held pads go; the notes themselves are untouched.
 	p.clearPadState()
-	if p.selTrackRow == row {
+	previous := p.selTrackRow
+	if previous == row {
 		p.selTrackRow = 0
-		return p.printStepStatus()
+	} else {
+		p.selTrackRow = row
 	}
-	// Select new row.
-	p.selTrackRow = row
-	if err := p.printTrackRow(row, true); err != nil {
-		return err
+	return p.renderTrackSelection(previous)
+}
+
+// renderTrackSelection repaints the display for a move from one selected row to another,
+// reading the row being arrived at from the selection rather than being told, so the two
+// cannot disagree about where the highlight is. The row being left goes dark and the row
+// being arrived at goes green and has its pads repainted, so the highlight follows the
+// selection rather than being left wherever it was last drawn.
+func (p *PatternBank) renderTrackSelection(previous int) error {
+	if previous > 0 {
+		if err := p.pads.SetLed(CCMuteLED1+(previous-1), LEDOff); err != nil {
+			return err
+		}
+		if err := p.printTrackRow(previous, false); err != nil {
+			return err
+		}
 	}
-	if err := p.pads.SetLed(CCMuteLED1+(row-1), LEDGreen); err != nil {
-		return err
-	}
-	if err := p.redrawTrackPads(row); err != nil {
-		return err
+	if current := p.selTrackRow; current > 0 {
+		if err := p.printTrackRow(current, true); err != nil {
+			return err
+		}
+		if err := p.pads.SetLed(CCMuteLED1+(current-1), LEDGreen); err != nil {
+			return err
+		}
+		if err := p.redrawTrackPads(current); err != nil {
+			return err
+		}
 	}
 	return p.printStepStatus()
 }

@@ -164,6 +164,7 @@ func assertMidiData(t *testing.T, event alsa.SeqEvent, want []byte) {
 type padRecorder struct {
 	pads [padRows][padColumns][3]int
 	leds map[int]int
+	dark bool
 }
 
 func (r *padRecorder) LightPadRow(row int, vals [padColumns][3]int) error {
@@ -199,10 +200,18 @@ func (r *padRecorder) LightPadSlice(pads []akai.Pad) error {
 	return nil
 }
 
-// A recorder never really blanks the unit, so it is never dark unless a test says so.
-func (r *padRecorder) Blackout() error { return nil }
+// A blackout is remembered rather than ignored, so IsDark answers what happened rather
+// than always saying the unit is awake.
+func (r *padRecorder) Blackout() error {
+	r.dark = true
+	return nil
+}
 
-func (r *padRecorder) Wake() bool { return false }
+func (r *padRecorder) Wake() bool {
+	woken := r.dark
+	r.dark = false
+	return woken
+}
 
 func (r *padRecorder) SetLed(n, v int) error {
 	if r.leds == nil {

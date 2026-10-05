@@ -329,14 +329,14 @@ func TestTrackWindowChromaticEditingFollowsRow(t *testing.T) {
 	// Scrolling away releases the palette so the next window starts in step mode.
 	require.NoError(t, bank.ToggleNoteMode())
 	require.NoError(t, bank.ScrollTracks(1))
-	require.False(t, bank.NoteEditActive(), "scrolling kept note-edit mode on the previous track")
+	require.False(t, bank.noteEditActive(), "scrolling kept note-edit mode on the previous track")
 }
 
 func TestScrollTracksClosesNoteEditOnScrolledRow(t *testing.T) {
 	bank, _ := quietBank(t, trackWindowKit(8, 0))
 	require.NoError(t, bank.SelectTrackRow(1))
 	require.NoError(t, bank.ToggleNoteMode())
-	require.True(t, bank.NoteEditActive(), "a chromatic track did not enter note-edit mode")
+	require.True(t, bank.noteEditActive(), "a chromatic track did not enter note-edit mode")
 	bank.pressPad(0, 3)
 	require.NoError(t, bank.ScrollTracks(1))
 	require.Zero(t, bank.pressedPads, "scrolling kept a pad held from the previous window")

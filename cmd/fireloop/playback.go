@@ -508,7 +508,7 @@ func (pb *PatternBank) newPlayback() *Playback {
 	}
 	// Light up column if new position.
 	update := func(beat float32) error {
-		if pb.NoteEditActive() {
+		if pb.noteEditActive() {
 			// Note editing owns the grid with the pitch palette, so the playhead moves
 			// along the step strip rather than over the palette.
 			return pb.drawStepPlayhead(eventStep(Event{Beat: beat}))
