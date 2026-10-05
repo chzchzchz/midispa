@@ -9,7 +9,10 @@ import (
 	"github.com/chzchzchz/midispa/midi"
 )
 
-type eventProcessFunc func(*alsa.Seq, alsa.SeqEvent) error
+// eventProcessFunc applies one event to the banks. The writer is an interface so a test can
+// drive the real handler with a stub; starting playback also needs the sync port, which is
+// why this is the wider interface rather than a plain MIDI writer.
+type eventProcessFunc func(sequencerWriter, alsa.SeqEvent) error
 
 const defaultBPM = 139
 
@@ -246,7 +249,7 @@ func toggleAlt() error {
 	return patbank.f.SetLed(NoteAlt, 0)
 }
 
-func processSongEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
+func processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}
@@ -405,7 +408,7 @@ func reportState(text string) error {
 	return patbank.printText(lengthDisplayRow, 0, fitOLEDText(text), false)
 }
 
-func handlePatternGrid(aseq *alsa.Seq, x, y, vel int) error {
+func handlePatternGrid(aseq sequencerWriter, x, y, vel int) error {
 	if vel == 0 {
 		patbank.releasePad(y, x)
 		return nil
@@ -444,7 +447,7 @@ func handlePatternGrid(aseq *alsa.Seq, x, y, vel int) error {
 	return writeMidiMsgs(aseq, eventDestination(patEv), patEv.ToMidi())
 }
 
-func processPatternEvent(aseq *alsa.Seq, ev alsa.SeqEvent) error {
+func processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {
 	if len(ev.Data) != 3 {
 		return nil
 	}

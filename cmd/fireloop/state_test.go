@@ -529,7 +529,7 @@ func TestLeavingSavesAfterAPanic(t *testing.T) {
 	useStateGlobals(t, path, bank, songs, nil)
 	previousProcess := processEvent
 	t.Cleanup(func() { processEvent = previousProcess })
-	processEvent = func(aseq *alsa.Seq, ev alsa.SeqEvent) error {
+	processEvent = func(aseq sequencerWriter, ev alsa.SeqEvent) error {
 		// The edit lands through the production handler first, so what the save has to
 		// catch is a half-finished gesture rather than an untouched session.
 		if err := processPatternEvent(aseq, ev); err != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -19,6 +20,44 @@ const padColumns = 16
 // at the end is never left half cut, because fitOLEDText trims at this width and a number
 // cut in half still reads as a number that is true.
 const oledTextWidth = 20
+
+// oledColumns and oledRows are the size of the readout screen, in screen commands rather
+// than pixels: one column is one byte of a glyph and one row is one band.
+const (
+	oledColumns = 128
+	oledRows    = 8
+	// oledLastColumn is the last addressable column. A screen update names its first and
+	// last column inclusively, so a full-width clear ends here rather than one past it.
+	oledLastColumn = oledColumns - 1
+)
+
+// glyphCache holds every font6x8 glyph already transposed into the column bytes the screen
+// command sends. The table is small and fixed, so it is built once at startup: the playhead
+// repaints on every sixteenth of a set, and transposing per draw would repeat the same work
+// thousands of times for the same handful of glyphs.
+var glyphCache [256][glyphWidth]byte
+
+func init() {
+	for code := range glyphCache {
+		transposeGlyph(byte(code), &glyphCache[code])
+	}
+}
+
+// transposeGlyph converts one glyph from the font's row-per-byte layout into the
+// column-per-byte layout the hardware takes.
+func transposeGlyph(code byte, out *[glyphWidth]byte) {
+	idx := font6x8Rows * int(code)
+	rows := font6x8[idx : idx+font6x8Rows]
+	for i := range glyphWidth {
+		var column byte
+		for j := range font6x8Rows {
+			if rows[j]&(1<<uint(7-i)) != 0 {
+				column |= 1 << uint(j)
+			}
+		}
+		out[i] = column
+	}
+}
 
 type writeFunc func([]byte) error
 
@@ -252,14 +291,9 @@ func logDisplayOut(kind, detail string, size int, msg []byte) {
 	}
 	// Only a sysex carries the Fire command byte; a control change is three bytes.
 	if len(msg) > 5 && msg[0] == 0xf0 {
-		attrs = append(attrs, "command", hexByte(msg[4]))
+		attrs = append(attrs, "command", hex.EncodeToString(msg[4:5]))
 	}
 	logger.Debug("display out", attrs...)
-}
-
-func hexByte(b byte) string {
-	const digits = "0123456789abcdef"
-	return string([]byte{digits[b>>4], digits[b&0xf]})
 }
 
 // fontPlaceholder stands in for a rune the 6x8 font has no glyph for, so a kit voice name
@@ -285,38 +319,33 @@ func asciiFontText(s string) string {
 
 // Print rasterizes a string using character coordinates.
 func (f *Fire) Print(x, y int, s string) error {
-	return f.printFont(x, y, s, byte2glyph)
+	return f.printFont(x, y, s, false)
 }
 
+// PrintInvert rasterizes a string with every bit flipped, so the character reads as the gap
+// left in a lit field. That is how the playhead marks a step it is on.
 func (f *Fire) PrintInvert(x, y int, s string) error {
-	font := func(b byte) []byte {
-		v := byte2glyph(b)
-		for i := range v {
-			v[i] = ^v[i]
-		}
-		return v
-	}
-	return f.printFont(x, y, s, font)
+	return f.printFont(x, y, s, true)
 }
 
-func (f *Fire) printFont(x, y int, s string, font func(byte) []byte) error {
+func (f *Fire) printFont(x, y int, s string, invert bool) error {
 	s = asciiFontText(s)
-	if len(s)+x >= 128/6 || x < 0 || y < 0 || y >= 8 {
+	if len(s)+x >= oledColumns/glyphWidth || x < 0 || y < 0 || y >= oledRows {
 		return errOutOfRange
 	}
 	// Validation stays ahead of the blackout check so a coordinate bug still shows up.
 	if !f.out() {
 		return nil
 	}
-	bmp := make([]byte, 0, len(s)*glyphWidth)
+bmp := make([]byte, 0, len(s)*glyphWidth)
 	for _, v := range s {
-		bmp = append(bmp, font(byte(v))...)
+		bmp = appendGlyph(bmp, byte(v), invert)
 	}
 	su := akai.ScreenUpdate{
 		BandStart:   y,
 		BandEnd:     y,
-		ColumnStart: x * 6,
-		ColumnEnd:   (x+len(s))*6 - 1,
+		ColumnStart: x * glyphWidth,
+		ColumnEnd:   (x+len(s))*glyphWidth - 1,
 		Bitmap:      bmp,
 	}
 	b, err := su.MarshalBinary()
@@ -331,6 +360,21 @@ func (f *Fire) printFont(x, y int, s string, font func(byte) []byte) error {
 	return f.write(b)
 }
 
+// appendGlyph appends one glyph's column bytes to dst. It reads the shared cache rather
+// than returning a slice of it, because a caller drawing inverted text must not be able to
+// modify the table every other draw reads from.
+func appendGlyph(dst []byte, code byte, invert bool) []byte {
+	glyph := &glyphCache[code]
+	for i := 0; i < glyphWidth; i++ {
+		column := glyph[i]
+		if invert {
+			column = ^column
+		}
+		dst = append(dst, column)
+	}
+	return dst
+}
+
 func (f *Fire) Off() error {
 	if err := f.LedsOff(); err != nil {
 		return err
@@ -339,12 +383,12 @@ func (f *Fire) Off() error {
 }
 
 func (f *Fire) ClearOLED() error {
-	return f.ClearOLEDRows(0, 8)
+	return f.ClearOLEDRows(0, oledRows)
 }
 
 func (f *Fire) ClearOLEDRows(y, n int) error {
 	// Validate the range before sizing the bitmap so malformed UI coordinates return an error instead of panicking.
-	if n <= 0 || y < 0 || y >= 8 || n > 8-y {
+	if n <= 0 || y < 0 || y >= oledRows || n > oledRows-y {
 		return errOutOfRange
 	}
 	// A log has to show what blanked the screen, so every clear is recorded by row.
@@ -357,8 +401,8 @@ func (f *Fire) ClearOLEDRows(y, n int) error {
 		BandStart:   y,
 		BandEnd:     y + n - 1,
 		ColumnStart: 0,
-		ColumnEnd:   0x7f,
-		Bitmap:      make([]byte, 128*n),
+		ColumnEnd:   oledLastColumn,
+		Bitmap:      make([]byte, oledColumns*n),
 	}
 	b, err := su.MarshalBinary()
 	if err != nil {

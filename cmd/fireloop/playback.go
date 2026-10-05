@@ -277,21 +277,21 @@ func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
 		tie:         event.Tie,
 		step:        eventStep(event),
 	}
-	p.activeMu.Lock()
-	defer p.activeMu.Unlock()
-	previous, hasPrevious := p.active[event.Voice]
+	writerActive := !isNilMidiWriter(aseq)
 	var previousNote *activeChromaticNote
-	if hasPrevious {
+	var messages []chromaticOutbound
+	p.activeMu.Lock()
+	if previous, hasPrevious := p.active[event.Voice]; hasPrevious {
 		previousNote = &previous
 	}
-	messages := chromaticOutboundMessages(previousNote, current, event.Velocity)
-	writerActive := !isNilMidiWriter(aseq)
+	messages = chromaticOutboundMessages(previousNote, current, event.Velocity)
 	// The sounding note is recorded before anything is written. A write that fails part
 	// way through would otherwise leave a note on with nothing tracking it to release.
 	if p.active == nil {
 		p.active = make(map[*Voice]activeChromaticNote)
 	}
 	p.active[event.Voice] = current
+	p.activeMu.Unlock()
 	logger.Debug("chromatic transition",
 		"voice", voiceLabel(event.Voice),
 		"note", current.note,
@@ -300,6 +300,9 @@ func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
 		"previous", previousNoteLabel(previousNote),
 		"messages", len(messages),
 	)
+	// The lock is released before the writes, because an ALSA write can block and a
+	// release arriving from the button handler must not queue behind a note still going
+	// out. That is the same order releaseExpired and releaseAll use.
 	for _, message := range messages {
 		logOutbound(voiceLabel(event.Voice), message.destination, message.data)
 		if !writerActive {
@@ -409,12 +412,9 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 		logger.Info("playback end", "error", runErr)
 	}()
 	curBpm := currentBPM()
-	var curPattern *Pattern
-	if p.nextPattern != nil {
-		curPattern = p.nextPattern(0)
-	}
+	curPattern := p.patternForBeat(0)
 	// The settle wait belongs here rather than in the button handler, so a press while
-	// an instrument is loading is still read, and the start time is taken after it so
+	// an instrument is loading is still read, and the anchor is taken after it so
 	// the first measure keeps its full length.
 	if p.settle > 0 {
 		logger.Debug("settling after a patch", "duration", p.settle)
@@ -424,8 +424,8 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 			return nil
 		}
 	}
-	// Compute measures w/r/t this start time + now() to avoid drift.
-	start := time.Now()
+	// Compute measures w/r/t this anchor + now() to avoid drift.
+	anchor := time.Now()
 	var timer *time.Timer
 	defer func() {
 		if timer != nil {
@@ -454,61 +454,105 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter) (runErr error)
 			return err
 		}
 		_, patBeat, _ = p.position()
-		// Find next event time, if any.
-		next16th := float32(math.Floor(float64(patBeat*patternStepsPerBeat))+1.0) * patternBeatsPerStep
-		patternBeats := curPattern.Beats()
-		if (nextBeat == 0 || nextBeat > next16th) && patBeat < patternBeats {
-			// TODO: this should be PPQ for midi clock mastering.
-			nextBeat = next16th
-		}
-		if nextBeat >= patternBeats {
-			// Past measure; reset.
-			nextBeat = 0
-		}
+		nextBeat = nextEventBeat(patBeat, nextBeat, curPattern.Beats())
+
 		var waitUntil time.Duration
 		if nextBeat != 0 {
-			waitTime := time.Duration(float64(nextBeat-patBeat) * float64(beatDuration(curBpm)))
+			waitUntil = time.Duration(float64(nextBeat-patBeat) * float64(beatDuration(curBpm)))
 			songBeat, _, _ = p.position()
 			p.setPosition(songBeat+nextBeat-patBeat, nextBeat)
-			waitUntil = waitTime
 		} else {
-			// Reset to next measure.
-			measureLength := patternDuration(curPattern, curBpm)
-			start = start.Add(measureLength)
-			waitUntil = time.Until(start)
-			curBpm = currentBPM()
-			if requested, ok := p.takeNextSongBeat(); ok {
-				songBeat = requested
-			} else {
-				songBeat, _, _ = p.position()
-				songBeat += curPattern.Beats() - patBeat
-			}
-			logger.Debug("pattern boundary", "songBeat", songBeat, "beats", curPattern.Beats(), "bpm", curBpm)
-			_ = p.releaseAll(aseq)
-			if p.nextPattern != nil {
-				curPattern = p.nextPattern(songBeat)
-			} else {
-				curPattern = nil
-			}
-			if curPattern == nil {
-				// Loop.
-				songBeat = 0
-				if p.nextPattern != nil {
-					curPattern = p.nextPattern(0)
-				}
-			}
-			p.setPosition(songBeat, 0)
+			advance := p.crossMeasure(aseq, curPattern, curBpm, patBeat, anchor)
+			curPattern, curBpm, waitUntil, anchor = advance.pattern, advance.bpm, advance.wait, advance.anchor
 		}
-		if timer == nil {
-			timer = time.NewTimer(waitUntil)
-		} else {
-			timer.Reset(waitUntil)
-		}
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
+		var keepGoing bool
+		timer, keepGoing = waitForTick(ctx, timer, waitUntil)
+		if !keepGoing {
 			return nil
 		}
+	}
+}
+
+// nextEventBeat is where the playhead should land next inside a pattern. The pattern's own
+// next event is used when it falls sooner than the step grid, so a step written off the grid
+// still sounds on time. Zero means the end of the pattern, where the boundary takes over.
+func nextEventBeat(patBeat, nextBeat, patternBeats float32) float32 {
+	// TODO: this should be PPQ for midi clock mastering.
+	next16th := float32(math.Floor(float64(patBeat*patternStepsPerBeat))+1.0) * patternBeatsPerStep
+	if (nextBeat == 0 || nextBeat > next16th) && patBeat < patternBeats {
+		nextBeat = next16th
+	}
+	if nextBeat >= patternBeats {
+		// Past measure; the boundary settles it instead.
+		return 0
+	}
+	return nextBeat
+}
+
+// measureAdvance is what settling the end of one pattern produces: the pattern that plays
+// next, the tempo to play it at, and when it is due.
+type measureAdvance struct {
+	pattern *Pattern
+	bpm     int
+	wait    time.Duration
+	anchor  time.Time
+}
+
+// crossMeasure carries the playhead past the end of one pattern. The wait is measured
+// against the running anchor rather than from now, so the drift picked up inside each step
+// is taken back here instead of accumulating across a set. A seek asked for while playing
+// takes effect at this boundary, which is the only place it is applied.
+func (p *Playback) crossMeasure(aseq sequencerWriter, cur *Pattern, curBpm int, patBeat float32, anchor time.Time) measureAdvance {
+	nextAnchor := anchor.Add(patternDuration(cur, curBpm))
+	bpm := currentBPM()
+	var songBeat float32
+	if requested, ok := p.takeNextSongBeat(); ok {
+		songBeat = requested
+	} else {
+		songBeat, _, _ = p.position()
+		songBeat += cur.Beats() - patBeat
+	}
+	logger.Debug("pattern boundary", "songBeat", songBeat, "beats", cur.Beats(), "bpm", bpm)
+	_ = p.releaseAll(aseq)
+	nextPattern := p.patternForBeat(songBeat)
+	if nextPattern == nil {
+		// Nothing plays here, so the loop starts again rather than leaving a gap.
+		songBeat = 0
+		nextPattern = p.patternForBeat(0)
+	}
+	p.setPosition(songBeat, 0)
+	return measureAdvance{
+		pattern: nextPattern,
+		bpm:     bpm,
+		wait:    time.Until(nextAnchor),
+		anchor:  nextAnchor,
+	}
+}
+
+// patternForBeat asks the playback's own source which pattern sits at a song position. It
+// is nil for a playback with no source and for a song with no measure there, which are the
+// same thing to the loop: there is nothing to play until it starts again.
+func (p *Playback) patternForBeat(songBeat float32) *Pattern {
+	if p.nextPattern == nil {
+		return nil
+	}
+	return p.nextPattern(songBeat)
+}
+
+// waitForTick blocks for one step and reports whether playback should carry on. The timer
+// comes back so the next step reuses it instead of leaving one per step for the collector.
+// A cancellation is not a failure: stopping is what was asked for.
+func waitForTick(ctx context.Context, timer *time.Timer, wait time.Duration) (*time.Timer, bool) {
+	if timer == nil {
+		timer = time.NewTimer(wait)
+	} else {
+		timer.Reset(wait)
+	}
+	select {
+	case <-timer.C:
+		return timer, true
+	case <-ctx.Done():
+		return timer, false
 	}
 }
 

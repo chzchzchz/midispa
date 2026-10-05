@@ -2,10 +2,14 @@ package main
 
 // via https://raw.githubusercontent.com/idispatch/raster-fonts/master/font-6x8.
 
-// glyphWidth is how many bytes wide one glyph is, one per column of the bitmap. Every
-// glyph is this long, so a caller sizing a buffer for a run of text does not have to ask
-// for a glyph first to find out.
-const glyphWidth = 6
+// The table holds one glyph per byte code, laid out one byte per row of an eight row
+// cell. The screen wants the other arrangement: one byte per column, glyphWidth of them.
+// font6x8Rows is how many bytes each glyph occupies in the table before that transpose,
+// which is what a caller reading the table directly needs.
+const (
+	glyphWidth    = 6
+	font6x8Rows   = 8
+)
 
 var font6x8 = []byte{
 	/*
@@ -3081,19 +3085,9 @@ var font6x8 = []byte{
 	0x00, /* 000000 */
 }
 
-func byte2glyph(b byte) (ret []byte) {
-	idx := 8 * int(b)
-	ent := font6x8[idx : idx+8]
-	// turn into 6 byte representation; one byte for each column
-	ret = make([]byte, glyphWidth)
-	for i := range ret {
-		v := 0
-		for j := 0; j < 8; j++ {
-			if bit := (ent[j] & (1 << (7 - i))); bit != 0 {
-				v |= 1 << j
-			}
-		}
-		ret[i] = byte(v)
-	}
-	return ret
+func byte2glyph(b byte) []byte {
+	// The glyph is copied out so the cache stays read-only for every caller: a caller that
+	// flips the bits for inverted text must not be able to alter what the next draw reads.
+	glyph := glyphCache[b]
+	return glyph[:]
 }

@@ -302,7 +302,10 @@ func blankDevice() error {
 // rather than ending the process: this runs on a goroutine, where a panic would take the
 // whole program with it, and a transient write failure should not end a performance.
 // Playback stops because nothing may keep sounding notes that are no longer tracked.
-func handleIncomingEvent(aseq *alsa.Seq, ev alsa.SeqEvent) {
+//
+// The writer is an interface so this path can be exercised without opening a port, which
+// is what a nil or failing handler used to need a real sequencer for.
+func handleIncomingEvent(aseq sequencerWriter, ev alsa.SeqEvent) {
 	err := processEvent(aseq, ev)
 	if err == nil {
 		return
@@ -384,7 +387,7 @@ func openSequencer(firePort string, devs []Device) (*alsa.Seq, alsa.SeqAddr, err
 // passed on. That is the whole point of the save on the way out: a set should survive the
 // run that made it whether the run was ended or fell over, and re-panicking keeps the
 // failure loud instead of leaving the unit playing on with a half-applied edit.
-func processIncomingEvents(events *alsa.Seq, inc <-chan alsa.SeqEvent) {
+func processIncomingEvents(events sequencerWriter, inc <-chan alsa.SeqEvent) {
 	defer func() {
 		if problem := recover(); problem != nil {
 			saveSessionOnExit()

@@ -238,3 +238,33 @@ func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 	}
 	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOff(0), 72, 0})
 }
+
+// Where the playhead lands next decides what the set sounds like, and the two rules that
+// settle it pull in opposite directions: the step grid keeps the display moving even on an
+// empty step, while a pattern's own event pulls the wait forward when it falls off the grid.
+// Zero is the boundary, which is a different thing from the first step.
+func TestNextEventBeat(t *testing.T) {
+	step := float32(patternBeatsPerStep)
+	tests := []struct {
+		name         string
+		patBeat      float32
+		nextBeat     float32
+		patternBeats float32
+		want         float32
+	}{
+		{name: "an empty pattern still advances a step", patBeat: 0, patternBeats: 4, want: step},
+		{name: "the grid keeps moving with nothing written", patBeat: step * 2, patternBeats: 4, want: step * 3},
+		{name: "an event before the grid is not put off", patBeat: step * 2, nextBeat: step*2 + step/2, patternBeats: 4, want: step*2 + step/2},
+		{name: "an event after the grid does not hold it up", patBeat: 0, nextBeat: step * 3, patternBeats: 4, want: step},
+		{name: "the last step of a pattern is the boundary", patBeat: 3.75, patternBeats: 4, want: 0},
+		{name: "a shortened pattern ends mid grid", patBeat: 0.375, patternBeats: 0.5, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextEventBeat(tt.patBeat, tt.nextBeat, tt.patternBeats); got != tt.want {
+				t.Fatalf("nextEventBeat(%v, %v, %v) = %v, want %v",
+					tt.patBeat, tt.nextBeat, tt.patternBeats, got, tt.want)
+			}
+		})
+	}
+}

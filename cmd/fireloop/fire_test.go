@@ -178,3 +178,60 @@ func TestTopLeftMaskMatchesTheMeasuredValues(t *testing.T) {
 		}
 	}
 }
+
+// The font is stored one byte per row and the screen takes one byte per column, so every
+// glyph is transposed once at startup and cached. A cache that disagrees with the table it
+// was built from would draw letters the font never had, with nothing to catch it.
+func TestGlyphCacheMatchesTheFontTable(t *testing.T) {
+	for code := range glyphCache {
+		rows := font6x8[font6x8Rows*code : font6x8Rows*(code+1)]
+		for i := range glyphWidth {
+			var want byte
+			for j := range font6x8Rows {
+				if rows[j]&(1<<uint(7-i)) != 0 {
+					want |= 1 << uint(j)
+				}
+			}
+			if got := glyphCache[code][i]; got != want {
+				t.Fatalf("glyph %d column %d = %#02x, want %#02x", code, i, got, want)
+			}
+		}
+	}
+}
+
+// The cache is shared by every draw, so inverted text must be produced on the way out
+// rather than by editing the glyph in place. Otherwise the first inverted label would leave
+// the letter upside down for the rest of the set.
+func TestInvertedGlyphsDoNotAlterTheCache(t *testing.T) {
+	plain := appendGlyph(nil, 'A', false)
+	inverted := appendGlyph(nil, 'A', true)
+	if len(plain) != glyphWidth || len(inverted) != glyphWidth {
+		t.Fatalf("glyph width = %d and %d, want %d", len(plain), len(inverted), glyphWidth)
+	}
+	for i := range plain {
+		if inverted[i] != ^plain[i] {
+			t.Fatalf("inverted column %d = %#02x, want the complement %#02x", i, inverted[i], ^plain[i])
+		}
+	}
+	again := appendGlyph(nil, 'A', false)
+	for i := range plain {
+		if again[i] != plain[i] {
+			t.Fatalf("column %d after an inverted draw = %#02x, want %#02x", i, again[i], plain[i])
+		}
+	}
+}
+
+// byte2glyph is handed out to callers that may modify what they get, so it must not be a
+// window onto the table the next draw reads.
+func TestByte2GlyphReturnsACopy(t *testing.T) {
+	glyph := byte2glyph('A')
+	for i := range glyph {
+		glyph[i] = ^glyph[i]
+	}
+	want := appendGlyph(nil, 'A', false)
+	for i := range want {
+		if got := appendGlyph(nil, 'A', false)[i]; got != want[i] {
+			t.Fatalf("column %d = %#02x after modifying byte2glyph output, want %#02x", i, got, want[i])
+		}
+	}
+}

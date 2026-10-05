@@ -374,7 +374,7 @@ func TestHandlerFailureStopsPlaybackWithoutEndingTheProcess(t *testing.T) {
 	capture := useCaptureLog(t)
 	previousProcess := processEvent
 	t.Cleanup(func() { processEvent = previousProcess })
-	processEvent = func(*alsa.Seq, alsa.SeqEvent) error { return errOutOfRange }
+	processEvent = func(sequencerWriter, alsa.SeqEvent) error { return errOutOfRange }
 
 	handleIncomingEvent(nil, padMessage(NoteMute1, 100))
 
@@ -397,7 +397,7 @@ func TestHandlerFailureReportsAFailedStop(t *testing.T) {
 	capture := useCaptureLog(t)
 	previousProcess := processEvent
 	t.Cleanup(func() { processEvent = previousProcess })
-	processEvent = func(*alsa.Seq, alsa.SeqEvent) error { return errOutOfRange }
+	processEvent = func(sequencerWriter, alsa.SeqEvent) error { return errOutOfRange }
 
 	handleIncomingEvent(nil, padMessage(NoteMute1, 100))
 
@@ -408,6 +408,32 @@ func TestHandlerFailureReportsAFailedStop(t *testing.T) {
 	if !slices.Contains(messages, "stopping after an event failure") {
 		t.Fatalf("a handler failure that could not stop playback was not reported: %v", messages)
 	}
+}
+
+// A pad press has to travel the whole way through the real handler to an instrument. That
+// used to need a port open, because the handler named the concrete client rather than the
+// writer it only ever writes through.
+func TestHandlerPlaysAPadWithoutAPort(t *testing.T) {
+	// The first voice is a drum and the second is the chromatic one, so the track the bank
+	// starts on holds a drum and a pad press adds a step rather than choosing a pitch.
+	kit := trackWindowKit(4, 1)
+	bank := NewPatternBank(NewFire(newFireSim().write), kit)
+	if err := bank.Jump(1); err != nil {
+		t.Fatal(err)
+	}
+	usePatternGlobals(t, bank)
+	writer := &captureMidiWriter{}
+
+	handleIncomingEvent(writer, padMessage(54, 100))
+
+	// A percussion step sends the legacy pair: the note is silenced and then sounded, so
+	// pressing a step that already holds the note does not leave two copies of it ringing.
+	note := byte(*kit.voices[0].Note)
+	if len(writer.events) != 2 {
+		t.Fatalf("a pad press wrote %d messages, want the note and the silence before it", len(writer.events))
+	}
+	assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), note, 100})
+	assertMidiData(t, writer.events[1], []byte{midi.MakeNoteOn(0), note, 100})
 }
 
 // Reading the Fire fails when the port goes away, and that has to reach main as an error:
