@@ -151,7 +151,7 @@ func (p *PatternBank) drawStepCell(step int) error {
 		return nil
 	}
 	color := p.stepCellPaintColor(pattern, voice, step)
-	return p.f.LightPad(col, row, color[0], color[1], color[2])
+	return p.f.LightPadColor(col, row, color)
 }
 
 // drawStepPlayhead moves the note-edit playhead along the step strip. The column playhead

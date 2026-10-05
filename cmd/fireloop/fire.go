@@ -423,6 +423,12 @@ func (f *Fire) LightPad(x, y, r, g, b int) error {
 	return f.LightPadSlice([]akai.Pad{pad})
 }
 
+// LightPadColor lights one pad from a colour, which is the shape every other pad call in
+// this package takes. A caller holding a colour rule should not have to unpack it.
+func (f *Fire) LightPadColor(x, y int, color [3]int) error {
+	return f.LightPad(x, y, color[0], color[1], color[2])
+}
+
 func (f *Fire) LightPadRow(row int, vals [16][3]int) error {
 	if row < 0 || row >= 4 {
 		return errOutOfRange

@@ -487,13 +487,7 @@ func (p *PatternBank) SelectTrackRow(row int) error {
 
 // printTrackRow names the track on a pad row; the header shows which track the row starts at.
 func (p *PatternBank) printTrackRow(row int, inv bool) error {
-	if p.f == nil {
-		return nil
-	}
-	if err := p.clearTextRows(row+1, 1); err != nil {
-		return err
-	}
-	return p.printText(row+1, 0, voiceDisplayName(p.trackVoice(row)), inv)
+	return replaceRow(p.screen, p.f, row+1, voiceDisplayName(p.trackVoice(row)), inv)
 }
 
 // textScreen is the text layer of the display. The Fire rasterizes what it is given; a
@@ -534,6 +528,16 @@ func displayClear(screen textScreen, f *Fire, row, n int) error {
 		return nil
 	}
 	return surface.ClearOLEDRows(row, n)
+}
+
+// replaceRow blanks a row and writes one line into it, which is how every readout reaches
+// the display: new text has to overwrite what was there, because a shorter line drawn over
+// a longer one leaves the tail of the old one showing.
+func replaceRow(screen textScreen, f *Fire, row int, text string, inverted bool) error {
+	if err := displayClear(screen, f, row, 1); err != nil {
+		return err
+	}
+	return displayPrint(screen, f, row, 0, text, inverted)
 }
 
 // printText writes to the pattern bank's text layer.
@@ -731,7 +735,7 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 			color = [3]int{}
 		}
 		if err := p.forEachRowWithVoice(voice, func(row int) error {
-			return p.f.LightPad(col, row, color[0], color[1], color[2])
+			return p.f.LightPadColor(col, row, color)
 		}); err != nil {
 			return ev, err
 		}

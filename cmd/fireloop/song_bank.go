@@ -91,14 +91,13 @@ func (s *SongBank) Jump(n int) error {
 	if err := s.PrintTempo(); err != nil {
 		return err
 	}
-	if err := s.printRow(3, " "); err != nil {
-		return err
-	}
-	if err := s.printRow(4, " "); err != nil {
-		return err
-	}
-	if err := s.printRow(5, " "); err != nil {
-		return err
+	// The rows below the header belong to the playback worker, which reports the measure it
+	// reached. They are cleared rather than left holding the last song's reading, because a
+	// stale measure looks like a jump the music did not make.
+	for row := 3; row <= 5; row++ {
+		if err := s.printRow(row, " "); err != nil {
+			return err
+		}
 	}
 	if err := s.printView(); err != nil {
 		return err
@@ -140,8 +139,11 @@ func (sb *SongBank) ToggleMeasure(x, y int) error {
 	} else {
 		song.SetPattern(p, idx)
 	}
-	p2c := sb.patternsToColors()
-	return sb.f.LightPadSlice([]akai.Pad{makePad(x, y, Dim(p2c[p], 16))})
+	color := oledBlack
+	if p != nil {
+		color = dimColor(patternColor(sb.pb.selPatIdx))
+	}
+	return sb.f.LightPadSlice([]akai.Pad{makePad(x, y, color)})
 }
 
 func (sb *SongBank) ToggleMeasureBrightness(lastMeasure, nextMeasure int) error {
@@ -159,7 +161,7 @@ func (sb *SongBank) ToggleMeasureBrightness(lastMeasure, nextMeasure int) error 
 			continue
 		}
 		pattern := sb.CurrentSong().GetPattern(item.measure)
-		color := Dim(p2c[pattern], 16)
+		color := dimColor(p2c[pattern])
 		if item.bright {
 			color = p2c[pattern]
 		}
@@ -223,7 +225,7 @@ func (s *SongBank) DrawPadMeasures() error {
 		row := (i / 4) % 4
 		color := oledBlack
 		if pattern := song.GetPattern(start + i); pattern != nil {
-			color = Dim(p2c[pattern], 16)
+			color = dimColor(p2c[pattern])
 		}
 		pads[i] = makePad(col, row, color)
 	}
@@ -237,9 +239,9 @@ func (s *SongBank) DrawPadPatterns() error {
 		index := start + i
 		color := oledBlack
 		if pattern := s.pb.Patterns[index]; pattern != nil {
-			color = oledColorTable[(3*(index-1))%len(oledColorTable)]
+			color = patternColor(index)
 			if index != s.pb.selPatIdx {
-				color = Dim(color, 16)
+				color = dimColor(color)
 			}
 		}
 		// rightmost bank of 16 pads
@@ -249,13 +251,24 @@ func (s *SongBank) DrawPadPatterns() error {
 	return s.f.LightPadSlice(pads)
 }
 
+// patternColor is the colour one pattern is drawn in, taken from its bank index. Neighbouring
+// patterns sit three steps apart in the table so that the selected one is never beside a
+// similar colour. A pattern the bank has no slot for has no colour, which is the black an
+// empty measure and an unwritten slot are drawn in.
+func patternColor(index int) [3]int {
+	if index < 1 || index > maxPatternIndex {
+		return oledBlack
+	}
+	return oledColorTable[(3*(index-1))%len(oledColorTable)]
+}
+
 func (s *SongBank) patternsToColors() map[*Pattern][3]int {
 	ret := make(map[*Pattern][3]int)
 	for index, pattern := range s.pb.Patterns {
-		if pattern == nil || index < 1 || index > maxPatternIndex {
+		if pattern == nil {
 			continue
 		}
-		ret[pattern] = oledColorTable[(3*(index-1))%len(oledColorTable)]
+		ret[pattern] = patternColor(index)
 	}
 	return ret
 }
@@ -272,8 +285,5 @@ func (s *SongBank) clearTextRows(row, n int) error {
 
 // printRow replaces one row of the arrangement with text.
 func (s *SongBank) printRow(row int, text string) error {
-	if err := s.clearTextRows(row, 1); err != nil {
-		return err
-	}
-	return s.printText(row, 0, text, false)
+	return replaceRow(s.screen, s.f, row, text, false)
 }

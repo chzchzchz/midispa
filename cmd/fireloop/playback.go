@@ -211,7 +211,7 @@ func (p *Playback) playBeat(aseq midiWriter, pat *Pattern) (float32, error) {
 
 func chromaticMidiOn(channel, note, velocity int) []byte {
 	return []byte{
-		midi.MakeNoteOn(channel - 1),
+		midi.MakeNoteOn(protocolChannel(channel)),
 		byte(clampMidiDataValue(note)),
 		byte(clampMidiDataValue(velocity)),
 	}
@@ -219,7 +219,7 @@ func chromaticMidiOn(channel, note, velocity int) []byte {
 
 func chromaticMidiOff(channel, note int) []byte {
 	return []byte{
-		midi.MakeNoteOff(channel - 1),
+		midi.MakeNoteOff(protocolChannel(channel)),
 		byte(clampMidiDataValue(note)),
 		0,
 	}

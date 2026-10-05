@@ -39,6 +39,17 @@ func Dim(c [3]int, n int) [3]int {
 	return [3]int{c[0] / n, c[1] / n, c[2] / n}
 }
 
+// dimFactor is how far a colour is pulled down to mark something as present but not the
+// thing the user is acting on: a measure holding a pattern, a pattern that is not selected.
+// One sixteenth of the brightness still reads as the colour it was, which is the point.
+const dimFactor = 16
+
+// dimColor pulls a colour down. It is the only dimming in the arrangement view, so the
+// factor is stated once here rather than spelled at each pad that needs it.
+func dimColor(color [3]int) [3]int {
+	return Dim(color, dimFactor)
+}
+
 // eachChannel applies a rule to one channel at a time, which is how every step colour in
 // this package is stated. The three channels are independent, so a rule that needs to see
 // them together is a different kind of rule and does not belong here.
