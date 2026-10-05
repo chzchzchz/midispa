@@ -12,8 +12,13 @@ import (
 	"github.com/chzchzchz/midispa/midi"
 )
 
+// sequencerWriter is what playback needs from the ALSA client. Playback writes two
+// different things: musical events on the default port, and transport on the sync port it
+// created for the purpose. Those are the two calls below, written out rather than composed
+// from the halves alsa publishes, so that the two places this type is used read the same
+// way as everything else that talks to the sequencer.
 type sequencerWriter interface {
-	midiWriter
+	Write(alsa.SeqEvent) error
 	WritePort(alsa.SeqEvent, int) error
 }
 
@@ -55,7 +60,7 @@ type Playback struct {
 	positionMu sync.Mutex
 	activeMu   sync.Mutex
 	active     map[*Voice]activeChromaticNote
-	writer     midiWriter
+	writer     alsa.EventWriter
 }
 
 func beatDuration(bpm int) time.Duration {
@@ -164,7 +169,7 @@ func (p *Playback) JumpSongBeat(beat float32) (oldSongBeat float32) {
 	return oldSongBeat
 }
 
-func (p *Playback) playBeat(aseq midiWriter, pat *Pattern) (float32, error) {
+func (p *Playback) playBeat(aseq alsa.EventWriter, pat *Pattern) (float32, error) {
 	if pat == nil {
 		return 0, nil
 	}
@@ -266,7 +271,7 @@ func chromaticOutboundMessages(previous *activeChromaticNote, current activeChro
 }
 
 // playChromaticEvent performs the note transition before updating the active voice state.
-func (p *Playback) playChromaticEvent(aseq midiWriter, event Event) error {
+func (p *Playback) playChromaticEvent(aseq alsa.EventWriter, event Event) error {
 	if event.Voice == nil || !event.IsChromatic() {
 		return nil
 	}
@@ -330,7 +335,7 @@ func previousNoteLabel(previous *activeChromaticNote) any {
 // releaseExpired stops notes whose step has passed. A chromatic note is one step long
 // unless a tie holds it into the next event, so a lone note stops where it started
 // instead of ringing until the pattern ends.
-func (p *Playback) releaseExpired(aseq midiWriter, step int) error {
+func (p *Playback) releaseExpired(aseq alsa.EventWriter, step int) error {
 	type expiredNote struct {
 		voice *Voice
 		note  activeChromaticNote
@@ -361,7 +366,7 @@ func (p *Playback) releaseExpired(aseq midiWriter, step int) error {
 }
 
 // releaseAll drains the map before writing, preventing duplicate releases during cancellation.
-func (p *Playback) releaseAll(aseq midiWriter) error {
+func (p *Playback) releaseAll(aseq alsa.EventWriter) error {
 	p.activeMu.Lock()
 	if len(p.active) == 0 {
 		p.activeMu.Unlock()
@@ -391,11 +396,11 @@ func (p *Playback) activeNoteCount() int {
 	return len(p.active)
 }
 
-func writeSequencerPort(aseq sequencerWriter, data []byte) error {
-	if aseq == nil {
-		return nil
-	}
-	if seq, ok := aseq.(*alsa.Seq); ok && seq == nil {
+// writeSequencerPort sends a transport message from the sync port, which is why it needs
+// the port rather than the default one: a Fire has to see Start and Stop on the port it
+// subscribed to, separate from the notes.
+func writeSequencerPort(aseq alsa.PortWriter, data []byte) error {
+	if isNilMidiWriter(aseq) {
 		return nil
 	}
 	return aseq.WritePort(alsa.SeqEvent{SeqAddr: alsa.SubsSeqAddr, Data: data}, syncPort.Port)

@@ -1,6 +1,9 @@
 package main
 
-import "github.com/chzchzchz/midispa/midi"
+import (
+	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/midi"
+)
 
 // The Volume knob, which is the one control that sets a step's dynamics for either kind of
 // voice. It lives apart from the palette because the two do different jobs on a step: the
@@ -23,7 +26,7 @@ const velocityStep = 1
 // percussive step counts from the velocity it holds: that is the hit the step was played
 // with, and the knob is there to trim a hit rather than to replace it with whatever value
 // the encoder happened to be left at.
-func (p *PatternBank) AdjustVelocity(aseq midiWriter, encoderValue int) error {
+func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) error {
 	if p.editingLength {
 		return nil
 	}

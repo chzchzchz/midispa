@@ -109,7 +109,7 @@ func (l *captureLog) messages() []string {
 
 // walkPattern plays a pattern one step at a time, the way the sequencer does, and then
 // releases whatever is still sounding.
-func walkPattern(t *testing.T, writer midiWriter, pattern *Pattern) *Playback {
+func walkPattern(t *testing.T, writer alsa.EventWriter, pattern *Pattern) *Playback {
 	t.Helper()
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	for step := 0; step < pattern.LengthSteps(); step++ {

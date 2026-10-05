@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/sysex/akai"
 )
 
@@ -194,7 +195,7 @@ func (p *PatternBank) guardsPad(row, col int) bool {
 // pad removes the event, and so does A1, the palette's first pad, which stands for "no note
 // here". How hard a pad was hit sets the note's velocity, so a new step lands with the
 // dynamics that were played and the display reports that same value.
-func (p *PatternBank) handleNoteEditPad(aseq midiWriter, row, col, pressed int, alt bool) error {
+func (p *PatternBank) handleNoteEditPad(aseq alsa.EventWriter, row, col, pressed int, alt bool) error {
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() || !p.editingNote {
 		return nil
@@ -246,7 +247,7 @@ func (p *PatternBank) removeNoteAtStep(pattern *Pattern, voice *Voice, step int,
 // the step's dynamics, whether the note is new or its pitch is being changed, and the step
 // is auditioned so the user hears the pitch they just picked. The Volume encoder still
 // adjusts the value afterwards.
-func (p *PatternBank) placeNoteOnStep(aseq midiWriter, pattern *Pattern, voice *Voice, step, note, pressed int) error {
+func (p *PatternBank) placeNoteOnStep(aseq alsa.EventWriter, pattern *Pattern, voice *Voice, step, note, pressed int) error {
 	event, ok := pattern.SetChromaticNote(step, voice, note, clampMidiDataValue(pressed))
 	if !ok {
 		return nil

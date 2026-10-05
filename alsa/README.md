@@ -57,7 +57,33 @@ ALSA tests create isolated software clients without using physical MIDI devices.
 
 Integration tests also create source-only, destination-only, duplex, unsubscribable, and duplicate-name ports. Parsing and range-validation tests do not require a sequencer. The rollback tests cover both a direction failure and an ALSA failure caused by an existing output subscription, plus preservation of existing input subscriptions.
 
-Repository-wide builds require the generated trackscript grammar (`go generate ./cmd/trackscript`). The SR-16 dump integration test requires `MIDI_PORT` and a responding device; it skips when that environment variable is unset.
+# Test seams
+
+Commands do their MIDI I/O through the sequencer, and it is the only part of that plumbing that needs hardware. A consumer holding one of four narrow views instead of `*Seq` can therefore be driven with no `/dev/snd/seq` at all:
+
+| Interface | Method | Reached by |
+| --- | --- | --- |
+| `EventReader` | `Read() (SeqEvent, error)` | A blocking read loop |
+| `EventWriter` | `Write(SeqEvent) error` | A write on the default port |
+| `PortWriter` | `WritePort(SeqEvent, int) error` | A write from a chosen local port |
+| `Closer` | `Close() error` | Shutdown |
+
+Take the narrowest one that fits: a wider one would force every stand-in to implement methods its caller never reaches. Where something reads and writes, a field per direction says which is which, and reaching for the wrong one does not compile. Where one thing genuinely needs both — notes out of the default port and transport out of a second — a named type carrying the two methods says so once and reads better than two parameters passed side by side; write those methods out rather than embedding the two, so the calls it makes stay visible where it is declared. `*Seq` satisfies all four, and `interfaces.go` asserts that at build time, so a signature that stops matching is a compile error rather than something a test has to notice.
+
+`alsa/fake` is the stand-in, in its own package so that a consumer's test can import it while no production binary links it. `fake.Seq` records writes with the port each went out on, hands back queued events, and injects a read, write or close failure.
+
+Three things about it are worth knowing before relying on it. `Read` does not block the way the real one does: it returns `fake.ErrNoEvents` once the queue is empty, so a read loop driven by a stand-in has to treat an error as "nothing right now" rather than "broken". And it has no lock, for the same reason `Seq` has none: the contract to serialize lifecycle changes against other operations still holds, so a test that races has a sequencing bug and the fix belongs in the test. It also accepts writes on any port and validates nothing, since port ownership and message validation are `Seq`'s own policy and are covered by this package's tests.
+
+This makes the package testable without hardware, not without cgo. Every `C.` call lives in `seq_cgo.go` and the policy it serves in `seq.go`, but cgo is a property of the package rather than of a file and `Seq` holds an `*snd_seq_t` either way.
+
+## Verification
+
+```sh
+go test ./alsa/fake
+go vet ./alsa ./alsa/fake
+```
+
+`alsa/fake`'s own tests need neither a sequencer nor libasound at runtime, but building it still does, because it imports `alsa`.
 
 # ALSA sequencer system-message support
 

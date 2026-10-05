@@ -1,41 +1,21 @@
 package alsa
 
-/*
-#cgo linux LDFLAGS: -lasound
-#include <alsa/asoundlib.h>
-#include <stddef.h>
-#include <stdlib.h>
-
-uint8_t* snd_seq_ev_ext_data(const snd_seq_ev_ext_t* ext) { return ext->ptr; }
-void snd_seq_ev_ext_data_set(snd_seq_ev_ext_t* ext, uint8_t* v) { ext->ptr = v; }
-*/
-import "C"
+// This file holds the sequencer's policy: which ports it owns, which direction a
+// subscription runs in, how a name becomes an address, and which ports a caller may see.
+// None of that needs a sequencer to be open, so all of it can be exercised without one.
+// The libasound calls the policy makes live in seq_cgo.go.
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"strconv"
 	"strings"
-	"unsafe"
 
 	"github.com/chzchzchz/midispa/midi"
 )
 
 var errExpectedSysEx = errors.New("expected sysex")
-
-type PortCaps int
-
-const (
-	PortCapRead      PortCaps = C.SND_SEQ_PORT_CAP_READ
-	PortCapWrite     PortCaps = C.SND_SEQ_PORT_CAP_WRITE
-	PortCapSubsRead  PortCaps = C.SND_SEQ_PORT_CAP_SUBS_READ
-	PortCapSubsWrite PortCaps = C.SND_SEQ_PORT_CAP_SUBS_WRITE
-	PortCapDuplex    PortCaps = C.SND_SEQ_PORT_CAP_DUPLEX
-)
-
-func (c PortCaps) Has(want PortCaps) bool { return c&want == want }
 
 type PortDir int
 
@@ -64,31 +44,22 @@ func (e *AmbiguousPortError) Error() string {
 		e.Name, len(e.Matches), strings.Join(addrs, ", "))
 }
 
+// The sequencer reports its own subscription changes as events with these leading bytes,
+// so a consumer can tell an ALSA notification from a MIDI message.
 const (
 	EvPortSubscribed   = 0
 	EvPortUnsubscribed = 1
 )
-
-type outputEvent = C.snd_seq_event_t
 
 var (
 	ErrUnsupportedEvent = errors.New("unsupported ALSA event")
 	ErrInvalidMessage   = errors.New("invalid midi message")
 )
 
-type Seq struct {
-	seq   *C.snd_seq_t
-	ports map[int]struct{}
-	SeqAddr
-	output func(*outputEvent) error
-}
-
 type SeqAddr struct {
 	Client int
 	Port   int
 }
-
-var SubsSeqAddr = SeqAddr{C.SND_SEQ_ADDRESS_SUBSCRIBERS, 0}
 
 type SeqEvent struct {
 	SeqAddr
@@ -97,18 +68,6 @@ type SeqEvent struct {
 
 func MakeEvent(data []byte) SeqEvent {
 	return SeqEvent{SeqAddr: SubsSeqAddr, Data: data}
-}
-
-func (a *Seq) Close() error {
-	if a.seq == nil {
-		return nil
-	}
-	err := snderr2error(C.snd_seq_close(a.seq))
-	a.seq = nil
-	a.output = nil
-	a.ports = nil
-	a.Port = -1
-	return err
 }
 
 func (ev *SeqEvent) IsControl() bool {
@@ -129,44 +88,6 @@ func (a *seqWriter) Write(data []byte) (int, error) {
 
 func (a *Seq) NewWriter(sa SeqAddr) io.Writer { return &seqWriter{a, sa} }
 
-func snderr2error(err C.int) error {
-	if err >= 0 {
-		return nil
-	}
-	return fmt.Errorf("%s", C.GoString(C.snd_strerror(err)))
-}
-
-func OpenSeq(clientName string) (a *Seq, err error) {
-	a = &Seq{SeqAddr: SeqAddr{Port: -1}, ports: make(map[int]struct{})}
-
-	seqname := C.CString("default")
-	defer C.free(unsafe.Pointer(seqname))
-	if err := C.snd_seq_open(&a.seq, seqname, C.SND_SEQ_OPEN_DUPLEX, 0); err < 0 {
-		return nil, snderr2error(err)
-	}
-	opened := a
-	defer func() {
-		if err != nil {
-			opened.Close()
-		}
-	}()
-	cname := C.CString(clientName)
-	defer C.free(unsafe.Pointer(cname))
-	if err := C.snd_seq_set_client_name(a.seq, cname); err < 0 {
-		return nil, snderr2error(err)
-	}
-	c := C.snd_seq_client_id(a.seq)
-	if c < 0 {
-		return nil, snderr2error(c)
-	}
-	a.Client = int(c)
-	a.output = a.outputDirect
-	if err = a.CreatePort(clientName); err != nil {
-		return nil, err
-	}
-	return a, nil
-}
-
 func (a *Seq) CreatePort(name string) error {
 	_, err := a.CreatePortAddr(name)
 	return err
@@ -176,28 +97,10 @@ func (a *Seq) CreatePortAddr(name string) (SeqAddr, error) {
 	return a.createPortAddrCaps(name, PortCapDuplex|PortCapRead|PortCapSubsRead|PortCapWrite|PortCapSubsWrite)
 }
 
-func (a *Seq) createPortAddrCaps(name string, caps PortCaps) (SeqAddr, error) {
-	if a.seq == nil {
-		return SeqAddr{}, errors.New("sequencer is closed")
-	}
-	cname := C.CString(name)
-	defer C.free(unsafe.Pointer(cname))
-	port := C.snd_seq_create_simple_port(a.seq, cname,
-		C.uint(caps),
-		C.SND_SEQ_PORT_TYPE_MIDI_GENERIC|
-			C.SND_SEQ_PORT_TYPE_PORT|
-			C.SND_SEQ_PORT_TYPE_APPLICATION)
-	if port < 0 {
-		return SeqAddr{}, snderr2error(port)
-	}
-	addr := SeqAddr{a.Client, int(port)}
-	a.ports[addr.Port] = struct{}{}
-	if a.Port < 0 {
-		a.SeqAddr = addr
-	}
-	return addr, nil
-}
-
+// localPort reports whether addr names a port this sequencer created. Ownership is what
+// keeps one client's DeletePort or ClosePort from reaching another's port, and it is the
+// only record of ownership Seq keeps: ALSA is not asked, because it does not track who
+// created what.
 func (a *Seq) localPort(addr SeqAddr) error {
 	if err := addr.validate(); err != nil {
 		return err
@@ -211,20 +114,6 @@ func (a *Seq) localPort(addr SeqAddr) error {
 	return nil
 }
 
-func (a *Seq) DeletePort(addr SeqAddr) error {
-	if err := a.localPort(addr); err != nil {
-		return err
-	}
-	if err := snderr2error(C.snd_seq_delete_simple_port(a.seq, C.int(addr.Port))); err != nil {
-		return err
-	}
-	delete(a.ports, addr.Port)
-	if a.Port == addr.Port {
-		a.Port = -1
-	}
-	return nil
-}
-
 func (a *Seq) OpenPort(client, port int) error {
 	return a.OpenPortRead(SeqAddr{client, port})
 }
@@ -233,81 +122,24 @@ func (a *Seq) OpenPortRead(sa SeqAddr) error {
 	return a.OpenPortReadAt(a.SeqAddr, sa)
 }
 
-func (a *Seq) OpenPortReadAt(local, remote SeqAddr) error {
-	if err := a.localPort(local); err != nil {
-		return err
-	}
-	if err := a.checkPortCaps(remote, PortCapRead|PortCapSubsRead); err != nil {
-		return err
-	}
-	return snderr2error(C.snd_seq_connect_from(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
-}
-
 func (a *Seq) OpenPortWrite(sa SeqAddr) error {
 	return a.OpenPortWriteAt(a.SeqAddr, sa)
-}
-
-func (a *Seq) OpenPortWriteAt(local, remote SeqAddr) error {
-	if err := a.localPort(local); err != nil {
-		return err
-	}
-	if err := a.checkPortCaps(remote, PortCapWrite|PortCapSubsWrite); err != nil {
-		return err
-	}
-	return snderr2error(C.snd_seq_connect_to(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
-}
-
-func (a *Seq) checkPortCaps(sa SeqAddr, required PortCaps) error {
-	if err := sa.validate(); err != nil {
-		return err
-	}
-	var info *C.snd_seq_port_info_t
-	if err := C.snd_seq_port_info_malloc(&info); err < 0 {
-		return snderr2error(err)
-	}
-	defer C.snd_seq_port_info_free(info)
-	if err := C.snd_seq_get_any_port_info(a.seq, C.int(sa.Client), C.int(sa.Port), info); err < 0 {
-		return snderr2error(err)
-	}
-	caps := PortCaps(C.snd_seq_port_info_get_capability(info))
-	if !caps.Has(required) {
-		return fmt.Errorf("port %d:%d capabilities %#x do not support required %#x", sa.Client, sa.Port, caps, required)
-	}
-	return nil
 }
 
 func (a *Seq) ClosePortWrite(sa SeqAddr) error {
 	return a.ClosePortWriteAt(a.SeqAddr, sa)
 }
 
-func (a *Seq) ClosePortWriteAt(local, remote SeqAddr) error {
-	if err := a.localPort(local); err != nil {
-		return err
-	}
-	if err := remote.validate(); err != nil {
-		return err
-	}
-	return snderr2error(C.snd_seq_disconnect_to(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
-}
-
 func (a *Seq) ClosePortRead(sa SeqAddr) error {
 	return a.ClosePortReadAt(a.SeqAddr, sa)
-}
-
-func (a *Seq) ClosePortReadAt(local, remote SeqAddr) error {
-	if err := a.localPort(local); err != nil {
-		return err
-	}
-	if err := remote.validate(); err != nil {
-		return err
-	}
-	return snderr2error(C.snd_seq_disconnect_from(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
 func (a *Seq) OpenPortName(portName string) error {
 	return a.OpenPortNameRead(portName)
 }
 
+// OpenPortNameRead resolves against the ports that can be read from, so a name that only
+// matches a destination fails here rather than silently subscribing to nothing.
 func (a *Seq) OpenPortNameRead(portName string) error {
 	dev, err := a.resolvePortFiltered(portName, PortSource)
 	if err != nil {
@@ -324,6 +156,9 @@ func (a *Seq) OpenPortNameWrite(portName string) error {
 	return a.OpenPortWrite(dev.SeqAddr)
 }
 
+// OpenPortDuplex undoes only the half it just made. An already-subscribed input is left
+// alone, because adopting or removing a subscription the caller did not ask for here
+// would be a change nobody could see.
 func (a *Seq) OpenPortDuplex(sa SeqAddr) error {
 	if err := a.OpenPortRead(sa); err != nil {
 		return err
@@ -365,6 +200,9 @@ func (a *Seq) PortAddress(portName string) (sa SeqAddr, err error) {
 	return dev.SeqAddr, nil
 }
 
+// numericSeqName reports whether the name should be read as a client:port pair rather
+// than matched against device names. A client prefix of digits followed by a colon is
+// unambiguous, and treating it as a name would silently find nothing.
 func numericSeqName(name string) bool {
 	client, _, found := strings.Cut(name, ":")
 	if !found {
@@ -385,6 +223,9 @@ func (a *Seq) resolvePort(name string) (SeqDevice, error) {
 	return a.resolvePortFiltered(name, PortAny)
 }
 
+// resolvePortFiltered matches a numeric address exactly, or a name against the client
+// name, the port name, or the two joined. Several matches are reported rather than
+// picked, because choosing one would connect to a port the caller did not name.
 func (a *Seq) resolvePortFiltered(name string, dir PortDir) (SeqDevice, error) {
 	var addr SeqAddr
 	numeric := numericSeqName(name)
@@ -420,10 +261,10 @@ func (a *Seq) resolvePortFiltered(name string, dir PortDir) (SeqDevice, error) {
 	return matches[0], nil
 }
 
-func (a *Seq) MayRead() bool {
-	return C.snd_seq_event_input_pending(a.seq, 1) > 0
-}
-
+// ReadSysEx assembles a system exclusive message from the pieces the sequencer delivers.
+// The pieces arrive as separate events, and only the first has the F0 status, so the
+// check on the following events' first byte is what distinguishes a continuation from
+// the start of an unrelated message.
 func (a *Seq) ReadSysEx() (ret SeqEvent, err error) {
 	for {
 		ev, err := a.Read()
@@ -441,229 +282,10 @@ func (a *Seq) ReadSysEx() (ret SeqEvent, err error) {
 	return ret, nil
 }
 
-func (a *Seq) Read() (ret SeqEvent, err error) {
-	var event *C.snd_seq_event_t
-	for {
-		if err := C.snd_seq_event_input(a.seq, &event); err < 0 {
-			return ret, snderr2error(err)
-		}
-		ret, err = decodeSeqEvent(event)
-		if len(ret.Data) != 0 || err != nil {
-			return ret, err
-		}
-	}
-}
-
-func decodeSeqEvent(event *C.snd_seq_event_t) (ret SeqEvent, err error) {
-	ret.Client, ret.Port = int(event.source.client), int(event.source.port)
-	switch event._type {
-	case C.SND_SEQ_EVENT_SYSEX:
-		ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
-		data := C.snd_seq_ev_ext_data(ext)
-		ret.Data = C.GoBytes(unsafe.Pointer(data), C.int(ext.len))
-	case C.SND_SEQ_EVENT_SONGSEL:
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		if ctrl.value < 0 || ctrl.value > midi.DataMax {
-			return ret, fmt.Errorf("%w: song select %d", ErrInvalidMessage, ctrl.value)
-		}
-		ret.Data = []byte{midi.SongSelect, byte(ctrl.value)}
-	case C.SND_SEQ_EVENT_CONTROLLER:
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ret.Data = []byte{
-			midi.MakeCC(int(ctrl.channel)),
-			byte(ctrl.param),
-			byte(ctrl.value),
-		}
-	case C.SND_SEQ_EVENT_PGMCHANGE:
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ret.Data = []byte{
-			midi.MakePgm(int(ctrl.channel)),
-			byte(ctrl.value)}
-	case C.SND_SEQ_EVENT_KEYPRESS:
-		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ret.Data = []byte{
-			midi.MakeKeyAftertouch(int(note.channel)),
-			byte(note.note),
-			byte(note.velocity)}
-	case C.SND_SEQ_EVENT_CHANPRESS:
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		if ctrl.value < 0 || ctrl.value > midi.DataMax {
-			return ret, fmt.Errorf("invalid channel pressure: %d", ctrl.value)
-		}
-		ret.Data = []byte{midi.MakeChannelAftertouch(int(ctrl.channel)), byte(ctrl.value)}
-	case C.SND_SEQ_EVENT_PITCHBEND:
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		if ctrl.value < -midi.PitchCenter || ctrl.value > midi.PitchMax-midi.PitchCenter {
-			return ret, fmt.Errorf("invalid pitch bend: %d", ctrl.value)
-		}
-		low, high := midi.MakePitchBend(uint16(int(ctrl.value) + midi.PitchCenter))
-		ret.Data = []byte{midi.MakePitch(int(ctrl.channel)), low, high}
-	case C.SND_SEQ_EVENT_NOTEON:
-		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ret.Data = []byte{
-			midi.MakeNoteOn(int(note.channel)),
-			byte(note.note),
-			byte(note.velocity)}
-		if note.velocity == 0 {
-			ret.Data[0] = midi.MakeNoteOff(int(note.channel))
-		}
-	case C.SND_SEQ_EVENT_NOTEOFF:
-		note := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ret.Data = []byte{
-			midi.MakeNoteOff(int(note.channel)),
-			byte(note.note),
-			byte(note.velocity)}
-	case C.SND_SEQ_EVENT_CLOCK:
-		ret.Data = []byte{midi.Clock}
-	case C.SND_SEQ_EVENT_TICK, C.SND_SEQ_EVENT_TUNE_REQUEST,
-		C.SND_SEQ_EVENT_SENSING, C.SND_SEQ_EVENT_RESET:
-		return ret, fmt.Errorf("%w: type %d", ErrUnsupportedEvent, event._type)
-	case C.SND_SEQ_EVENT_START:
-		ret.Data = []byte{midi.Start}
-	case C.SND_SEQ_EVENT_CONTINUE:
-		ret.Data = []byte{midi.Continue}
-	case C.SND_SEQ_EVENT_STOP:
-		ret.Data = []byte{midi.Stop}
-	case C.SND_SEQ_EVENT_SONGPOS:
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		if ctrl.value < 0 || ctrl.value > midi.SongPositionMax {
-			return ret, fmt.Errorf("%w: song position %d", ErrInvalidMessage, ctrl.value)
-		}
-		ret.Data = []byte{midi.SongPosition, byte(ctrl.value & midi.DataMax), byte(ctrl.value >> midi.DataBits)}
-	case C.SND_SEQ_EVENT_QFRAME:
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		if ctrl.value < 0 || ctrl.value > midi.DataMax {
-			return ret, fmt.Errorf("%w: quarter frame %d", ErrInvalidMessage, ctrl.value)
-		}
-		ret.Data = []byte{midi.QuarterFrame, byte(ctrl.value)}
-	case C.SND_SEQ_EVENT_PORT_SUBSCRIBED:
-		c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
-		ret.Data = []byte{
-			EvPortSubscribed,
-			byte(c.sender.client), byte(c.sender.port),
-			byte(c.dest.client), byte(c.dest.port),
-		}
-	case C.SND_SEQ_EVENT_PORT_UNSUBSCRIBED:
-		c := (*C.snd_seq_connect_t)(unsafe.Pointer(&event.data))
-		ret.Data = []byte{
-			EvPortUnsubscribed,
-			byte(c.sender.client), byte(c.sender.port),
-			byte(c.dest.client), byte(c.dest.port),
-		}
-	}
-	return ret, nil
-}
-
+// Write sends on the default port, which SeqAddr holds. Assigning another owned address
+// to SeqAddr therefore redirects every later write without changing this method.
 func (a *Seq) Write(ev SeqEvent) error {
 	return a.WritePort(ev, a.Port)
-}
-
-func (a *Seq) outputDirect(event *outputEvent) error {
-	return snderr2error(C.snd_seq_event_output_direct(a.seq, event))
-}
-
-func (a *Seq) WritePort(ev SeqEvent, port int) error {
-	if err := ev.SeqAddr.validate(); err != nil {
-		return err
-	}
-	if err := a.localPort(SeqAddr{a.Client, port}); err != nil {
-		return err
-	}
-	event, err := encodeEvent(ev, SeqAddr{a.Client, port})
-	if err != nil || len(ev.Data) == 0 {
-		return err
-	}
-	err = a.output(event)
-	runtime.KeepAlive(ev.Data)
-	return err
-}
-
-func encodeEvent(ev SeqEvent, src SeqAddr) (event *outputEvent, err error) {
-	if err = validateMessage(ev.Data); err != nil || len(ev.Data) == 0 {
-		return nil, err
-	}
-	event = new(outputEvent)
-	event.source.client, event.source.port = src.CAddrValues()
-	event.dest.client, event.dest.port = ev.CAddrValues()
-	event.queue = C.SND_SEQ_QUEUE_DIRECT
-	switch midi.Message(ev.Data[0]) {
-	case midi.SysEx:
-		event._type = C.SND_SEQ_EVENT_SYSEX
-		event.flags = C.SND_SEQ_EVENT_LENGTH_VARIABLE
-		ext := (*C.snd_seq_ev_ext_t)(unsafe.Pointer(&event.data))
-		ext.len = C.uint(len(ev.Data))
-		C.snd_seq_ev_ext_data_set(ext, (*C.uchar)(&ev.Data[0]))
-	case midi.CC:
-		event._type = C.SND_SEQ_EVENT_CONTROLLER
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.param = C.uint(ev.Data[1])
-		ctrl.value = C.int(ev.Data[2])
-	case midi.NoteOff:
-		event._type = C.SND_SEQ_EVENT_NOTEOFF
-		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.note = C.uchar(ev.Data[1])
-		ctrl.velocity = C.uchar(ev.Data[2])
-	case midi.NoteOn:
-		event._type = C.SND_SEQ_EVENT_NOTEON
-		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.note = C.uchar(ev.Data[1])
-		ctrl.velocity = C.uchar(ev.Data[2])
-	case midi.Start:
-		event._type = C.SND_SEQ_EVENT_START
-		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
-		qc.queue = C.SND_SEQ_QUEUE_DIRECT
-	case midi.Continue:
-		event._type = C.SND_SEQ_EVENT_CONTINUE
-		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
-		qc.queue = C.SND_SEQ_QUEUE_DIRECT
-	case midi.Stop:
-		event._type = C.SND_SEQ_EVENT_STOP
-		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
-		qc.queue = C.SND_SEQ_QUEUE_DIRECT
-	case midi.Clock:
-		event._type = C.SND_SEQ_EVENT_CLOCK
-		qc := (*C.snd_seq_ev_queue_control_t)(unsafe.Pointer(&event.data))
-		qc.queue = C.SND_SEQ_QUEUE_DIRECT
-	case midi.Pgm:
-		event._type = C.SND_SEQ_EVENT_PGMCHANGE
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.value = C.int(ev.Data[1])
-	case midi.SongPosition:
-		event._type = C.SND_SEQ_EVENT_SONGPOS
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.value = C.int(ev.Data[1]) | C.int(ev.Data[2])<<midi.DataBits
-	case midi.QuarterFrame:
-		event._type = C.SND_SEQ_EVENT_QFRAME
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.value = C.int(ev.Data[1])
-	case midi.SongSelect:
-		event._type = C.SND_SEQ_EVENT_SONGSEL
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.value = C.int(ev.Data[1])
-	case midi.ChannelAftertouch:
-		event._type = C.SND_SEQ_EVENT_CHANPRESS
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.value = C.int(ev.Data[1])
-	case midi.Pitch:
-		event._type = C.SND_SEQ_EVENT_PITCHBEND
-		ctrl := (*C.snd_seq_ev_ctrl_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.value = C.int(int(ev.Data[1])|int(ev.Data[2])<<midi.DataBits) - midi.PitchCenter
-	case midi.KeyAftertouch:
-		event._type = C.SND_SEQ_EVENT_KEYPRESS
-		ctrl := (*C.snd_seq_ev_note_t)(unsafe.Pointer(&event.data))
-		ctrl.channel = C.uchar(midi.Channel(ev.Data[0]))
-		ctrl.note = C.uchar(ev.Data[1])
-		ctrl.velocity = C.uchar(ev.Data[2])
-	default:
-		return event, &UnsupportedMessageError{ev.Data[0]}
-	}
-	return event, nil
 }
 
 type SeqDevice struct {
@@ -677,42 +299,8 @@ func (a *Seq) Devices() (ret []SeqDevice, err error) {
 	return a.DevicesFiltered(PortSource)
 }
 
-func (a *Seq) devices() (ret []SeqDevice, err error) {
-	var cinfo *C.snd_seq_client_info_t
-	var pinfo *C.snd_seq_port_info_t
-
-	if err := C.snd_seq_client_info_malloc(&cinfo); err < 0 {
-		return nil, snderr2error(err)
-	}
-	defer C.snd_seq_client_info_free(cinfo)
-
-	if err := C.snd_seq_port_info_malloc(&pinfo); err < 0 {
-		return nil, snderr2error(err)
-	}
-	defer C.snd_seq_port_info_free(pinfo)
-
-	C.snd_seq_client_info_set_client(cinfo, -1)
-	for C.snd_seq_query_next_client(a.seq, cinfo) >= 0 {
-		client := C.snd_seq_client_info_get_client(cinfo)
-		C.snd_seq_port_info_set_client(pinfo, client)
-		C.snd_seq_port_info_set_port(pinfo, -1)
-		for C.snd_seq_query_next_port(a.seq, pinfo) >= 0 {
-			caps := PortCaps(C.snd_seq_port_info_get_capability(pinfo))
-			dev := SeqDevice{
-				SeqAddr: SeqAddr{
-					Client: int(C.snd_seq_port_info_get_client(pinfo)),
-					Port:   int(C.snd_seq_port_info_get_port(pinfo)),
-				},
-				ClientName: C.GoString(C.snd_seq_client_info_get_name(cinfo)),
-				PortName:   C.GoString(C.snd_seq_port_info_get_name(pinfo)),
-				Caps:       caps,
-			}
-			ret = append(ret, dev)
-		}
-	}
-	return ret, nil
-}
-
+// DevicesFiltered narrows the port list to the directions a caller asked about. The
+// filter is on the remote port, so PortSource means something this client can read from.
 func (a *Seq) DevicesFiltered(dir PortDir) ([]SeqDevice, error) {
 	if dir < PortSource || dir > PortAny {
 		return nil, fmt.Errorf("invalid port direction %d", dir)
@@ -747,16 +335,11 @@ func (d *SeqAddr) String() string {
 	return fmt.Sprintf("%d:%d", d.Client, d.Port)
 }
 
+// validate keeps an address inside the single byte ALSA carries it in, which is what
+// makes narrowing it later safe.
 func (d SeqAddr) validate() error {
 	if d.Client < 0 || d.Client > maxSeqAddress || d.Port < 0 || d.Port > maxSeqAddress {
 		return fmt.Errorf("address %d:%d out of range (0:%d)", d.Client, d.Port, maxSeqAddress)
 	}
 	return nil
-}
-
-func (d *SeqAddr) CAddrValues() (C.uchar, C.uchar) {
-	if err := d.validate(); err != nil {
-		panic(err)
-	}
-	return C.uchar(d.Client), C.uchar(d.Port)
 }

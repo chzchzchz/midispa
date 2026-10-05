@@ -110,7 +110,7 @@ func (p *PatternBank) clearPadState() {
 }
 
 // Audition uses the edited velocity and always closes the preview with velocity zero.
-func (p *PatternBank) auditionEvent(aseq midiWriter, event Event) error {
+func (p *PatternBank) auditionEvent(aseq alsa.EventWriter, event Event) error {
 	if event.Voice == nil {
 		return nil
 	}

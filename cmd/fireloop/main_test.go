@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/chzchzchz/midispa/alsa"
+	"github.com/chzchzchz/midispa/alsa/fake"
 	"github.com/chzchzchz/midispa/midi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -187,28 +188,29 @@ func TestLoadDevicesRejectsEmptyKit(t *testing.T) {
 	require.Error(t, err, "an empty kit should be refused")
 }
 
-// fakeSequencer stands in for the ALSA client so the shutdown path can be exercised without
-// a port.
-type fakeSequencer struct {
-	events   []alsa.SeqEvent
-	writeErr error
-	closeErr error
-	closes   int
-}
+// A sequencer that failed to open comes back as a nil *alsa.Seq, and assigning that into
+// an interface-typed field leaves something that is not nil but is not there either.
+// Every write path asks this question before it writes, so both kinds of absence have to
+// be told apart from a writer that really is there.
+func TestIsNilMidiWriter(t *testing.T) {
+	var unopened *alsa.Seq
+	var asWriter alsa.EventWriter = unopened
+	var asPortWriter alsa.PortWriter = unopened
 
-func (f *fakeSequencer) Write(event alsa.SeqEvent) error {
-	f.events = append(f.events, event)
-	return f.writeErr
-}
-
-func (f *fakeSequencer) WritePort(event alsa.SeqEvent, _ int) error {
-	f.events = append(f.events, event)
-	return f.writeErr
-}
-
-func (f *fakeSequencer) Close() error {
-	f.closes++
-	return f.closeErr
+	for _, test := range []struct {
+		name   string
+		aseq   any
+		absent bool
+	}{
+		{name: "nothing at all", aseq: nil, absent: true},
+		{name: "unopened sequencer behind an EventWriter", aseq: asWriter, absent: true},
+		{name: "unopened sequencer behind a PortWriter", aseq: asPortWriter, absent: true},
+		{name: "a writer that is there", aseq: alsa.EventWriter(&captureMidiWriter{}), absent: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.absent, isNilMidiWriter(test.aseq))
+		})
+	}
 }
 
 // shutdownBank is a bank with one chromatic note sounding, which is the state a signal
@@ -235,13 +237,13 @@ func shutdownBank(t *testing.T) (*Controller, *Playback, *captureMidiWriter, *fi
 // until its own timeout. It must also close the client.
 func TestShutdownReleasesSoundingNotes(t *testing.T) {
 	controller, playback, writer, _ := shutdownBank(t)
-	client := &fakeSequencer{}
+	client := fake.New()
 
 	require.NoError(t, shutdown(controller, client))
 	require.Len(t, writer.events, 1, "want the sounding note's note-off")
 	assertMidiData(t, writer.events[0], []byte{midi.MakeNoteOff(0), 60, 0})
 	require.Zero(t, playback.activeNoteCount(), "shutdown left a note marked as sounding")
-	require.Equal(t, 1, client.closes, "the sequencer should close once")
+	require.Equal(t, 1, client.Closes(), "the sequencer should close once")
 }
 
 // Leaving the unit showing the last frame reads as a sequencer that hung, so shutdown has to
@@ -253,7 +255,7 @@ func TestShutdownBlanksTheUnit(t *testing.T) {
 	require.NoError(t, controller.patbank.f.LightPad(3, 1, 127, 127, 127))
 	require.NoError(t, controller.patbank.f.Print(0, 0, "Pattern 001"))
 
-	require.NoError(t, shutdown(controller, &fakeSequencer{}))
+	require.NoError(t, shutdown(controller, fake.New()))
 
 	for index, color := range sim.pads {
 		require.Equalf(t, [3]int{}, color, "pad %d is still lit after shutdown", index)
@@ -274,12 +276,13 @@ func TestShutdownBlanksTheUnit(t *testing.T) {
 // client from being closed.
 func TestShutdownReportsCloseFailure(t *testing.T) {
 	controller, playback, writer, _ := shutdownBank(t)
-	client := &fakeSequencer{closeErr: errOutOfRange}
+	client := fake.New()
+	client.CloseErr = errOutOfRange
 
 	require.Error(t, shutdown(controller, client), "a failing close was not reported")
 	require.Len(t, writer.events, 1, "want the note-off even when closing fails")
 	require.Zero(t, playback.activeNoteCount(), "shutdown left a note marked as sounding")
-	require.Equal(t, 1, client.closes, "the sequencer should close once")
+	require.Equal(t, 1, client.Closes(), "the sequencer should close once")
 }
 
 // A handler failure runs on a goroutine, where a panic would take the process with it and
@@ -342,31 +345,15 @@ func TestHandlerPlaysAPadWithoutAPort(t *testing.T) {
 // program from that side, and it must not be swallowed.
 func TestReadFireReportsReadFailure(t *testing.T) {
 	inc := make(chan alsa.SeqEvent, 4)
-	reader := &fakeReader{
-		events: []alsa.SeqEvent{padMessage(NoteMute1, 100), padMessage(NoteMute2, 100)},
-		fail:   errOutOfRange,
-	}
+	// The Fire answers twice and then stops, which is what a Fire unplugged mid-session
+	// looks like: the events already on their way still arrive.
+	reader := fake.New()
+	reader.Queue(padMessage(NoteMute1, 100), padMessage(NoteMute2, 100))
+	reader.ReadErr = errOutOfRange
 
 	err := readFire(reader, inc)
 	require.ErrorIsf(t, err, errOutOfRange, "readFire should return the read failure")
 	require.Len(t, inc, 2, "readFire should pump the 2 events the reader held")
-}
-
-// fakeReader hands out a fixed list of events and then fails, standing in for the blocking
-// read of a real client.
-type fakeReader struct {
-	events []alsa.SeqEvent
-	fail   error
-	index  int
-}
-
-func (f *fakeReader) Read() (alsa.SeqEvent, error) {
-	if f.index >= len(f.events) {
-		return alsa.SeqEvent{}, f.fail
-	}
-	ev := f.events[f.index]
-	f.index++
-	return ev, nil
 }
 
 func TestSharedMIDIDestination(t *testing.T) {

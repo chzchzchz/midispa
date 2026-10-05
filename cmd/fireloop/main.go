@@ -89,11 +89,14 @@ func validChannel(channel int) bool {
 	return channel >= 0 && channel <= midiChannelMax
 }
 
-type midiWriter interface {
-	Write(alsa.SeqEvent) error
-}
-
-func isNilMidiWriter(aseq midiWriter) bool {
+// isNilMidiWriter reports whether the sequencer is absent: a nil interface, or a nil
+// *alsa.Seq that has been boxed into a non-nil one. openSequencer hands back a nil pointer
+// on failure, and assigning that into an interface-typed field makes it look present.
+//
+// It takes the value rather than one of alsa's interfaces because callers reach the
+// sequencer through several of them and what it inspects is the same either way. Naming
+// one would mean this check had to be repeated for the others.
+func isNilMidiWriter(aseq any) bool {
 	if aseq == nil {
 		return true
 	}
@@ -110,7 +113,7 @@ func midiDestination(destination alsa.SeqAddr) alsa.SeqAddr {
 	return destination
 }
 
-func writeMidiMsgs(aseq midiWriter, sa alsa.SeqAddr, msgs [][]byte) error {
+func writeMidiMsgs(aseq alsa.EventWriter, sa alsa.SeqAddr, msgs [][]byte) error {
 	if isNilMidiWriter(aseq) {
 		return nil
 	}
@@ -257,23 +260,15 @@ func (k *kitPaths) all() []string {
 	return k.paths
 }
 
-// sequencerSession is what shutdown needs from the ALSA client. It is an interface so the
-// shutdown path can be exercised without opening a port.
-type sequencerSession interface {
-	sequencerWriter
-	Close() error
-}
-
-// eventReader is the blocking half of the ALSA client.
-type eventReader interface {
-	Read() (alsa.SeqEvent, error)
-}
-
 // shutdown stops playback, releases every note still sounding, blanks the unit, and closes
 // the sequencer. It is the single way the program ends, so a note cannot be left on because
 // the process went away by any other route. One failure is reported but does not stop the
 // rest: a note still sounding matters more than a light that stayed on.
-func shutdown(c *Controller, aseq sequencerSession) error {
+//
+// Closing is all it asks of the client, so that is all it takes. The notes are released
+// through the playback that is already running rather than written from here, so this does
+// not need the writing half at all.
+func shutdown(c *Controller, aseq alsa.Closer) error {
 	var firstErr error
 	if err := c.stopPlayback(); err != nil {
 		firstErr = err
@@ -316,7 +311,7 @@ func (c *Controller) handleIncomingEvent(aseq sequencerWriter, ev alsa.SeqEvent)
 // readFire pumps the Fire's events to the handler. Reading blocks in the ALSA library, so
 // this owns the calling goroutine and returns only when the Fire stops answering, which is
 // the one thing that can end the program from here.
-func readFire(aseq eventReader, inc chan<- alsa.SeqEvent) error {
+func readFire(aseq alsa.EventReader, inc chan<- alsa.SeqEvent) error {
 	for {
 		ev, err := aseq.Read()
 		if err != nil {
@@ -406,7 +401,7 @@ func (c *Controller) processIncomingEvents(events sequencerWriter, inc <-chan al
 // waitForLeave returns once the program has been asked to stop, either by a signal or by the
 // Fire ceasing to answer. Reading blocks inside the ALSA library and cannot be interrupted,
 // so the read gets its own goroutine and this one waits for whichever comes first.
-func waitForLeave(aseq eventReader, inc chan<- alsa.SeqEvent) error {
+func waitForLeave(aseq alsa.EventReader, inc chan<- alsa.SeqEvent) error {
 	readErr := make(chan error, 1)
 	go func() { readErr <- readFire(aseq, inc) }()
 	signals := make(chan os.Signal, 1)

@@ -37,7 +37,7 @@ type EvWriter ChannelWriter[alsa.SeqEvent]
 
 func (ew *EvWriter) Close() { ((*ChannelWriter[alsa.SeqEvent])(ew)).Close() }
 
-func makeWriter(aseq *alsa.Seq, dst alsa.SeqAddr) *EvWriter {
+func makeWriter(aseq alsa.EventWriter, dst alsa.SeqAddr) *EvWriter {
 	outc, donec := make(chan alsa.SeqEvent, 16), make(chan struct{})
 	go func() {
 		defer close(donec)
@@ -53,18 +53,27 @@ func makeWriter(aseq *alsa.Seq, dst alsa.SeqAddr) *EvWriter {
 	return &EvWriter{outc, donec}
 }
 
+// FilterSeq reads events from one half of the ALSA client and writes them back out of the
+// other. The two halves are held as two fields rather than as one composed type, so each
+// says which direction it is for, and a stand-in only has to stand in for the half under
+// test.
 type FilterSeq struct {
-	aseq    *alsa.Seq
-	bcast   *EvWriter
-	routes  [16]*EvWriter
+	reader alsa.EventReader
+	writer alsa.EventWriter
+	bcast  *EvWriter
+	routes [16]*EvWriter
+	// routing counts the armed routes. It is what turns broadcast off: once any channel
+	// is routed somewhere, an unrouted one is dropped rather than leaked to subscribers
+	// that were not expecting it.
 	routing int
 	policy  Policy
 }
 
-func newFilterSeq(aseq *alsa.Seq, p Policy) *FilterSeq {
+func newFilterSeq(reader alsa.EventReader, writer alsa.EventWriter, p Policy) *FilterSeq {
 	return &FilterSeq{
-		aseq:   aseq,
-		bcast:  makeWriter(aseq, alsa.SubsSeqAddr),
+		reader: reader,
+		writer: writer,
+		bcast:  makeWriter(writer, alsa.SubsSeqAddr),
 		policy: p,
 	}
 }
@@ -81,13 +90,13 @@ func (f *FilterSeq) handleRoute(ev alsa.SeqEvent) {
 		f.routing--
 		go func() { oldr.Close() }()
 	}
-	f.routes[r.midiChannel] = makeWriter(f.aseq, r.dst)
+	f.routes[r.midiChannel] = makeWriter(f.writer, r.dst)
 	f.routing++
 	return
 }
 
 func (f *FilterSeq) handleEvent() error {
-	ev, err := f.aseq.Read()
+	ev, err := f.reader.Read()
 	if err != nil {
 		return err
 	}
@@ -152,7 +161,7 @@ func main() {
 
 	log.Printf("%q: %+v", *cnFlag, aseq.SeqAddr)
 	policy := initPolicy(*policyFlag, aseq.NewWriter(alsa.SubsSeqAddr))
-	f := newFilterSeq(aseq, policy)
+	f := newFilterSeq(aseq, aseq, policy)
 	defer f.Close()
 	for {
 		if err := f.handleEvent(); err != nil {

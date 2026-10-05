@@ -42,6 +42,31 @@ func (w *failingSequencerWriter) WritePort(event alsa.SeqEvent, _ int) error {
 	return w.portErr
 }
 
+// Transport messages go out on the sync port rather than the default one, and a client
+// that never opened has nothing to send them from. This is the one write path that does
+// not go through writeMidiMsgs, so it is the one that has to answer for itself: both ways
+// of being absent have to be silent rather than a write to a sequencer that is not there.
+func TestWriteSequencerPort(t *testing.T) {
+	var unopened *alsa.Seq
+	for _, test := range []struct {
+		name string
+		aseq alsa.PortWriter
+	}{
+		{name: "nothing at all", aseq: nil},
+		{name: "a sequencer that never opened", aseq: unopened},
+	} {
+		t.Run("ignores "+test.name, func(t *testing.T) {
+			require.NoError(t, writeSequencerPort(test.aseq, []byte{midi.Start}))
+		})
+	}
+
+	writer := &captureMidiWriter{}
+	require.NoError(t, writeSequencerPort(writer, []byte{midi.Start}))
+	require.Len(t, writer.events, 1, "wrote the wrong number of transport messages")
+	assertMidiData(t, writer.events[0], []byte{midi.Start})
+	require.Equal(t, alsa.SubsSeqAddr, writer.events[0].SeqAddr, "transport did not go to subscribers")
+}
+
 func TestPlaybackStopReturnsRunError(t *testing.T) {
 	expected := errors.New("start failed")
 	playback := &Playback{}

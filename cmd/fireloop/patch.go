@@ -19,6 +19,7 @@ import (
 	"gitlab.com/gomidi/midi/smf"
 	"gitlab.com/gomidi/midi/smf/smfreader"
 
+	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/midi"
 )
 
@@ -253,7 +254,7 @@ type patchTarget struct {
 // sets one and a dump went out. Errors are joined and returned; the caller logs them and
 // plays on regardless, because an instrument with the wrong settings is better than a Fire
 // that has stopped.
-func sendKitPatches(aseq midiWriter, vb *VoiceBank) (time.Duration, error) {
+func sendKitPatches(aseq alsa.EventWriter, vb *VoiceBank) (time.Duration, error) {
 	if isNilMidiWriter(aseq) || vb == nil {
 		return 0, nil
 	}
@@ -299,7 +300,7 @@ func sendKitPatches(aseq midiWriter, vb *VoiceBank) (time.Duration, error) {
 // writePatch converts the events to the target's channel and writes them to its device's
 // port. The destination goes through writeMidiMsgs like every other message, so a shared
 // MIDI destination applies to patches as it does to notes.
-func writePatch(aseq midiWriter, target patchTarget, messages []gomidi.Message) error {
+func writePatch(aseq alsa.EventWriter, target patchTarget, messages []gomidi.Message) error {
 	if target.device == nil {
 		return fmt.Errorf("patch %q has no device to send it to", filepath.Base(target.path))
 	}
