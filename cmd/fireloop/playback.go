@@ -29,8 +29,8 @@ type activeChromaticNote struct {
 	note        int
 	destination alsa.SeqAddr
 	tie         bool
-	// step is where the note started, so a note can be stopped after one step.
-	step int
+	// beat is where the note started, so a note can be stopped after one step.
+	beat float32
 }
 
 type chromaticOutbound struct {
@@ -135,21 +135,19 @@ func (p *Playback) playBeat(aseq alsa.EventWriter, pat *Pattern) (float32, error
 			return 0, err
 		}
 	}
-	currentStep := eventStep(Event{Beat: patBeat})
 	// A note from an earlier step stops before this one starts, unless a tie held it.
-	if err := p.releaseExpired(aseq, currentStep); err != nil {
+	if err := p.releaseExpired(aseq, patBeat); err != nil {
 		return 0, err
 	}
 	evs := pat.FindBeat(patBeat)
 	nextBeat := float32(0)
 	for _, ev := range evs {
-		step := eventStep(ev)
-		if step < currentStep {
+		if ev.Beat < patBeat-playbackBeatEpsilon {
 			continue
 		}
-		if step > currentStep {
+		if ev.Beat > patBeat+playbackBeatEpsilon {
 			// No more events to send.
-			nextBeat = stepBeat(step)
+			nextBeat = ev.Beat
 			break
 		}
 		if ev.Voice == nil {
@@ -240,7 +238,7 @@ func (p *Playback) playChromaticEvent(aseq alsa.EventWriter, event Event) error 
 		note:        event.NoteNumber(),
 		destination: midiDestination(eventDestination(event)),
 		tie:         event.Tie,
-		step:        eventStep(event),
+		beat:        event.Beat,
 	}
 	writerActive := !isNilMidiWriter(aseq)
 	var previousNote *activeChromaticNote
@@ -288,10 +286,17 @@ func previousNoteLabel(previous *activeChromaticNote) any {
 	return previous.note
 }
 
-// releaseExpired stops notes whose step has passed. A chromatic note is one step long
+// playbackBeatEpsilon absorbs the float error between a beat the pattern
+// stored and the position the worker last set from it. It is a thousandth of a
+// sixteenth, so it can only ever cover arithmetic that was meant to be exact, and
+// it is what lets the same loop serve grid-aligned events and a triplet's third
+// note without a special case for either.
+const playbackBeatEpsilon = 1e-4
+
+// releaseExpired stops notes whose beat has passed. A chromatic note is one step long
 // unless a tie holds it into the next event, so a lone note stops where it started
 // instead of ringing until the pattern ends.
-func (p *Playback) releaseExpired(aseq alsa.EventWriter, step int) error {
+func (p *Playback) releaseExpired(aseq alsa.EventWriter, beat float32) error {
 	type expiredNote struct {
 		voice *Voice
 		note  activeChromaticNote
@@ -299,7 +304,7 @@ func (p *Playback) releaseExpired(aseq alsa.EventWriter, step int) error {
 	var expired []expiredNote
 	p.activeMu.Lock()
 	for voice, note := range p.active {
-		if note.tie || step <= note.step {
+		if note.tie || beat <= note.beat+playbackBeatEpsilon {
 			continue
 		}
 		expired = append(expired, expiredNote{voice: voice, note: note})

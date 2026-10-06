@@ -104,7 +104,7 @@ func (p *PatternBank) paletteBase() int {
 // the shift shows on the grid without a word on the display. It does nothing outside
 // note-edit mode, where the knob moves the selected track's voice instead.
 func (p *PatternBank) ShiftPaletteOctave(detents int) error {
-	if p.lengthEditActive() || p.swingEditActive() {
+	if p.readoutIsOwned() {
 		return nil
 	}
 	voice := p.SelectedVoice()
@@ -125,11 +125,11 @@ func (p *PatternBank) ShiftPaletteOctave(detents int) error {
 // stepCellPaintColor is how a step cell reads right now: white while the playhead is on
 // it, otherwise the step's note colour, brightened while it is the step being edited.
 // Sharing one rule means any redraw keeps the playhead visible.
-func (p *PatternBank) stepCellPaintColor(pattern *Pattern, voice *Voice, step int) [3]int {
+func (p *PatternBank) stepCellPaintColor(pattern *Pattern, voice *Voice, step int, groups []tripletGroup) [3]int {
 	if step == p.playheadStep {
 		return oledWhite
 	}
-	return p.stepCellColor(pattern, voice, step)
+	return p.stepCellColor(pattern, voice, step, groups)
 }
 
 // chromaticStepCell is the grid position of the strip cell standing for a step.
@@ -151,7 +151,7 @@ func (p *PatternBank) drawStepCell(step int) error {
 	if voice == nil || !voice.IsChromatic() || pattern == nil {
 		return nil
 	}
-	color := p.stepCellPaintColor(pattern, voice, step)
+	color := p.stepCellPaintColor(pattern, voice, step, pattern.tripletGroups(voice))
 	return p.pads.LightPadColor(col, row, color)
 }
 
@@ -195,7 +195,7 @@ func (p *PatternBank) guardsPad(row, col int) bool {
 // pad removes the event, and so does A1, the palette's first pad, which stands for "no note
 // here". How hard a pad was hit sets the note's velocity, so a new step lands with the
 // dynamics that were played and the display reports that same value.
-func (p *PatternBank) handleNoteEditPad(aseq alsa.EventWriter, row, col, pressed int, alt bool) error {
+func (p *PatternBank) handleNoteEditPad(aseq alsa.EventWriter, row, col, pressed int, alt, shift bool) error {
 	voice := p.SelectedVoice()
 	if voice == nil || !voice.IsChromatic() || !p.noteEditActive() {
 		return nil
@@ -206,7 +206,16 @@ func (p *PatternBank) handleNoteEditPad(aseq alsa.EventWriter, row, col, pressed
 	}
 	if step := chromaticStepAt(row, col); step >= 0 {
 		// The right-hand block edits a step rather than assigning a pitch to one, and two
-		// cells held together tie those two steps.
+		// cells held together tie those two steps. Alt makes a press there a claim
+		// about the step's place in time instead, which is the same gesture the
+		// step grid answers, so it is intercepted before anything is recorded
+		// as held for a tie.
+		if alt && shift {
+			return p.toggleTripletGroup(step, voice, tripletSixteenth)
+		}
+		if alt {
+			return p.toggleTripletGroup(step, voice, tripletEighth)
+		}
 		return p.handleNoteEditStepPress(pattern, voice, step)
 	}
 	step := p.stepCursor
@@ -261,14 +270,19 @@ func (p *PatternBank) placeNoteOnStep(aseq alsa.EventWriter, pattern *Pattern, v
 	return p.repaintEditView()
 }
 
-// stepCellColor is how one cell of the step strip reads: the step's note colour, dark when
-// the step holds no note, and brightened while it is the step being edited.
-func (p *PatternBank) stepCellColor(pattern *Pattern, voice *Voice, step int) [3]int {
+// stepCellColor is how one cell of the step strip reads: the step's note colour,
+// dark when the step holds no note, and brightened while it is the step being edited.
+// A cell a group consumes holds no note at all, and its shade is what says the
+// cell belongs to a group rather than to a step.
+func (p *PatternBank) stepCellColor(pattern *Pattern, voice *Voice, step int, groups []tripletGroup) [3]int {
 	if pattern == nil {
 		return [3]int{}
 	}
 	event, ok := pattern.EventAtStep(step, voice)
 	if !ok {
+		if group, covered := tripletGroupCovering(groups, step); covered && group.consumed(step) {
+			return tripletConsumedColor(pattern, group, voice, false)
+		}
 		return [3]int{}
 	}
 	color := chromaticPaletteColor(event.NoteNumber())
@@ -287,16 +301,20 @@ func (p *PatternBank) drawNotePalette() error {
 	pads := make([]akai.Pad, 0, chromaticPaletteRows*padColumns)
 	pattern := p.CurrentPattern()
 	selectedNote := -1
+	var groups []tripletGroup
 	if pattern != nil {
 		if event, ok := pattern.EventAtStep(p.stepCursor, voice); ok {
 			selectedNote = event.ChromaticNote
 		}
+		// The strip's cells are painted from one walk of the voice's
+		// groups, so no cell asks the pattern for them on its own.
+		groups = pattern.tripletGroups(voice)
 	}
 	for row := 0; row < chromaticPaletteRows; row++ {
 		for col := 0; col < padColumns; col++ {
 			color := [3]int{}
 			if step := chromaticStepAt(row, col); step >= 0 {
-				color = p.stepCellPaintColor(pattern, voice, step)
+				color = p.stepCellPaintColor(pattern, voice, step, groups)
 			} else if note, onPalette := chromaticPaletteNote(row, col, p.paletteOctave); onPalette {
 				color = chromaticPaletteColor(note)
 				if note == selectedNote {

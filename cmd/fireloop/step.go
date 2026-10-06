@@ -87,9 +87,17 @@ func (p *PatternBank) redrawStepRows() error {
 	return nil
 }
 
+// readoutIsOwned reports whether an entry mode owns the readout row.
+// Every editor that would write a line holds this guard, because a
+// line written over a number being typed is the failure the entry
+// modes exist to prevent.
+func (p *PatternBank) readoutIsOwned() bool {
+	return p.lengthEditActive() || p.swingEditActive()
+}
+
 // MoveStepCursor keeps the edit target inside the active pattern length.
 func (p *PatternBank) MoveStepCursor(delta int) error {
-	if p.lengthEditActive() || p.swingEditActive() {
+	if p.readoutIsOwned() {
 		return nil
 	}
 	previous := p.stepCursor
@@ -172,19 +180,40 @@ func (p *PatternBank) setNoteEdit(active bool) error {
 }
 
 func (p *PatternBank) ToggleNoteMode() error {
-	if p.lengthEditActive() || p.swingEditActive() {
+	if p.readoutIsOwned() {
 		return nil
 	}
 	return p.setNoteEdit(p.noteEditActive() == false)
+}
+
+// stepMarks is where a step reaches: the step a tie runs into, the first
+// step of the triplet group covering it, and how many cells that group
+// owns. All are answers about the step rather than about the event on it,
+// and the readout shows them, so they are named once and passed once.
+// groupCells tells the readout an eighth group's consumed cell, the
+// 1-3 clause, apart from a cell that holds notes, because the x3 mark is
+// the same for both kinds. It is also what says a group is there at all:
+// zero cells is no group, which keeps the zero value of this struct
+// meaning "nothing reached this step".
+type stepMarks struct {
+	tieStep    int
+	groupStart int
+	groupCells int
 }
 
 // stepStatusText is the readout for the step under the cursor: its note, its velocity, and
 // the step a tie runs into. A percussive step has no pitch to name, so it reports its
 // dynamics alone. A step holding no note shows no velocity at all, because the value the
 // next note would inherit is not that step's velocity and reading it as one made two steps
-// look equal.
-func stepStatusText(voice *Voice, step int, event *Event, tieStep int) string {
+// look equal. A step a triplet group covers carries the group's x3 mark, and the cell a
+// group consumes shows the notes it belongs to instead of a velocity, because a dark cell
+// under the cursor otherwise reads as a step with nothing on it.
+func stepStatusText(voice *Voice, step int, event *Event, marks stepMarks) string {
 	if event == nil {
+		group := tripletGroup{start: marks.groupStart, cells: marks.groupCells}
+		if group.consumed(step) {
+			return fmt.Sprintf("S%02d x3 %02d-%02d", step+1, marks.groupStart+1, marks.groupStart+tripletNotes)
+		}
 		return fmt.Sprintf("S%02d --", step+1)
 	}
 	pitch := ""
@@ -192,8 +221,11 @@ func stepStatusText(voice *Voice, step int, event *Event, tieStep int) string {
 		pitch = midiNoteName(event.ChromaticNote)
 	}
 	text := fmt.Sprintf("S%02d %s@%03d", step+1, pitch, event.Velocity)
-	if event.Tie && tieStep >= 0 {
-		text = fmt.Sprintf("%s->%02d", text, tieStep+1)
+	if marks.groupCells != 0 {
+		text = fmt.Sprintf("%s x3", text)
+	}
+	if event.Tie && marks.tieStep >= 0 {
+		text = fmt.Sprintf("%s->%02d", text, marks.tieStep+1)
 	}
 	return text
 }
@@ -205,7 +237,7 @@ func (p *PatternBank) printStepStatus() error {
 	// The guard belongs here rather than in the twelve callers: every one of them ends at
 	// this line, and a guard in one of them covers neither the other eleven nor the next one
 	// anybody writes.
-	if p.lengthEditActive() || p.swingEditActive() {
+	if p.readoutIsOwned() {
 		return nil
 	}
 	if err := p.clearTextRows(readoutRow, 1); err != nil {
@@ -216,17 +248,24 @@ func (p *PatternBank) printStepStatus() error {
 		return nil
 	}
 	pattern := p.CurrentPattern()
-	tieStep := -1
+	// The tie target and the group a step belongs to are both
+	// answers about the step rather than about the event on it,
+	// so they are resolved together and passed together.
+	marks := stepMarks{tieStep: -1, groupStart: noGroup}
 	var event *Event
 	if pattern != nil {
 		if current, ok := pattern.EventAtStep(p.stepCursor, voice); ok {
 			event = &current
 			if next, nextOK := pattern.NextTiedEvent(p.stepCursor, voice); nextOK {
-				tieStep = eventStep(next)
+				marks.tieStep = eventStep(next)
 			}
 		}
+		if group, covered := pattern.TripletGroupAt(p.stepCursor, voice); covered {
+			marks.groupStart = group.start
+			marks.groupCells = group.cells
+		}
 	}
-	return p.printText(readoutRow, 0, fitOLEDText(stepStatusText(voice, p.stepCursor, event, tieStep)), false)
+	return p.printText(readoutRow, 0, fitOLEDText(stepStatusText(voice, p.stepCursor, event, marks)), false)
 }
 
 func fitOLEDText(text string) string {

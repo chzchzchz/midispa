@@ -13,7 +13,19 @@ type Event struct {
 	Beat          float32
 	ChromaticNote int  // MIDI note 0 through 127; chromatic voices only
 	Tie           bool // this event continues into the next event for this voice
-	Velocity      int  // [0,127]
+	// Triplet marks this event as the first note of a triplet group: the
+	// three notes that share one beat of four cells, or one eighth of two.
+	// It sits on the first note rather than on all three for the reason Tie
+	// does, one flag a repair has to look at, and a group that cannot be
+	// repaired then has one flag to clear rather than three. The kind is
+	// the span in cells, so the repair and the session file can tell the
+	// two sizes apart without a second lookup. The field sits beside Tie
+	// because the two one-byte flags share the padding after the note: Go
+	// lays fields out in declaration order, so anywhere else the flag
+	// would grow the event by a whole word, and every copy the bank, the
+	// playhead and a session file make is 8 bytes heavier for it.
+	Triplet  tripletKind
+	Velocity int // [0,127]
 }
 
 // IsChromatic reports whether the event's configured voice supplies its own pitch.

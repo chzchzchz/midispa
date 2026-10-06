@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync/atomic"
@@ -555,7 +556,7 @@ func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) erro
 		return nil
 	}
 	if c.patbank.noteEditActive() {
-		return c.patbank.handleNoteEditPad(aseq, y, x, vel, c.alt)
+		return c.patbank.handleNoteEditPad(aseq, y, x, vel, c.alt, c.shift)
 	}
 	// Swing entry's keypad sits in front of the Shift branch, not beside it. Shift is not
 	// part of this gesture — the mode already says which of the two is being entered — so
@@ -564,8 +565,19 @@ func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) erro
 	if c.patbank.swingEditActive() {
 		return c.typeNumber(x, y, "swing entry", swingEntryColumn, "Swing: %02d")
 	}
+	if c.alt && c.shift {
+		// The pair is a claim about an eighth of the grid. It sits ahead of
+		// the tempo branch, which is the binding it costs: with Alt off, a
+		// Shift plus a pad still types a tempo digit exactly as before.
+		return c.patbank.toggleTripletGroup(x, c.patbank.trackVoice(y+1), tripletSixteenth)
+	}
 	if c.shift {
 		return c.typeNumber(x, y, "tempo entry", tempoEntryColumn, "Tempo: %03d")
+	}
+	if c.alt {
+		// Alt is about what a step is for rather than what it holds, and on a
+		// percussive row this is the only grid that edits the beat at all.
+		return c.patbank.toggleTripletGroup(x, c.patbank.trackVoice(y+1), tripletEighth)
 	}
 	if handled, err := c.patbank.handleChromaticStepPress(y, x); handled {
 		return err
@@ -578,6 +590,32 @@ func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) erro
 		return nil
 	}
 	return writeMidiMsgs(aseq, eventDestination(patEv), patEv.ToMidi())
+}
+
+// tripletReadout is the line a triplet gesture writes on the readout row: the
+// span it acted on, and either what it did there or why it could not. Every
+// line names the span rather than the cursor, because the gesture snaps to the
+// group's own cells, which the press may not sit on, so the line reads on its
+// own. The lines fit the twenty columns the row has, the longest at sixteen.
+func tripletReadout(kind tripletKind, start int, err error, set bool) string {
+	span := fmt.Sprintf("S%02d-%02d", start+1, start+int(kind))
+	switch {
+	case errors.Is(err, errTripletBusy):
+		// The busy cell is the fourth cell of the beat, the one the group
+		// would draw. A sixteenth group has no fourth cell, so this refusal
+		// never names one.
+		return fmt.Sprintf("S%02d busy", start+int(kind))
+	case errors.Is(err, errTripletPastEnd):
+		return span + " past end"
+	case errors.Is(err, errTripletOverlap):
+		return span + " overlap"
+	case err != nil:
+		return span + " need 3"
+	case set:
+		return span + " x3"
+	default:
+		return span + " off"
+	}
 }
 
 func (c *Controller) processPatternEvent(aseq sequencerWriter, ev alsa.SeqEvent) error {

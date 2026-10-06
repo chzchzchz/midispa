@@ -103,7 +103,7 @@ func TestSelectKnobIgnoresAValueThatIsNotATurn(t *testing.T) {
 	bank, voice, _ := paletteTestBank(t)
 	voiceBefore := bank.trackVoice(1)
 
-	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false, false))
 	require.NoError(t, dispatch(bank, selectKnobCC(64)))
 	require.Equal(t, 0, bank.paletteOctave, "a value that is not a turn shifted the palette")
 	require.Equal(t, voiceBefore, bank.trackVoice(1), "a value that is not a turn moved the voice")
@@ -117,7 +117,7 @@ func TestSelectKnobShiftsPaletteByOctave(t *testing.T) {
 	bank, voice, _ := paletteTestBank(t)
 	voiceBefore := bank.trackVoice(1)
 
-	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false, false))
 	first, _ := chromaticPaletteNote(1, 3, 0)
 	event, _ := bank.CurrentPattern().EventAtStep(0, voice)
 	require.Equal(t, first, event.ChromaticNote)
@@ -129,7 +129,7 @@ func TestSelectKnobShiftsPaletteByOctave(t *testing.T) {
 	require.Equal(t, first, event.ChromaticNote, "the stored note is left where it was")
 
 	// The same pad now reaches the pitch an octave up.
-	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false, false))
 	up, _ := chromaticPaletteNote(1, 3, bank.paletteOctave)
 	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
 	require.Equal(t, up, event.ChromaticNote, "the pad reached the shifted pitch")
@@ -139,7 +139,7 @@ func TestSelectKnobShiftsPaletteByOctave(t *testing.T) {
 	for range 2 {
 		require.NoError(t, dispatch(bank, selectKnobCC(EncoderLeft)))
 	}
-	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, pressVelocity, false, false))
 	down, _ := chromaticPaletteNote(1, 3, bank.paletteOctave)
 	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
 	require.Equal(t, down, event.ChromaticNote, "the pad reached the lowered pitch")
@@ -227,7 +227,7 @@ func TestPaletteFirstPadErasesAfterShift(t *testing.T) {
 	base := bank.paletteBase()
 	require.NotEqual(t, chromaticBaseNote, base, "the test needs the palette shifted off A1")
 	// A pad an octave along places the shifted pitch.
-	require.NoError(t, bank.handleNoteEditPad(nil, 1, 0, pressVelocity, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 0, pressVelocity, false, false))
 	placed, _ := chromaticPaletteNote(1, 0, bank.paletteOctave)
 	require.NotEqual(t, base, placed, "the test needs a pad that is not the palette's first one")
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
@@ -235,7 +235,7 @@ func TestPaletteFirstPadErasesAfterShift(t *testing.T) {
 	require.Equal(t, placed, event.ChromaticNote)
 	// The palette's first pad is the erase key wherever the palette has moved to. Placing
 	// the note above also lifted the guard on that pad, which doubles as the step-one pad.
-	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, pressVelocity, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, pressVelocity, false, false))
 	_, still := bank.CurrentPattern().EventAtStep(0, voice)
 	require.Falsef(t, still, "the palette's first pad at %d did not erase", base)
 }
@@ -287,10 +287,10 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 
 	// Put a note on step 5, then select step 5 from the block rather than the grid.
 	require.NoError(t, bank.setStepCursor(5))
-	require.NoError(t, bank.handleNoteEditPad(nil, 2, 3, 100, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 2, 3, 100, false, false))
 	require.NoError(t, bank.setStepCursor(0))
 	row, col := 1, chromaticPaletteColumns+1 // step 5
-	require.NoError(t, bank.handleNoteEditPad(nil, row, col, 100, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, row, col, 100, false, false))
 	require.Equal(t, 5, bank.StepCursor(), "pressing the step block moved the edit")
 	_, ok := bank.CurrentPattern().EventAtStep(5, voice)
 	require.True(t, ok, "the note on step 5 disappeared")
@@ -298,24 +298,24 @@ func TestChromaticStepBlockSelectsAndA1Removes(t *testing.T) {
 	// Column 5 on the selected row is step 6 in step mode, so that pad is guarded until a
 	// note has been chosen at this step.
 	guarded, _ := bank.CurrentPattern().EventAtStep(5, voice)
-	require.NoError(t, bank.handleNoteEditPad(nil, 0, 5, 100, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 5, 100, false, false))
 	event, _ := bank.CurrentPattern().EventAtStep(5, voice)
 	require.Equal(t, guarded.ChromaticNote, event.ChromaticNote, "the step's own pad rewrote the pitch")
 
 	// Choosing a note elsewhere lifts the guard, and a palette pad then edits step 5.
-	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, 100, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 3, 100, false, false))
 	chosen, _ := chromaticPaletteNote(1, 3, 0)
 	event, _ = bank.CurrentPattern().EventAtStep(5, voice)
 	require.Equal(t, chosen, event.ChromaticNote, "step 5 pitch after choosing a note")
 
-	require.NoError(t, bank.handleNoteEditPad(nil, 0, 5, 100, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 5, 100, false, false))
 	event, ok = bank.CurrentPattern().EventAtStep(5, voice)
 	require.True(t, ok, "a palette pad stopped editing the selected step")
 	want, _ := chromaticPaletteNote(0, 5, 0)
 	require.Equal(t, want, event.ChromaticNote, "the lifted guard should let the pad through")
 
 	// A1 is the palette's first pad and means no note.
-	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, false, false))
 	_, stillThere := bank.CurrentPattern().EventAtStep(5, voice)
 	require.False(t, stillThere, "A1 did not remove the note")
 	_, elsewhere := bank.CurrentPattern().EventAtStep(0, voice)
@@ -419,13 +419,13 @@ func TestStepOnePadDoesNotEraseTheNote(t *testing.T) {
 	require.NoError(t, bank.SelectTrackRow(1))
 	require.NoError(t, bank.ToggleNoteMode())
 	// The step pad for step 1 is palette (0,0), which is A1.
-	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, false, false))
 	event, ok := pattern.EventAtStep(0, voice)
 	require.True(t, ok, "the step's own pad removed the note")
 	require.Equal(t, 43, event.ChromaticNote, "the step's own pad rewrote the note")
 
 	// Alt on the same pad is a request about the step, so it clears.
-	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, true))
+	require.NoError(t, bank.handleNoteEditPad(nil, 0, 0, 100, true, false))
 	_, cleared := pattern.EventAtStep(0, voice)
 	require.False(t, cleared, "Alt on the step pad did not clear the note")
 }

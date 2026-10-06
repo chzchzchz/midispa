@@ -144,6 +144,8 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
 - Two held step cells while choosing notes: the same tie, on the step strip where the steps live while the palette owns the grid. Both steps need a note, and nothing may sit between them; if the tie cannot be made the edit stays where it was rather than jumping to a step whose note has nothing to hold.
+- `Alt` plus a pad: toggle a triplet group on the beat the pressed cell falls in, editing the row the press came from rather than the selected row. The three notes on the beat's first three cells are re-timed to the thirds of the beat, and the fourth cell stops being a step: it holds no note while the group lasts, and a note placed there afterwards takes the group apart, putting every note back on the grid. The gesture needs one note on each of the beat's first three cells and nothing on the fourth, works on a percussive row with no row selected, and does not stop playback. The readout names the span and the answer, for example `S01-04 x3`, `S01-04 off`, `S05-08 need 3`, `S04 busy`, `S01-04 past end`, `S01-04 overlap` or `S01-02 overlap`. The gesture declines silently while a length or a swing is being entered.
+- `Alt` plus `Shift` plus a pad: the same gesture for a sixteenth-note group, which packs the three notes of three cells into the two cells of the beat's first half and leaves the second cell free for another note. Every cell of the group reaches the same group, so a press on any of its cells takes the group away again.
 - `Shift` plus a pad, then release `Shift`: enter a tempo. The entry shows on the bottom row only, so the rest of the display keeps showing the pattern, and a value from 21 to 299 is applied on release; anything else is discarded.
 - Tap: tap out a tempo. It takes at least two taps, ignores taps more than three seconds apart, averages the last five, and shows `Tempo: NNN` on the bottom row.
 - `Alt` plus a mute button: clear that track row. `Alt` stays engaged, so several rows can be cleared in a row. Clearing changes what is being played, so it stops playback, unlike selecting a row.
@@ -153,7 +155,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Play while copied: paste the pattern.
 - Stop: stop playback and release active chromatic notes.
 - Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
-- The bottom row carries whichever mode owns it: the step being edited, `Length NN steps`, the swing being typed, or a message from a save, a load or a controller.
+- The bottom row carries whichever mode owns it: the step being edited, `Length NN steps`, the swing being typed, a triplet gesture's line, or a message from a save, a load or a controller.
 - The separator row under the header carries the swing whenever it is not straight, for example `----------- Sw 66`, so the groove is visible while nothing is being edited. A straight swing leaves that row bare.
 - The four lights at the top left, labelled Channel, Mixer, User 1 and User 2, are indicators with no button behind them. Fireloop does not report state on them yet, and clears them whenever it clears the indicators, so they stay dark.
 
@@ -197,6 +199,8 @@ The pad grid shows the notes of the four visible tracks and the editing step is 
 
 During playback the playing column is inverted while the others are redrawn dimmer. Inversion is per channel, so a chromatic step keeps its pitch colour while being played and returns to it exactly when the playhead moves on. A tied step is marked by pushing its colour away from the playhead, lifted normally and lowered when inverted.
 
+A triplet group's drawn cell is marked with the shade of its first note: that note's colour at half brightness, marked the way a tied step is, so the shade survives an inverted column as the tie mark does. Only an eighth group draws a cell; a sixteenth group draws none, so its two cells show only their notes.
+
 While choosing notes the palette owns the grid, so the playhead lights the matching cell of the step strip instead and the palette is never overwritten.
 
 #### Track window
@@ -224,7 +228,7 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 8. Hold one cell and press another to tie those two steps, which is how a note is held past its step. Both steps need a note and no other note may sit between them; otherwise nothing is tied and the edit stays put.
 9. The palette's first pad means "no note", so pressing it clears the current step. It is A1 until the palette is turned, and moves with the palette afterwards. `Alt` plus any palette pad does the same.
 10. How hard a palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it by one detent at a time, clamped to 0..127. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
-11. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note. A tied step shows the step it is tied to as well, for example `S01 C4@100->04`.
+11. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note. A tied step shows the step it is tied to as well, for example `S01 C4@100->04`. A step a group covers carries the group's `x3`, and the cell a group draws shows the notes it belongs to instead of a velocity, for example `S04 x3 01-03`.
 12. Press Mode again to return to step mode.
 
 #### Chromatic note length
@@ -236,6 +240,19 @@ A chromatic note lasts one sixteenth-note step. It stops as soon as the playhead
 - Untied notes retrigger, so a note followed by another on the same voice stops exactly where the next one begins.
 - Stopping playback, switching pattern, or reaching the end of a pattern releases anything still sounding.
 - Under swing, the two steps that make the first half of a beat are longer than the two that make the second half, so a tied note on the long half rings noticeably longer than the same tie at a straight 50. That is what a tie means once the clock is swung, not a change to the tie.
+
+#### Triplet groups
+
+A triplet group re-times the first cells of a beat so three notes sound evenly inside the one beat. An eighth group spreads the three notes across the whole beat and a sixteenth group packs them into the beat's first half.
+
+- The gesture needs one note on each cell the group covers and nothing on any cell it does not: an eighth group covers four cells, a sixteenth group two. The group's flag rides the first note, and every cell of the group reaches the same group, so a press on any of them toggles it.
+- An eighth group draws its fourth cell, which stops holding a step while the group lasts. A sixteenth group frees its third cell instead, so two sixteenth groups fill one beat with six notes.
+- Groups of the two sizes refuse to share cells, though two sixteenth groups coexist, one per half beat.
+- The gesture refuses a beat whose covered cells do not hold exactly one note each, whose fourth cell holds a note, or which runs past the pattern's end, and the readout names the refusal while the notes stay untouched.
+- Any edit that breaks the cells takes the group apart, and the repair walks each survivor from its cell to the first free cell at or after it. A note placed on the drawn cell is the usual trigger, and the whole row repaints.
+- A group survives a save and a load.
+- Playback walks beats rather than steps, so a triplet's notes sound where the packing put them, and a pattern without groups plays exactly as before.
+- A triplet's notes can be tied like any adjacent events, and a tie across the beat line holds through it.
 
 #### Blackout
 

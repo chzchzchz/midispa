@@ -373,7 +373,7 @@ func TestTracePadMoveShowsThatStepWithoutMovingTheEncoder(t *testing.T) {
 	assert.Contains(t, recorder.row(readoutRow), "@099", "status after a pad move")
 	// Re-picking the pitch sets the dynamics from the new press.
 	require.NoError(t, bank.ToggleNoteMode())
-	require.NoError(t, bank.handleNoteEditPad(nil, 1, 2, 60, false))
+	require.NoError(t, bank.handleNoteEditPad(nil, 1, 2, 60, false, false))
 	event, ok := pattern.EventAtStep(4, voice)
 	require.True(t, ok, "the pitch edit removed the note")
 	require.Equal(t, 60, event.Velocity, "velocity after a pitch change should be the new press")
@@ -391,7 +391,7 @@ func TestTracePressVelocityBecomesTheNotesVelocity(t *testing.T) {
 	preview := &captureMidiWriter{}
 	for _, pressed := range []int{40, 90} {
 		require.NoError(t, bank.setStepCursor(0))
-		require.NoError(t, bank.handleNoteEditPad(preview, 0, 1, pressed, false))
+		require.NoError(t, bank.handleNoteEditPad(preview, 0, 1, pressed, false, false))
 		event, ok := bank.CurrentPattern().EventAtStep(0, voice)
 		require.Truef(t, ok, "the pad press placed no note (velocity %d)", event.Velocity)
 		require.Equalf(t, pressed, event.Velocity, "the note should carry the pad press")

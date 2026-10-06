@@ -27,7 +27,7 @@ const velocityStep = 1
 // with, and the knob is there to trim a hit rather than to replace it with whatever value
 // the encoder happened to be left at.
 func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) error {
-	if p.lengthEditActive() || p.swingEditActive() {
+	if p.readoutIsOwned() {
 		return nil
 	}
 	voice := p.SelectedVoice()

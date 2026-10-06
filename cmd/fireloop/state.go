@@ -79,15 +79,25 @@ type statePattern struct {
 	Events      []stateEvent `json:"events"`
 }
 
-// stateEvent is a grid position and a voice index, never a beat. The beat in a live event
-// is derived from the step, so writing the float would put a float32 in the file for no
-// gain and cost precision on the way back in.
+// stateEvent is a grid position and a voice index. A note on the grid is
+// placed by its step alone, so its beat is left out; a note a triplet group
+// packed off the grid carries its beat, which is the primitive for it, not a
+// derived one, and a float32 beat survives the float64 trip exactly.
 type stateEvent struct {
 	Voice    int  `json:"voice"`
 	Step     int  `json:"step"`
 	Note     int  `json:"note"`
 	Velocity int  `json:"velocity"`
 	Tie      bool `json:"tie,omitempty"`
+	// Triplet marks the event as the first note of a triplet group,
+	// carrying the group's span as its kind. It rides the first note
+	// for the reason the live flag does: one flag a repair has to look
+	// at, and a group that cannot be repaired then has one flag to clear.
+	Triplet tripletKind `json:"triplet,omitempty"`
+	// Beat is where an off-grid note sounds. Zero is an on-grid note,
+	// which the step already places, so omitempty leaves it out and a
+	// grid note's file is unchanged.
+	Beat float64 `json:"beat,omitempty"`
 }
 
 // stateSong lists one entry per measure holding the pattern in that measure. Measures
@@ -216,9 +226,22 @@ func statePatternFrom(index int, pattern *Pattern, voices map[*Voice]int) stateP
 			Note:     event.ChromaticNote,
 			Velocity: event.Velocity,
 			Tie:      event.Tie,
+			Triplet:  event.Triplet,
+			Beat:     stateBeat(event),
 		})
 	}
 	return saved
+}
+
+// stateBeat is the beat a file carries for an event. An on-grid note is
+// placed by its step, so its beat is left out; an off-grid note, which only
+// a triplet group packs, carries its own beat, because the step alone cannot
+// say where it sounds.
+func stateBeat(event Event) float64 {
+	if event.Beat == stepBeat(eventStep(event)) {
+		return 0
+	}
+	return float64(event.Beat)
 }
 
 // stateSongsFrom records each measure as the pattern index it holds, from the pointer to
@@ -458,10 +481,11 @@ func patternFromState(saved statePattern, vb *VoiceBank) (*Pattern, int) {
 		}
 		events = append(events, Event{
 			Voice:         voice,
-			Beat:          stepBeat(event.Step),
+			Beat:          beatFromState(event.Step, event.Beat),
 			ChromaticNote: clampMidiDataValue(event.Note),
 			Velocity:      clampMidiDataValue(event.Velocity),
 			Tie:           event.Tie,
+			Triplet:       event.Triplet,
 		})
 	}
 	// The events arrive in whatever order the file listed them, so they are handed to the
@@ -475,6 +499,17 @@ func patternFromState(saved statePattern, vb *VoiceBank) (*Pattern, int) {
 	// pattern or a tie pointing at nothing.
 	pattern.SetLengthSteps(lengthSteps)
 	return pattern, dropped
+}
+
+// beatFromState reads an event's beat back. A zero in the file is an on-grid
+// note, which the step places; anything else is the beat an off-grid note
+// sounds on, and it is the note's position rather than something to derive
+// from the step.
+func beatFromState(step int, beat float64) float32 {
+	if beat != 0 {
+		return float32(beat)
+	}
+	return stepBeat(step)
 }
 
 // resolveSongs rebuilds each song against the resolved patterns and reports how many

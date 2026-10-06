@@ -629,6 +629,13 @@ func (p *PatternBank) redrawTrackPads(row int) error {
 	}
 	evs := pat.FindBeat(0)
 	var rgb [16][3]int
+	// The groups come from the same walk that fills the row, because
+	// the flag that names one rides on its first note. A group's first
+	// note can sit in an earlier column than the cell it shades, so
+	// the walk's own colours cannot supply the shade: the group is
+	// recorded here and drawn after.
+	var groups []tripletGroup
+	groupColors := map[int][3]int{}
 	for _, ev := range evs {
 		if ev.Voice != tv {
 			continue
@@ -640,6 +647,15 @@ func (p *PatternBank) redrawTrackPads(row int) error {
 		rgb[idx] = chromaticEventColor(ev)
 		if ev.Tie {
 			rgb[idx] = markTieColor(rgb[idx], false)
+		}
+		if ev.Triplet != tripletNone {
+			groups = append(groups, tripletGroup{start: idx, cells: int(ev.Triplet)})
+			groupColors[idx] = rgb[idx]
+		}
+	}
+	for _, group := range groups {
+		if cell := group.start + group.cells - 1; group.consumed(cell) && cell < len(rgb) {
+			rgb[cell] = tripletShadeColor(groupColors[group.start], false)
 		}
 	}
 	if !p.noteEditActive() {
@@ -706,6 +722,10 @@ func (p *PatternBank) drawPadColumnColor(col int, invert bool) error {
 	// event past the column, so it runs at most padRows times, but every pass used to
 	// take the window lock again for a mapping that cannot change under it.
 	rowVoices := p.visibleTrackVoices()
+	// The column's own events cannot supply a group's shade, because a
+	// group's first note sits in an earlier column than the cell it
+	// shades. One walk resolves every row's shade group at once.
+	rowGroups := pattern.tripletGroupsConsuming(col, rowVoices)
 	for _, ev := range evs {
 		idx := eventStep(ev)
 		if idx < col {
@@ -723,7 +743,77 @@ func (p *PatternBank) drawPadColumnColor(col int, invert bool) error {
 			}
 		}
 	}
+	// A consumed cell is drawn from its group's first note, which the
+	// column walk above did not see: the first note sits in an earlier
+	// column.
+	for row, group := range rowGroups {
+		if group.consumed(col) {
+			rgb[row] = tripletConsumedColor(pattern, group, rowVoices[row], invert)
+		}
+	}
 	return p.pads.LightPadColumn(col, rgb)
+}
+
+// toggleTripletGroup is the triplet gesture's one entry point from the pad
+// grid: it sets or clears the group the pressed step belongs to, on the voice
+// of the row the press came from. The gesture is a claim about a beat rather
+// than a pad being held, so the held-pad state is left alone and the cursor
+// stays where it was.
+func (p *PatternBank) toggleTripletGroup(step int, voice *Voice, kind tripletKind) error {
+	// The guard is the readout row's own, which every editor that writes a
+	// line holds: a gesture that wrote its line over a number being entered
+	// would be the failure the guard exists to prevent. Swing entry never
+	// reaches this far, because its keypad branch types ahead of both
+	// gesture branches.
+	if p.readoutIsOwned() {
+		return nil
+	}
+	pattern := p.CurrentPattern()
+	if pattern == nil || voice == nil {
+		return nil
+	}
+	start := tripletGroupStart(step, int(kind))
+	set, err := pattern.ToggleTripletGroup(step, voice, kind)
+	if err != nil {
+		logger.Debug("triplet refused",
+			"start", start,
+			"cells", int(kind),
+			"voice", voiceLabel(voice),
+			"error", err,
+		)
+		return p.repaintTripletEdit(tripletReadout(kind, start, err, false))
+	}
+	logger.Debug("triplet",
+		"start", start,
+		"cells", int(kind),
+		"voice", voiceLabel(voice),
+		"set", set,
+	)
+	return p.repaintTripletEdit(tripletReadout(kind, start, nil, set))
+}
+
+// repaintTripletEdit repaints the view the gesture edited and then writes the
+// gesture's own line on the readout row. It is repaintEditView with the
+// readout left out, because the gesture's line is the status for this press:
+// the gesture can be aimed at a row the selection is not on, so the step
+// status would say nothing about the beat that just changed.
+func (p *PatternBank) repaintTripletEdit(line string) error {
+	if p.noteEditActive() {
+		if err := p.drawNotePalette(); err != nil {
+			return err
+		}
+	} else if err := p.redrawStepRows(); err != nil {
+		return err
+	}
+	return p.printReadout(0, fitOLEDText(line))
+}
+
+// redrawRowsWithVoice repaints every row a voice is shown on, which is what a
+// change that can move notes across a row needs.
+func (p *PatternBank) redrawRowsWithVoice(voice *Voice) error {
+	return p.forEachRowWithVoice(voice, func(row int) error {
+		return p.redrawTrackPads(row + 1)
+	})
 }
 
 // ToggleEvent edits the track shown on a zero-based pad row.
@@ -736,10 +826,17 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 	if pattern == nil || col < 0 || col >= pattern.LengthSteps() {
 		return Event{}, nil
 	}
+	// A press on a cell a triplet group owns can take the group apart, and
+	// the repair then moves notes onto cells the press never touched, so the
+	// row is repainted whole rather than pad by pad.
+	_, groupCovered := pattern.TripletGroupAt(col, voice)
 	if voice.IsChromatic() {
 		if event, ok := pattern.EventAtStep(col, voice); ok {
 			pattern.RemoveEventAtStep(col, voice)
 			event.Velocity = 0
+			if groupCovered {
+				return event, p.redrawRowsWithVoice(voice)
+			}
 			return event, nil
 		}
 		return Event{}, nil
@@ -752,6 +849,9 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 	added := pattern.ToggleEvent(ev)
 	if !added {
 		ev.Velocity = 0
+	}
+	if groupCovered {
+		return ev, p.redrawRowsWithVoice(voice)
 	}
 	// The press lights the step it placed and puts out the one it removed, so the pad
 	// says what the press did without waiting for a redraw of the whole row.

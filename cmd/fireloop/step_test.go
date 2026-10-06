@@ -20,13 +20,13 @@ func TestStepStatusText(t *testing.T) {
 	drum := 36
 	percussive, _ := chromaticTestVoice(t, &drum)
 	event := &Event{ChromaticNote: 60, Velocity: 90, Tie: true}
-	require.Equal(t, "S01 C4@090->02", stepStatusText(chromatic, 0, event, 1))
+	require.Equal(t, "S01 C4@090->02", stepStatusText(chromatic, 0, event, stepMarks{tieStep: 1}))
 	// A step with no note must not show a velocity, or it reads as that step's own.
-	require.Equal(t, "S02 --", stepStatusText(chromatic, 1, nil, -1))
+	require.Equal(t, "S02 --", stepStatusText(chromatic, 1, nil, stepMarks{tieStep: -1}))
 	// A percussive step has no pitch to name, so it reports its dynamics alone.
 	drumEvent := &Event{Velocity: 72}
-	require.Equal(t, "S03 @072", stepStatusText(percussive, 2, drumEvent, -1))
-	require.Equal(t, "S03 --", stepStatusText(percussive, 2, nil, -1))
+	require.Equal(t, "S03 @072", stepStatusText(percussive, 2, drumEvent, stepMarks{tieStep: -1}))
+	require.Equal(t, "S03 --", stepStatusText(percussive, 2, nil, stepMarks{tieStep: -1}))
 }
 
 // The Volume knob is the only way to change a percussive step's dynamics once it is
