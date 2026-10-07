@@ -186,7 +186,8 @@ was captured on.
 
 Each format declares its own output extension, so the requirement follows the
 format rather than its name. Without `--playback`, the program probes the patch
-with middle C at 10 ms, 100 ms, and 1000 ms durations, with 500 ms between probes.
+with middle C at 10 ms, 100 ms, and 1000 ms durations, played at each
+of the velocities 127, 99, and 64, with 500 ms between probes.
 
 ## Gene Semantics
 

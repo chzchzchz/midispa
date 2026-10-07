@@ -63,22 +63,19 @@ func TestMIDIPlayerPlaysProbeDurations(t *testing.T) {
 	player, _, sleeps := newFakeMIDIPlayer(writer)
 	require.NoError(t, player.playProbeNotes(context.Background()), "playProbeNotes")
 
-	wantSleeps := []time.Duration{
-		10 * time.Millisecond,
-		500 * time.Millisecond,
-		100 * time.Millisecond,
-		500 * time.Millisecond,
-		time.Second,
+	var wantSleeps []time.Duration
+	var wantMessages [][]byte
+	for index, step := range probeMelody {
+		wantSleeps = append(wantSleeps, step.duration)
+		wantMessages = append(wantMessages,
+			[]byte{0x90, probeNote, step.velocity},
+			[]byte{0x80, probeNote, 0},
+		)
+		if index+1 < len(probeMelody) {
+			wantSleeps = append(wantSleeps, noteGap)
+		}
 	}
 	assert.Equal(t, wantSleeps, *sleeps)
-	wantMessages := [][]byte{
-		{0x90, probeNote, probeVelocity},
-		{0x80, probeNote, 0},
-		{0x90, probeNote, probeVelocity},
-		{0x80, probeNote, 0},
-		{0x90, probeNote, probeVelocity},
-		{0x80, probeNote, 0},
-	}
 	assert.Equal(t, wantMessages, writer.messages)
 }
 
@@ -108,12 +105,13 @@ func TestMIDIPlayerSendsPatchBeforeProbe(t *testing.T) {
 	writer := &recordingMIDIWriter{failAt: -1}
 	player, _, _ := newFakeMIDIPlayer(writer)
 	require.NoError(t, player.audition(context.Background(), patch, nil), "audition")
-	require.Len(t, writer.messages, len(patch.genes)+10, "audition sent the wrong number of messages")
+	cleanup := [][]byte{{0xb0, sustainController, 0}, {0xb0, midi.AllNotesOff, 0}}
+	probeMessages := 2 * len(probeMelody)
+	require.Len(t, writer.messages, len(patch.genes)+probeMessages+2*len(cleanup), "audition sent the wrong number of messages")
 	for index, message := range writer.messages[2 : 2+len(patch.genes)] {
 		assert.True(t, midi.IsCC(message[0]), "message %d is not CC: %v", index, message)
 	}
 	assert.True(t, midi.IsNoteOn(writer.messages[2+len(patch.genes)][0]), "probe note did not follow patch CCs")
-	cleanup := [][]byte{{0xb0, sustainController, 0}, {0xb0, midi.AllNotesOff, 0}}
 	assert.Equal(t, cleanup, writer.messages[:2], "audition did not start from a safe state")
 	assert.Equal(t, cleanup, writer.messages[len(writer.messages)-2:], "audition was not safely reset")
 }
