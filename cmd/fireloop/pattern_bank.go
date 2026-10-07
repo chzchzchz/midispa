@@ -62,11 +62,6 @@ type PatternBank struct {
 	// playheadStep is the strip cell the note-edit playhead is lighting, or
 	// noPlayheadStep when it is not lighting one.
 	playheadStep int
-	// noteChosen records that a note has been picked at the current step. Until then the
-	// pad standing for that step is guarded, because in note-edit mode a grid pad is a
-	// pitch pad and pressing the one the user means as "this step" would rewrite the note
-	// they were trying to reach.
-	noteChosen bool
 	// noteEditHeldStep is the step cell held while note editing. A second cell pressed
 	// before that one is released ties the two steps, which is the tie gesture step mode
 	// uses on the step grid. noHeldStep when nothing is held.
@@ -271,12 +266,11 @@ func (p *PatternBank) leaveNoteEdit() error {
 	return p.pads.SetLed(NoteMode, LEDOff)
 }
 
-// resetEditState returns the view to where a pattern starts being worked on: nothing being
-// edited, no step chosen, and no guard held on a step. The cursor belongs to the pattern
-// being left rather than the one arriving, which is why choosing a pattern clears it.
+// resetEditState returns the view to where a pattern starts being worked on: nothing
+// being edited and no step chosen. The cursor belongs to the pattern being left
+// rather than the one arriving, which is why choosing a pattern clears it.
 func (p *PatternBank) resetEditState() error {
 	p.stepCursor = 0
-	p.noteChosen = false
 	return p.leaveNoteEdit()
 }
 

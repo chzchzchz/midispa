@@ -100,13 +100,8 @@ func (p *PatternBank) MoveStepCursor(delta int) error {
 	if p.readoutIsOwned() {
 		return nil
 	}
-	previous := p.stepCursor
 	p.stepCursor += delta
 	p.clampStepCursor()
-	if p.stepCursor != previous {
-		// A guard belongs to the step that was left behind.
-		p.noteChosen = false
-	}
 	logger.Debug("cursor", "step", p.stepCursor)
 	return p.repaintEditView()
 }
@@ -115,10 +110,6 @@ func (p *PatternBank) setStepCursor(step int) error {
 	pattern := p.CurrentPattern()
 	if pattern == nil || step < 0 || step >= pattern.LengthSteps() {
 		return nil
-	}
-	if step != p.stepCursor {
-		// A guard belongs to the step that was left behind.
-		p.noteChosen = false
 	}
 	p.stepCursor = step
 	logger.Debug("cursor", "step", p.stepCursor)

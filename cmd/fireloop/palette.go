@@ -179,17 +179,6 @@ func (p *PatternBank) clearStepPlayhead() error {
 	return p.drawStepCell(previous)
 }
 
-// guardsPad reports whether a palette pad is the one standing for the step being edited.
-// On the selected track's own pad row, column n is step n in step mode, so that press
-// means "this step" rather than a pitch. Only the first palette columns are involved: past
-// them the right-hand block already treats a press as a step.
-func (p *PatternBank) guardsPad(row, col int) bool {
-	if p.noteChosen || p.selTrackRow < 1 || row != p.selTrackRow-1 {
-		return false
-	}
-	return col == p.stepCursor && col < chromaticPaletteColumns
-}
-
 // In note-edit mode the left block chooses a pitch for the current step and the right-hand
 // block chooses which step is being edited. Two held cells tie those two steps. Alt plus a
 // pad removes the event, and so does A1, the palette's first pad, which stands for "no note
@@ -224,14 +213,6 @@ func (p *PatternBank) handleNoteEditPad(aseq alsa.EventWriter, row, col, pressed
 		// Neither a pitch nor a step, so there is nothing here to edit.
 		return nil
 	}
-	if p.guardsPad(row, col) && !alt {
-		// This pad stands for the step being edited, so treating it as a pitch pad here
-		// would rewrite the note the user was trying to reach, and as A1 it would erase
-		// it. The guard lifts once a note has been chosen at this step. Alt still clears,
-		// because that is a request about the step rather than a pitch.
-		logger.Debug("pitch refused", "step", step, "padRow", row, "padCol", col)
-		return nil
-	}
 	if alt || note == p.paletteBase() {
 		// The palette's first pad is where the palette starts, whichever octave that is,
 		// which makes it the natural key for "no note".
@@ -261,8 +242,6 @@ func (p *PatternBank) placeNoteOnStep(aseq alsa.EventWriter, pattern *Pattern, v
 	if !ok {
 		return nil
 	}
-	// A note has been chosen here, so the step's own pad is a pitch pad again.
-	p.noteChosen = true
 	logger.Debug("pitch", "step", step, "note", note, "velocity", event.Velocity)
 	if err := p.auditionEvent(aseq, event); err != nil {
 		return err
