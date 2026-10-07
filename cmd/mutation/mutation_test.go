@@ -271,3 +271,54 @@ func TestAdjustMutationRateStepsAndClamps(t *testing.T) {
 	_, err = mutation.adjustMutationRate(1)
 	assert.EqualError(t, err, "mutation rate is already 1.0", "missing upper bound report")
 }
+
+func TestFocusMutationSelectsMatchingGenes(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	mutation := newTestMutation(parent, defaultEvolutionSettings(), 3)
+
+	matched, err := mutation.focusMutation("SoundController5")
+	require.NoError(t, err, "focusMutation")
+	assert.Equal(t, []string{"SoundController5"}, matched, "pattern selected unexpected genes")
+	require.NotNil(t, mutation.settings.mutateFilter, "filter was not stored")
+	assert.Equal(t, "SoundController5", mutation.settings.mutateFilter.String(), "unexpected filter pattern")
+}
+
+func TestFocusMutationRejectsUnusablePatterns(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	mutation := newTestMutation(parent, defaultEvolutionSettings(), 3)
+
+	_, err := mutation.focusMutation("99[")
+	assert.Error(t, err, "accepted an invalid pattern")
+	assert.Nil(t, mutation.settings.mutateFilter, "invalid pattern stored a filter")
+
+	_, err = mutation.focusMutation("NoSuchGene")
+	assert.EqualError(t, err, `no mutable genes match "NoSuchGene"`, "missing zero match report")
+	assert.Nil(t, mutation.settings.mutateFilter, "zero match pattern stored a filter")
+}
+
+func TestBreedPopulationFocusesAndClearsThePattern(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	for index := range parent.genes {
+		parent.genes[index].value = 50
+	}
+	settings := defaultEvolutionSettings()
+	settings.mutationRate = 1
+	settings.mutatedGenes = 10
+	settings.crossoverRate = 0
+	mutation := newTestMutation(parent, settings, 4)
+
+	_, err := mutation.focusMutation("SoundController5")
+	require.NoError(t, err, "focusMutation")
+	population, err := mutation.breedPopulation([]scoredPatch{{patch: parent.clone(), score: 9}})
+	require.NoError(t, err, "breedPopulation")
+	assert.Nil(t, mutation.settings.mutateFilter, "breedPopulation did not clear the pattern")
+
+	for index, candidate := range population {
+		for geneIndex, gene := range geneValues(t, candidate.patch) {
+			if geneIndex == 4 {
+				continue
+			}
+			assert.Equal(t, 50, gene.value, "candidate %d gene %d changed outside the pattern", index, geneIndex)
+		}
+	}
+}

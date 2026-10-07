@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"regexp"
 	"sort"
 )
 
@@ -33,6 +34,11 @@ type evolutionSettings struct {
 	crossoverRate float64
 	roundSize     int
 	parentDecay   float64
+	// mutateFilter restricts mutation and crossover to genes
+	// whose names match, which the judge sets for one
+	// generation at a time. It is session state rather than
+	// configuration: no flag sets it and validate ignores it.
+	mutateFilter *regexp.Regexp
 }
 
 func defaultEvolutionSettings() evolutionSettings {
@@ -220,12 +226,29 @@ func adjustIntSetting(current *int, delta, minimum, maximum int, name string) (i
 	return updated, nil
 }
 
+// focusMutation restricts the next generation's mutations and
+// crossover to genes whose names match pattern, and reports
+// the mutable genes it selected. breedPopulation clears
+// the restriction once the focused generation is bred.
+func (mutation *Mutation) focusMutation(pattern string) ([]string, error) {
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("gene pattern: %w", err)
+	}
+	matched := mutation.parent.geneStore().matchingGeneNames(compiled)
+	if len(matched) == 0 {
+		return nil, fmt.Errorf("no mutable genes match %q", pattern)
+	}
+	mutation.settings.mutateFilter = compiled
+	return matched, nil
+}
+
 func (mutation *Mutation) crossover(parentA, parentB patch, enabled bool) (patch, error) {
 	child := parentA.clone()
 	if !enabled {
 		return child, nil
 	}
-	if err := crossoverGenes(child, parentB, mutation.random); err != nil {
+	if err := crossoverGenes(child, parentB, mutation.random, mutation.settings.mutateFilter); err != nil {
 		return nil, err
 	}
 	return child, nil
@@ -313,6 +336,9 @@ func (mutation *Mutation) selectionPool(ranked []scoredPatch) []scoredPatch {
 // Rank-weighted selection preserves diversity, crossover combines compatible
 // patches, and the remaining children receive local mutations.
 func (mutation *Mutation) breedPopulation(ranked []scoredPatch) ([]populationCandidate, error) {
+	// A pattern focuses one generation, so clearing it here
+	// keeps a stray pattern from reaching later generations.
+	defer func() { mutation.settings.mutateFilter = nil }()
 	pool := mutation.selectionPool(ranked)
 	population := make([]populationCandidate, 0, mutation.settings.roundSize)
 	appendElite := func(candidate patch) {

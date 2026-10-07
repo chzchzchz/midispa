@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"regexp"
 
 	"github.com/chzchzchz/midispa/track"
 )
@@ -51,8 +52,8 @@ type patchFactory interface {
 	outputExtension() string
 }
 
-func crossoverGenes(child, other patch, random *rand.Rand) error {
-	return child.geneStore().crossover(other.geneStore(), random)
+func crossoverGenes(child, other patch, random *rand.Rand, filter *regexp.Regexp) error {
+	return child.geneStore().crossover(other.geneStore(), random, filter)
 }
 
 func geneChanges(candidate, reference patch) ([]geneChange, error) {

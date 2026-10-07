@@ -2,6 +2,7 @@ package main
 
 import (
 	"math/rand"
+	"regexp"
 	"testing"
 
 	"github.com/chzchzchz/midispa/sysex"
@@ -130,7 +131,7 @@ func TestPendingFixedGeneIsRejected(t *testing.T) {
 func TestGenesRejectAnotherFormat(t *testing.T) {
 	first := &patchGenes{format: ccFormatID, genes: []gene{{name: "a", value: 1}}}
 	second := &patchGenes{format: dx7SingleFormatName, genes: []gene{{name: "a", value: 2}}}
-	assert.Error(t, first.crossover(second, rand.New(rand.NewSource(6))), "combined gene lists from two formats")
+	assert.Error(t, first.crossover(second, rand.New(rand.NewSource(6)), nil), "combined gene lists from two formats")
 	_, err := first.changesFrom(second)
 	assert.Error(t, err, "compared gene lists from two formats")
 }
@@ -138,7 +139,49 @@ func TestGenesRejectAnotherFormat(t *testing.T) {
 func TestGenesRejectMismatchedLengths(t *testing.T) {
 	first := &patchGenes{format: ccFormatID, genes: []gene{{name: "a", value: 1}, {name: "b", value: 2}}}
 	second := &patchGenes{format: ccFormatID, genes: []gene{{name: "a", value: 3}}}
-	assert.Error(t, first.crossover(second, rand.New(rand.NewSource(7))), "combined gene lists of different lengths")
+	assert.Error(t, first.crossover(second, rand.New(rand.NewSource(7)), nil), "combined gene lists of different lengths")
+}
+
+func TestMutateOnlyTakesMatchingGenes(t *testing.T) {
+	gen := &patchGenes{
+		format: ccFormatID,
+		genes: []gene{
+			{name: "Alpha", value: 10, policy: genePolicyMutable, domain: midiValueDomain()},
+			{name: "Beta", value: 10, policy: genePolicyMutable, domain: midiValueDomain()},
+			{name: "Gamma", value: 10, policy: genePolicyMutable, domain: midiValueDomain()},
+		},
+	}
+	settings := evolutionSettings{mutationRate: 1, mutatedGenes: 3, mutateFilter: mustPattern(t, "Beta")}
+	gen.mutate(rand.New(rand.NewSource(11)), settings, false)
+	assert.Equal(t, 10, gen.genes[0].value, "gene outside the pattern mutated")
+	assert.Equal(t, 10, gen.genes[2].value, "gene outside the pattern mutated")
+	assert.NotEqual(t, 10, gen.genes[1].value, "gene inside the pattern was not mutated")
+}
+
+func TestCrossoverOnlyTakesMatchingGenes(t *testing.T) {
+	alphaStable := true
+	betaMoved := false
+	for seed := int64(0); seed < 100; seed++ {
+		child := &patchGenes{
+			format: ccFormatID,
+			genes: []gene{
+				{name: "Alpha", value: 1, policy: genePolicyMutable, domain: midiValueDomain()},
+				{name: "Beta", value: 1, policy: genePolicyMutable, domain: midiValueDomain()},
+			},
+		}
+		other := &patchGenes{
+			format: ccFormatID,
+			genes: []gene{
+				{name: "Alpha", value: 2, policy: genePolicyMutable, domain: midiValueDomain()},
+				{name: "Beta", value: 2, policy: genePolicyMutable, domain: midiValueDomain()},
+			},
+		}
+		require.NoError(t, child.crossover(other, rand.New(rand.NewSource(seed)), mustPattern(t, "Beta")))
+		alphaStable = alphaStable && child.genes[0].value == 1
+		betaMoved = betaMoved || child.genes[1].value == 2
+	}
+	assert.True(t, alphaStable, "gene outside the pattern crossed over")
+	assert.True(t, betaMoved, "gene inside the pattern never crossed over")
 }
 
 // allowedValues lists the values a domain can actually produce, so the draw
@@ -151,4 +194,13 @@ func allowedValues(domain valueDomain) []int {
 		return []int{domain.minimum}
 	}
 	return []int{domain.minimum, domain.maximum}
+}
+
+// mustPattern compiles a test pattern, which fails the
+// test when the pattern itself is invalid.
+func mustPattern(t *testing.T, pattern string) *regexp.Regexp {
+	t.Helper()
+	compiled, err := regexp.Compile(pattern)
+	require.NoError(t, err, "test pattern")
+	return compiled
 }

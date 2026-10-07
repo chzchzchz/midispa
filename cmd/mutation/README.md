@@ -123,7 +123,7 @@ Each candidate is announced with its generation and position in the round:
 generation 0000, candidate 2/4
   OscMix: 40 -> 68 (delta +28)
   Cutoff: 72 -> 81 (delta +9)
-  rank 0-9, r to replay, [ ] round size, - + genes, < > rate:
+  rank 0-9, r to replay, [ ] round size, - + genes, < > rate, pattern:
 ```
 
 Input is whitespace-delimited, so press Enter after:
@@ -133,10 +133,19 @@ Input is whitespace-delimited, so press Enter after:
 - `[` and `]` to shrink or grow the next generation, from 3 to 32 candidates.
 - `-` and `+` to mutate fewer or more genes, from the automatic 1-3 range up to every mutable gene.
 - `<` and `>` to lower or raise the mutation rate in steps of 0.1.
+- a Go regexp of two or more characters, such as `Pitch` or `^Osc`, to mutate and crossover only matching genes in the next generation.
 
 The tuning keys echo their new value and apply from the next
 generation; the candidates already being judged keep their round.
 Every generation opens with a line naming its active settings.
+
+A gene pattern matches gene names without anchoring, so `Pitch`
+finds every gene containing it; `.*Pitch.*` is the explicit
+form. A pattern that is not a valid regexp, or that matches no
+mutable gene, is rejected with a message. The pattern applies to
+the generation bred after it is entered, restricts both mutation
+and crossover, and clears automatically, so every change that
+generation reports is in a matching gene.
 
 The highest-ranked patch remains the champion. A later round cannot replace it unless it receives a strictly higher rank.
 

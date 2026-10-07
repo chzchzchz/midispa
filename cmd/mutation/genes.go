@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -209,6 +210,13 @@ func (gen *patchGenes) randomize(random *rand.Rand) {
 	}
 }
 
+// geneMatches reports whether a gene passes the session's
+// gene filter. A nil filter matches every gene, which is
+// how a run without a pattern behaves.
+func geneMatches(filter *regexp.Regexp, name string) bool {
+	return filter == nil || filter.MatchString(name)
+}
+
 // mutate changes a bounded number of mutable genes in place. Initial
 // candidates draw uniformly, while descendants take a bounded Gaussian step so
 // that neighboring candidates stay comparable by ear.
@@ -218,7 +226,7 @@ func (gen *patchGenes) mutate(random *rand.Rand, settings evolutionSettings, gau
 	}
 	mutable := make([]int, 0, len(gen.genes))
 	for index := range gen.genes {
-		if gen.genes[index].policy == genePolicyMutable {
+		if gen.genes[index].policy == genePolicyMutable && geneMatches(settings.mutateFilter, gen.genes[index].name) {
 			mutable = append(mutable, index)
 		}
 	}
@@ -263,12 +271,12 @@ func mutateGene(target *gene, random *rand.Rand, settings evolutionSettings, gau
 }
 
 // crossover takes each mutable gene from the other parent with even odds.
-func (gen *patchGenes) crossover(other *patchGenes, random *rand.Rand) error {
+func (gen *patchGenes) crossover(other *patchGenes, random *rand.Rand, filter *regexp.Regexp) error {
 	if err := gen.requireSameFormat(other); err != nil {
 		return err
 	}
 	for index := range gen.genes {
-		if gen.genes[index].policy == genePolicyMutable && random.Intn(2) == 0 {
+		if gen.genes[index].policy == genePolicyMutable && geneMatches(filter, gen.genes[index].name) && random.Intn(2) == 0 {
 			gen.genes[index].value = other.genes[index].value
 		}
 	}
@@ -306,14 +314,21 @@ func (gen *patchGenes) requireSameFormat(other *patchGenes) error {
 	return nil
 }
 
-func (gen *patchGenes) mutableGeneCount() int {
-	count := 0
+// matchingGeneNames lists the mutable genes a mutation could
+// change, narrowed to the session's gene filter when one is
+// set; a nil filter lists every mutable gene.
+func (gen *patchGenes) matchingGeneNames(filter *regexp.Regexp) []string {
+	names := make([]string, 0, len(gen.genes))
 	for index := range gen.genes {
-		if gen.genes[index].policy == genePolicyMutable {
-			count++
+		if gen.genes[index].policy == genePolicyMutable && geneMatches(filter, gen.genes[index].name) {
+			names = append(names, gen.genes[index].name)
 		}
 	}
-	return count
+	return names
+}
+
+func (gen *patchGenes) mutableGeneCount() int {
+	return len(gen.matchingGeneNames(nil))
 }
 
 // hasSeedConfigurableGenes reports whether a seed can still supply a value for

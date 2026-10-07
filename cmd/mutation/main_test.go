@@ -228,3 +228,36 @@ func TestJudgeCommandsTuneLaterGenerations(t *testing.T) {
 	assert.Contains(t, output.String(), "round size 4", "missing round size report")
 	assert.Contains(t, output.String(), "mutation rate 0.9", "missing mutation rate report")
 }
+
+func TestJudgePatternFocusesTheNextRound(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	settings := defaultEvolutionSettings()
+	settings.mutatedGenes = 1
+	player, _, _ := newFakeMIDIPlayer(&recordingMIDIWriter{failAt: -1})
+	var output strings.Builder
+	mutation := newTestMutation(parent, settings, 15)
+	require.NoError(t, runTestMutation(
+		context.Background(),
+		mutation,
+		player,
+		filepath.Join(t.TempDir(), "best.mid"),
+		strings.NewReader("9 9 SoundController5 9 9 9 9 9 9"),
+		&output,
+	), "run")
+	assert.Nil(t, mutation.settings.mutateFilter, "the pattern survived past the focused generation")
+
+	inFocusedRound := false
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.HasPrefix(line, "generation 0001") {
+			inFocusedRound = true
+			continue
+		}
+		if strings.HasPrefix(line, "generation 0002") {
+			inFocusedRound = false
+		}
+		if !inFocusedRound || !strings.Contains(line, " -> ") {
+			continue
+		}
+		assert.Contains(t, line, "SoundController5", "gene outside the pattern changed: %s", line)
+	}
+}

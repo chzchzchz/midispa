@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Token-based input matches normal terminal line editing and also works with
@@ -54,10 +55,11 @@ type evolutionControls interface {
 	adjustRoundSize(delta int) (int, error)
 	adjustMutatedGenes(delta int) (int, error)
 	adjustMutationRate(delta int) (float64, error)
+	focusMutation(pattern string) ([]string, error)
 }
 
 // judgePrompt advertises every key the evaluation loop accepts.
-const judgePrompt = "rank 0-9, r to replay, [ ] round size, - + genes, < > rate: "
+const judgePrompt = "rank 0-9, r to replay, [ ] round size, - + genes, < > rate, pattern: "
 
 func judgeMutation(ctx context.Context, audition func() error, controls evolutionControls, input *judgeInput, output io.Writer) (int, error) {
 	if audition == nil {
@@ -75,7 +77,7 @@ func judgeMutation(ctx context.Context, audition func() error, controls evolutio
 			if err != nil {
 				return 0, err
 			}
-			handled, err := applyEvolutionCommand(answer, controls, output)
+			handled, err := applyJudgeCommand(answer, controls, output)
 			if err != nil {
 				return 0, err
 			}
@@ -104,11 +106,15 @@ func judgeMutation(ctx context.Context, audition func() error, controls evolutio
 	}
 }
 
-// applyEvolutionCommand handles the keys that tune the search rather
-// than rank a candidate. It reports whether the answer was one of
-// them; a key at a setting's bound is printed as feedback so the
+// applyJudgeCommand handles every answer that tunes the search
+// rather than ranking a candidate: the six tuning keys, and any
+// longer answer as a gene name pattern. It reports whether the
+// answer was one of them; a key at a setting's bound or a
+// pattern that matches nothing is printed as feedback so the
 // session keeps waiting for a rank.
-func applyEvolutionCommand(answer string, controls evolutionControls, output io.Writer) (bool, error) {
+func applyJudgeCommand(answer string, controls evolutionControls, output io.Writer) (bool, error) {
+	// A judge without controls, which the tests exercise, treats
+	// every tuning key as invalid input rather than panicking.
 	if controls == nil {
 		return false, nil
 	}
@@ -146,7 +152,15 @@ func applyEvolutionCommand(answer string, controls evolutionControls, output io.
 			message = fmt.Sprintf("mutation rate %.1f", rate)
 		}
 	default:
-		return false, nil
+		// A one character answer is a typo rather than a
+		// pattern, so it keeps the invalid-input message.
+		if len(answer) < 2 {
+			return false, nil
+		}
+		var matched []string
+		if matched, err = controls.focusMutation(answer); err == nil {
+			message = fmt.Sprintf("gene pattern %q: %s", answer, strings.Join(matched, ", "))
+		}
 	}
 	if err != nil {
 		message = err.Error()

@@ -144,3 +144,35 @@ func TestJudgeMutationIgnoresTuningKeysWithoutControls(t *testing.T) {
 	assert.Equal(t, 4, score)
 	assert.Contains(t, output.String(), `not "]"`, "tuning key was not reported as invalid")
 }
+
+func TestJudgeMutationFocusesGenePattern(t *testing.T) {
+	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
+	var output strings.Builder
+	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("SoundController5 6")), &output)
+	require.NoError(t, err, "judgeMutation")
+	assert.Equal(t, 6, score)
+	require.NotNil(t, mutation.settings.mutateFilter, "pattern did not set the filter")
+	assert.Equal(t, "SoundController5", mutation.settings.mutateFilter.String(), "unexpected filter pattern")
+	assert.Contains(t, output.String(), `gene pattern "SoundController5": SoundController5`, "missing gene pattern report")
+}
+
+func TestJudgeMutationRejectsUnusableGenePattern(t *testing.T) {
+	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
+	var output strings.Builder
+	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("NoSuch 99[ 6")), &output)
+	require.NoError(t, err, "judgeMutation")
+	assert.Equal(t, 6, score)
+	assert.Contains(t, output.String(), `no mutable genes match "NoSuch"`, "missing zero match report")
+	assert.Contains(t, output.String(), "gene pattern", "missing pattern error report")
+	assert.Nil(t, mutation.settings.mutateFilter, "rejected pattern stored a filter")
+}
+
+func TestJudgeMutationKeepsShortAnswersOffThePatternPath(t *testing.T) {
+	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
+	var output strings.Builder
+	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("x 4")), &output)
+	require.NoError(t, err, "judgeMutation")
+	assert.Equal(t, 4, score)
+	assert.Contains(t, output.String(), `not "x"`, "single character answer became a pattern")
+	assert.Nil(t, mutation.settings.mutateFilter, "single character answer set a filter")
+}
