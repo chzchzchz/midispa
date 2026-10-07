@@ -48,7 +48,18 @@ func readJudgeAnswer(ctx context.Context, input *judgeInput) (string, error) {
 	}
 }
 
-func judgeMutation(ctx context.Context, audition func() error, input *judgeInput, output io.Writer) (int, error) {
+// evolutionControls lets the judge tune the search while the engine
+// keeps every setting inside its validated bounds.
+type evolutionControls interface {
+	adjustRoundSize(delta int) (int, error)
+	adjustMutatedGenes(delta int) (int, error)
+	adjustMutationRate(delta int) (float64, error)
+}
+
+// judgePrompt advertises every key the evaluation loop accepts.
+const judgePrompt = "rank 0-9, r to replay, [ ] round size, - + genes, < > rate: "
+
+func judgeMutation(ctx context.Context, audition func() error, controls evolutionControls, input *judgeInput, output io.Writer) (int, error) {
 	if audition == nil {
 		return 0, fmt.Errorf("audition function is nil")
 	}
@@ -57,12 +68,19 @@ func judgeMutation(ctx context.Context, audition func() error, input *judgeInput
 			return 0, err
 		}
 		for {
-			if _, err := fmt.Fprint(output, "rank 0-9, or r to replay: "); err != nil {
+			if _, err := fmt.Fprint(output, judgePrompt); err != nil {
 				return 0, err
 			}
 			answer, err := readJudgeAnswer(ctx, input)
 			if err != nil {
 				return 0, err
+			}
+			handled, err := applyEvolutionCommand(answer, controls, output)
+			if err != nil {
+				return 0, err
+			}
+			if handled {
+				continue
 			}
 			switch {
 			case len(answer) == 1 && answer[0] >= '0' && answer[0] <= '9':
@@ -84,4 +102,66 @@ func judgeMutation(ctx context.Context, audition func() error, input *judgeInput
 		}
 	replay:
 	}
+}
+
+// applyEvolutionCommand handles the keys that tune the search rather
+// than rank a candidate. It reports whether the answer was one of
+// them; a key at a setting's bound is printed as feedback so the
+// session keeps waiting for a rank.
+func applyEvolutionCommand(answer string, controls evolutionControls, output io.Writer) (bool, error) {
+	if controls == nil {
+		return false, nil
+	}
+	var message string
+	var err error
+	switch answer {
+	case "[":
+		var size int
+		if size, err = controls.adjustRoundSize(-1); err == nil {
+			message = fmt.Sprintf("round size %d", size)
+		}
+	case "]":
+		var size int
+		if size, err = controls.adjustRoundSize(1); err == nil {
+			message = fmt.Sprintf("round size %d", size)
+		}
+	case "-":
+		var count int
+		if count, err = controls.adjustMutatedGenes(-1); err == nil {
+			message = mutatedGenesMessage(count)
+		}
+	case "+":
+		var count int
+		if count, err = controls.adjustMutatedGenes(1); err == nil {
+			message = mutatedGenesMessage(count)
+		}
+	case "<":
+		var rate float64
+		if rate, err = controls.adjustMutationRate(-1); err == nil {
+			message = fmt.Sprintf("mutation rate %.1f", rate)
+		}
+	case ">":
+		var rate float64
+		if rate, err = controls.adjustMutationRate(1); err == nil {
+			message = fmt.Sprintf("mutation rate %.1f", rate)
+		}
+	default:
+		return false, nil
+	}
+	if err != nil {
+		message = err.Error()
+	}
+	if _, printErr := fmt.Fprintln(output, message); printErr != nil {
+		return true, printErr
+	}
+	return true, nil
+}
+
+// mutatedGenesMessage names the automatic range when the count is
+// unset, which is how the flag default reads back to the judge.
+func mutatedGenesMessage(count int) string {
+	if count == 0 {
+		return "mutated genes automatic"
+	}
+	return fmt.Sprintf("mutated genes %d", count)
 }

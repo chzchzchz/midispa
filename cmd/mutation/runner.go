@@ -37,6 +37,16 @@ func (runner *mutationRunner) run(ctx context.Context) error {
 			return err
 		}
 		population := runner.engine.nextRound()
+		// One settings line per generation makes a tuning key's
+		// effect visible from the generation it first reaches.
+		if _, err := fmt.Fprintf(runner.output, "generation %04d: round size %d, %s, mutation rate %.1f\n",
+			runner.engine.generation,
+			runner.engine.settings.roundSize,
+			mutatedGenesMessage(runner.engine.settings.mutatedGenes),
+			runner.engine.settings.mutationRate,
+		); err != nil {
+			return err
+		}
 		scored := make([]scoredPatch, 0, len(population))
 		for index, candidate := range population {
 			patch := candidate.patch
@@ -57,7 +67,7 @@ func (runner *mutationRunner) run(ctx context.Context) error {
 			}
 			score, err := judgeMutation(ctx, func() error {
 				return runner.auditioner.audition(ctx, patch)
-			}, judgeInput, runner.output)
+			}, runner.engine, judgeInput, runner.output)
 			if errors.Is(err, io.EOF) {
 				return nil
 			}

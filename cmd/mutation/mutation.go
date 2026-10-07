@@ -13,9 +13,11 @@ const (
 	defaultMutatedGenes     = 0
 	defaultCrossoverRate    = 0.7
 	mutationExplorationRate = 0.1
+	mutationRateStep        = 0.1
 	defaultRoundSize        = 4
 	defaultParentDecay      = 0.5
 	maxMutatedGenes         = 3
+	maxRoundSize            = 32
 	geneticEliteCount       = 2
 	minimumRoundSize        = geneticEliteCount + 1
 )
@@ -166,6 +168,56 @@ func (mutation *Mutation) nextRound() []populationCandidate {
 		mutation.population = mutation.initialPopulation()
 	}
 	return mutation.population
+}
+
+// adjustRoundSize resizes the population of every generation bred
+// after this one. The bounds keep a generation small enough to
+// compare by ear but large enough to sample the search space.
+func (mutation *Mutation) adjustRoundSize(delta int) (int, error) {
+	return adjustIntSetting(&mutation.settings.roundSize, delta, minimumRoundSize, maxRoundSize, "round size")
+}
+
+// adjustMutatedGenes moves how many genes a descendant mutation
+// touches. Zero keeps the automatic one through maxMutatedGenes
+// range, so stepping down from one returns to it and stepping up
+// from it pins the count to one.
+func (mutation *Mutation) adjustMutatedGenes(delta int) (int, error) {
+	mutable := mutation.parent.mutableGeneCount()
+	current := mutation.settings.mutatedGenes
+	updated := current + delta
+	switch {
+	case updated < 0, updated > mutable && current == 0:
+		return current, fmt.Errorf("mutated genes is already automatic")
+	case updated > mutable:
+		return current, fmt.Errorf("mutated genes is already %d", current)
+	}
+	mutation.settings.mutatedGenes = updated
+	return updated, nil
+}
+
+// adjustMutationRate scales how likely a descendant is mutated at
+// all. Steps round to one decimal so repeated keys echo stable
+// values instead of drifting through floating point remainders.
+func (mutation *Mutation) adjustMutationRate(delta int) (float64, error) {
+	current := mutation.settings.mutationRate
+	updated := math.Round((current+float64(delta)*mutationRateStep)*10) / 10
+	if updated < 0 || updated > 1 {
+		return current, fmt.Errorf("mutation rate is already %.1f", current)
+	}
+	mutation.settings.mutationRate = updated
+	return updated, nil
+}
+
+// adjustIntSetting moves a bounded integer setting by one step.
+// The bound message names the setting and its current value,
+// which is how the judge reports a key pressed at a limit.
+func adjustIntSetting(current *int, delta, minimum, maximum int, name string) (int, error) {
+	updated := *current + delta
+	if updated < minimum || updated > maximum {
+		return *current, fmt.Errorf("%s is already %d", name, *current)
+	}
+	*current = updated
+	return updated, nil
 }
 
 func (mutation *Mutation) crossover(parentA, parentB patch, enabled bool) (patch, error) {

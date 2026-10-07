@@ -202,3 +202,29 @@ func TestValidateConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestJudgeCommandsTuneLaterGenerations(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	settings := defaultEvolutionSettings()
+	settings.roundSize = 3
+	player, _, _ := newFakeMIDIPlayer(&recordingMIDIWriter{failAt: -1})
+	var output strings.Builder
+	mutation := newTestMutation(parent, settings, 9)
+	require.NoError(t, runTestMutation(
+		context.Background(),
+		mutation,
+		player,
+		filepath.Join(t.TempDir(), "best.mid"),
+		strings.NewReader("9 9 ] 9 < 9 9 9 9 9 9"),
+		&output,
+	), "run")
+	assert.Equal(t, 4, mutation.settings.roundSize, "round size key did not resize the next generation")
+	assert.Equal(t, 0.9, mutation.settings.mutationRate, "rate key did not lower the next generation's mutation rate")
+	assert.Contains(t, output.String(), "candidate 3/3", "first generation kept its size")
+	assert.Contains(t, output.String(), "candidate 4/4", "second generation used the new size")
+	assert.Contains(t, output.String(), "generation 0000: round size 3, mutated genes automatic, mutation rate 1.0", "missing initial settings line")
+	assert.Contains(t, output.String(), "generation 0001: round size 4, mutated genes automatic, mutation rate 1.0", "missing round size settings line")
+	assert.Contains(t, output.String(), "generation 0002: round size 4, mutated genes automatic, mutation rate 0.9", "missing retuned settings line")
+	assert.Contains(t, output.String(), "round size 4", "missing round size report")
+	assert.Contains(t, output.String(), "mutation rate 0.9", "missing mutation rate report")
+}

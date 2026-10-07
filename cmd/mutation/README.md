@@ -123,13 +123,20 @@ Each candidate is announced with its generation and position in the round:
 generation 0000, candidate 2/4
   OscMix: 40 -> 68 (delta +28)
   Cutoff: 72 -> 81 (delta +9)
-  rank 0-9, or r to replay:
+  rank 0-9, r to replay, [ ] round size, - + genes, < > rate:
 ```
 
 Input is whitespace-delimited, so press Enter after:
 
 - `r` to replay the current candidate.
 - `0` through `9` to rank it, where 0 is worst and 9 is best.
+- `[` and `]` to shrink or grow the next generation, from 3 to 32 candidates.
+- `-` and `+` to mutate fewer or more genes, from the automatic 1-3 range up to every mutable gene.
+- `<` and `>` to lower or raise the mutation rate in steps of 0.1.
+
+The tuning keys echo their new value and apply from the next
+generation; the candidates already being judged keep their round.
+Every generation opens with a line naming its active settings.
 
 The highest-ranked patch remains the champion. A later round cannot replace it unless it receives a strictly higher rank.
 

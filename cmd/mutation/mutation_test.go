@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
 	"strings"
 	"testing"
@@ -206,4 +207,67 @@ func TestNewMutationRejectsInvalidState(t *testing.T) {
 	}
 	_, err = newMutation(sysexPatchFactory{format: newDX7Format(0)}, defaultEvolutionSettings(), rand.New(rand.NewSource(8)), nil, "")
 	assert.Error(t, err, "started a SysEx run without a seed")
+}
+
+func TestAdjustRoundSizeClampsAtBounds(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	mutation := newTestMutation(parent, defaultEvolutionSettings(), 3)
+
+	size, err := mutation.adjustRoundSize(1)
+	require.NoError(t, err, "adjustRoundSize")
+	assert.Equal(t, defaultRoundSize+1, size, "round size step")
+	assert.Equal(t, defaultRoundSize+1, mutation.settings.roundSize, "round size was not stored")
+
+	mutation.settings.roundSize = maxRoundSize
+	_, err = mutation.adjustRoundSize(1)
+	assert.EqualError(t, err, "round size is already 32", "missing upper bound report")
+
+	mutation.settings.roundSize = minimumRoundSize
+	_, err = mutation.adjustRoundSize(-1)
+	assert.EqualError(t, err, "round size is already 3", "missing lower bound report")
+}
+
+func TestAdjustMutatedGenesWalksAutomaticToMutableCount(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	mutation := newTestMutation(parent, defaultEvolutionSettings(), 3)
+	mutable := parent.mutableGeneCount()
+
+	count, err := mutation.adjustMutatedGenes(1)
+	require.NoError(t, err, "adjustMutatedGenes")
+	assert.Equal(t, 1, count, "stepping up from automatic pinned the count to one")
+
+	mutation.settings.mutatedGenes = 1
+	count, err = mutation.adjustMutatedGenes(-1)
+	require.NoError(t, err, "adjustMutatedGenes")
+	assert.Zero(t, count, "stepping down from one returned to automatic")
+
+	mutation.settings.mutatedGenes = mutable
+	_, err = mutation.adjustMutatedGenes(1)
+	assert.EqualError(t, err, fmt.Sprintf("mutated genes is already %d", mutable), "missing upper bound report")
+
+	mutation.settings.mutatedGenes = 0
+	_, err = mutation.adjustMutatedGenes(-1)
+	assert.EqualError(t, err, "mutated genes is already automatic", "missing automatic bound report")
+}
+
+func TestAdjustMutationRateStepsAndClamps(t *testing.T) {
+	parent := newTestPatch(t, "Sound Controller")
+	mutation := newTestMutation(parent, defaultEvolutionSettings(), 3)
+
+	rate, err := mutation.adjustMutationRate(-1)
+	require.NoError(t, err, "adjustMutationRate")
+	assert.Equal(t, 0.9, rate, "mutation rate step")
+	assert.Equal(t, 0.9, mutation.settings.mutationRate, "mutation rate was not stored")
+
+	rate, err = mutation.adjustMutationRate(1)
+	require.NoError(t, err, "adjustMutationRate")
+	assert.Equal(t, 1.0, rate, "mutation rate step back to the ceiling")
+
+	mutation.settings.mutationRate = 0
+	_, err = mutation.adjustMutationRate(-1)
+	assert.EqualError(t, err, "mutation rate is already 0.0", "missing lower bound report")
+
+	mutation.settings.mutationRate = 1
+	_, err = mutation.adjustMutationRate(1)
+	assert.EqualError(t, err, "mutation rate is already 1.0", "missing upper bound report")
 }
