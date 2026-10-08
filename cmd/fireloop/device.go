@@ -8,8 +8,10 @@ type Device struct {
 	Name     string
 	MidiPort string
 	Channel  int
-	// Patch names a .mid or .smf file played to this device when playback starts.
-	// A voice's Patch overrides it, the same way a voice's Channel overrides.
+	// Patch names a .mid or .smf file played to this device when playback
+	// starts. The file is read as a Standard MIDI File, or as a raw MIDI
+	// stream when it is not one. A voice's Patch overrides it, the same way
+	// a voice's Channel overrides.
 	Patch string
 	// Settle is how long this device is given to absorb a vendor dump from Patch
 	// before the first note, written as text such as "100ms". It is left out of a

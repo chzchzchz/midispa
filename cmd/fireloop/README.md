@@ -90,7 +90,7 @@ Percussion MIDI notes are in the range 0 through 127. Chromatic events store the
 
 #### Patches
 
-A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that device when playback starts, so the instrument is set up before the first note of a pattern or a song. A voice's `Patch` overrides its device's, exactly as a voice's `Channel` overrides its device's channel.
+A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that device when playback starts, so the instrument is set up before the first note of a pattern or a song. The file is read as a Standard MIDI File, and as a raw MIDI byte stream when it is not one, so a dump saved straight off the wire loads too. A voice's `Patch` overrides its device's, exactly as a voice's `Channel` overrides its device's channel.
 
 ```json
 [

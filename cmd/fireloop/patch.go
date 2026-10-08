@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"gitlab.com/gomidi/midi/midimessage/channel"
 	"gitlab.com/gomidi/midi/midimessage/meta"
 	"gitlab.com/gomidi/midi/midimessage/sysex"
+	"gitlab.com/gomidi/midi/midireader"
 	"gitlab.com/gomidi/midi/smf"
 	"gitlab.com/gomidi/midi/smf/smfreader"
 
@@ -89,17 +92,35 @@ func validPatchExtension(path string) bool {
 	return ext == patchExtensionMIDI || ext == patchExtensionSMF
 }
 
-// readPatchSMF reads a patch file into the events that go on the wire. Meta events are
-// dropped as they are read: tempo, time signature, track name and end-of-track describe
-// the file rather than the MIDI in it.
-func readPatchSMF(path string) ([]gomidi.Message, error) {
-	file, err := os.Open(path)
+// readPatch reads a patch file into the events that go on the wire. The
+// file is read once and tried as a Standard MIDI File; one that is not
+// one is tried again as a raw MIDI stream, the way the bytes would go
+// over the wire, so a dump saved without the file framing around it
+// loads too.
+func readPatch(path string) ([]gomidi.Message, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	messages, err := readPatchSMF(bytes.NewReader(data))
+	if err == nil {
+		return messages, nil
+	}
+	raw, rawErr := readPatchRaw(bytes.NewReader(data))
+	if rawErr == nil {
+		return raw, nil
+	}
+	// Neither reading worked, so the file is neither format. Both errors
+	// are kept, because which one explains the file depends on what the
+	// kit meant it to be.
+	return nil, errors.Join(err, rawErr)
+}
 
-	reader := smfreader.New(file, smfreader.NoteOffVelocity())
+// readPatchSMF reads a Standard MIDI File into the events that go on the
+// wire. Meta events are dropped as they are read: tempo, time signature,
+// track name and end-of-track describe the file rather than the MIDI in it.
+func readPatchSMF(src io.Reader) ([]gomidi.Message, error) {
+	reader := smfreader.New(src, smfreader.NoteOffVelocity())
 	if err := reader.ReadHeader(); err != nil {
 		return nil, err
 	}
@@ -114,6 +135,38 @@ func readPatchSMF(path string) ([]gomidi.Message, error) {
 		}
 		if _, isMeta := message.(meta.Message); isMeta {
 			continue
+		}
+		messages = append(messages, message)
+	}
+}
+
+// readPatchRaw reads a raw MIDI stream into the events that go on the
+// wire: the bytes as they would arrive off a cable, with no file framing
+// around them. System Realtime messages are dropped, because a clock or a
+// start byte between events is timing for the instrument that heard them
+// live rather than part of the patch. A stream that holds no message at
+// all is refused: raw bytes carry nothing that could tell an empty patch
+// from a file that is not MIDI, so nothing is taken from a file that has
+// nothing to send.
+func readPatchRaw(src io.Reader) ([]gomidi.Message, error) {
+	reader := midireader.New(src, nil, midireader.NoteOffVelocity())
+	var messages []gomidi.Message
+	for {
+		message, err := reader.Read()
+		if err == io.EOF {
+			// A message that arrives with io.EOF is a sysex the stream
+			// ended inside. The dump is incomplete, and half of one is
+			// worse than none of one.
+			if message != nil {
+				return nil, errors.New("stream ends inside a sysex message")
+			}
+			if len(messages) == 0 {
+				return nil, errors.New("no MIDI messages in the stream")
+			}
+			return messages, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		messages = append(messages, message)
 	}
@@ -154,7 +207,7 @@ func (c *patchCache) read(path string) ([]gomidi.Message, error) {
 	if messages, ok := c.messages[path]; ok {
 		return messages, nil
 	}
-	messages, err := readPatchSMF(path)
+	messages, err := readPatch(path)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +399,7 @@ func validatePatch(what string, dev *Device, patch string) error {
 		return fmt.Errorf("%s has patch %q, want a %s or %s file",
 			what, patch, patchExtensionMIDI, patchExtensionSMF)
 	}
-	if _, err := readPatchSMF(path); err != nil {
+	if _, err := readPatch(path); err != nil {
 		return fmt.Errorf("%s has patch %q: %w", what, patch, err)
 	}
 	return nil

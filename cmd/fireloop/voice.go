@@ -5,7 +5,9 @@ type Voice struct {
 	Note    *int
 	Channel int // [1,16] if set; otherwise use the device channel
 	// Patch names a .mid or .smf file played to this voice's device when playback
-	// starts. It overrides the device's Patch, the way Channel overrides its channel.
+	// starts. It overrides the device's Patch, the way Channel overrides its
+	// channel. The file is read as a Standard MIDI File, or as a raw MIDI
+	// stream when it is not one.
 	Patch string
 
 	device *Device // backpointer

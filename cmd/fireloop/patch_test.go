@@ -72,6 +72,16 @@ func patchFile(t *testing.T, dir, name string, messages ...gomidi.Message) strin
 	return path
 }
 
+// rawPatchFile writes raw MIDI bytes into dir as a patch file and returns
+// where they landed: a dump saved straight off the wire, with no Standard
+// MIDI File framing around it.
+func rawPatchFile(t *testing.T, dir, name string, data ...byte) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	return path
+}
+
 // patchVoices builds one voice per channel, which is how most of the tests here say "this
 // device's voices sit on these channels".
 func patchVoices(channels ...int) []Voice {
@@ -675,4 +685,82 @@ func TestOneBrokenPatchIsReportedOnce(t *testing.T) {
 	for _, name := range []string{`/gone.mid"`, `/also-gone.mid"`} {
 		require.Equalf(t, 1, strings.Count(err.Error(), name), "%s must be named once", name)
 	}
+}
+
+// A file that is not a Standard MIDI File is read as a raw MIDI stream:
+// the bytes as they would go over the wire. Running status carries from
+// one event to the next, and a System Realtime byte between events is
+// timing for the instrument that heard it live rather than part of the
+// patch, so it is dropped.
+func TestPatchRawStreamIsReadWhenTheFileIsNotAnSMF(t *testing.T) {
+	dir := t.TempDir()
+	rawPatchFile(t, dir, "instrument.mid",
+		0xb0, 74, 90, // control change
+		0xf8,       // MIDI clock, dropped
+		75, 20,     // running status: another control change
+		0xc0, 42,   // program change
+	)
+	device := patchedDevice(dir, "instrument.mid")
+	writer := &captureMidiWriter{}
+	_, err := sendKitPatches(writer, NewVoiceBank([]Device{device}))
+	require.NoError(t, err)
+	assertEvents(t, writer, []alsa.SeqEvent{
+		sentTo([]byte{midi.MakeCC(0), 74, 90}),
+		sentTo([]byte{midi.MakeCC(0), 75, 20}),
+		sentTo([]byte{midi.MakePgm(0), 42}),
+	})
+}
+
+// A vendor dump saved as raw bytes goes out exactly as it sits in the
+// file, and makes a device settle just as one dumped inside a Standard
+// MIDI File does.
+func TestPatchRawSysExDumpIsSentUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	rawPatchFile(t, dir, "dump.mid", patchDump.Raw()...)
+	device := patchedDevice(dir, "dump.mid")
+	device.Settle = Settle(100 * time.Millisecond)
+	writer := &captureMidiWriter{}
+	settle, err := sendKitPatches(writer, NewVoiceBank([]Device{device}))
+	require.NoError(t, err)
+	assertEvents(t, writer, []alsa.SeqEvent{sentTo(patchDump.Raw())})
+	require.Equal(t, 100*time.Millisecond, time.Duration(settle))
+}
+
+// A note on with velocity zero is a note off, and a note off carries
+// its own velocity, in a raw stream as in a file.
+func TestPatchRawStreamNoteOffs(t *testing.T) {
+	dir := t.TempDir()
+	rawPatchFile(t, dir, "notes.mid",
+		0x90, 60, 0,  // note on with velocity zero: a note off
+		0x80, 60, 40, // note off with release velocity
+	)
+	device := patchedDevice(dir, "notes.mid")
+	writer := &captureMidiWriter{}
+	_, err := sendKitPatches(writer, NewVoiceBank([]Device{device}))
+	require.NoError(t, err)
+	assertEvents(t, writer, []alsa.SeqEvent{
+		sentTo([]byte{midi.MakeNoteOff(0), 60, 0}),
+		sentTo([]byte{midi.MakeNoteOff(0), 60, 40}),
+	})
+}
+
+// A raw stream with nothing to send is refused: raw bytes carry no
+// marker that could tell an empty patch from a file that is not MIDI, so
+// a file with nothing in it is a kit mistake rather than a patch. A sysex
+// the stream ends inside is refused for the same reason: the dump is
+// incomplete.
+func TestPatchRawStreamNeedsSomethingToSend(t *testing.T) {
+	dir := t.TempDir()
+	// Only realtime bytes: they are dropped, and nothing else is left.
+	rawPatchFile(t, dir, "clocks.mid", 0xf8, 0xfa, 0xfc)
+	// A dump that never reaches its end byte.
+	rawPatchFile(t, dir, "cut-off.mid", 0xf0, 0x43, 0x10)
+
+	err := validateDevices([]Device{patchedDevice(dir, "clocks.mid")})
+	require.ErrorContains(t, err, "clocks.mid")
+	require.ErrorContains(t, err, "no MIDI messages in the stream")
+
+	err = validateDevices([]Device{patchedDevice(dir, "cut-off.mid")})
+	require.ErrorContains(t, err, "cut-off.mid")
+	require.ErrorContains(t, err, "stream ends inside a sysex message")
 }
