@@ -15,7 +15,7 @@ import (
 func TestJudgeMutationAcceptsRank(t *testing.T) {
 	auditions := 0
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error {
+	score, err := judgeMutation(context.Background(), func(context.Context) error {
 		auditions++
 		return nil
 	}, nil, newJudgeInput(strings.NewReader("7")), &output)
@@ -27,7 +27,7 @@ func TestJudgeMutationAcceptsRank(t *testing.T) {
 func TestJudgeMutationReplaysWholeMutation(t *testing.T) {
 	auditions := 0
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error {
+	score, err := judgeMutation(context.Background(), func(context.Context) error {
 		auditions++
 		return nil
 	}, nil, newJudgeInput(strings.NewReader("r\n8")), &output)
@@ -40,7 +40,7 @@ func TestJudgeMutationReplaysWholeMutation(t *testing.T) {
 func TestJudgeMutationIgnoresInvalidKeysWithoutReplay(t *testing.T) {
 	auditions := 0
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error {
+	score, err := judgeMutation(context.Background(), func(context.Context) error {
 		auditions++
 		return nil
 	}, nil, newJudgeInput(strings.NewReader("x 4")), &output)
@@ -51,14 +51,14 @@ func TestJudgeMutationIgnoresInvalidKeysWithoutReplay(t *testing.T) {
 
 func TestJudgeMutationPropagatesAuditionError(t *testing.T) {
 	auditionErr := errors.New("audition failed")
-	_, err := judgeMutation(context.Background(), func() error {
+	_, err := judgeMutation(context.Background(), func(context.Context) error {
 		return auditionErr
 	}, nil, newJudgeInput(strings.NewReader("1")), io.Discard)
 	assert.ErrorIs(t, err, auditionErr)
 }
 
 func TestJudgeMutationReturnsInputEOF(t *testing.T) {
-	_, err := judgeMutation(context.Background(), func() error {
+	_, err := judgeMutation(context.Background(), func(context.Context) error {
 		return nil
 	}, nil, newJudgeInput(strings.NewReader("")), io.Discard)
 	assert.ErrorIs(t, err, io.EOF)
@@ -70,7 +70,7 @@ func TestJudgeMutationStopsWaitingForInputOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := judgeMutation(ctx, func() error {
+		_, err := judgeMutation(ctx, func(context.Context) error {
 			return nil
 		}, nil, newJudgeInput(inputReader), io.Discard)
 		result <- err
@@ -93,7 +93,7 @@ func newJudgeTestMutation(t *testing.T, settings evolutionSettings) *Mutation {
 func TestJudgeMutationAdjustsRoundSize(t *testing.T) {
 	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("] 8")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, mutation, newJudgeInput(strings.NewReader("] 8")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 8, score)
 	assert.Equal(t, defaultRoundSize+1, mutation.settings.roundSize, "round size was not adjusted")
@@ -105,7 +105,7 @@ func TestJudgeMutationAdjustsMutatedGenes(t *testing.T) {
 	settings.mutatedGenes = 1
 	mutation := newJudgeTestMutation(t, settings)
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("- 6")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, mutation, newJudgeInput(strings.NewReader("- 6")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 6, score)
 	assert.Zero(t, mutation.settings.mutatedGenes, "mutated genes was not adjusted")
@@ -115,7 +115,7 @@ func TestJudgeMutationAdjustsMutatedGenes(t *testing.T) {
 func TestJudgeMutationAdjustsMutationRate(t *testing.T) {
 	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("< 5")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, mutation, newJudgeInput(strings.NewReader("< 5")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 5, score)
 	assert.Equal(t, 0.9, mutation.settings.mutationRate, "mutation rate was not adjusted")
@@ -129,7 +129,7 @@ func TestJudgeMutationReportsTuningBounds(t *testing.T) {
 	settings.mutationRate = 0
 	mutation := newJudgeTestMutation(t, settings)
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("[ - < 3")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, mutation, newJudgeInput(strings.NewReader("[ - < 3")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 3, score)
 	assert.Contains(t, output.String(), "round size is already 3", "missing round size bound report")
@@ -139,7 +139,7 @@ func TestJudgeMutationReportsTuningBounds(t *testing.T) {
 
 func TestJudgeMutationIgnoresTuningKeysWithoutControls(t *testing.T) {
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, nil, newJudgeInput(strings.NewReader("] 4")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, nil, newJudgeInput(strings.NewReader("] 4")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 4, score)
 	assert.Contains(t, output.String(), `not "]"`, "tuning key was not reported as invalid")
@@ -148,7 +148,7 @@ func TestJudgeMutationIgnoresTuningKeysWithoutControls(t *testing.T) {
 func TestJudgeMutationFocusesGenePattern(t *testing.T) {
 	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("SoundController5 6")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, mutation, newJudgeInput(strings.NewReader("SoundController5 6")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 6, score)
 	require.NotNil(t, mutation.settings.mutateFilter, "pattern did not set the filter")
@@ -159,7 +159,7 @@ func TestJudgeMutationFocusesGenePattern(t *testing.T) {
 func TestJudgeMutationRejectsUnusableGenePattern(t *testing.T) {
 	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("NoSuch 99[ 6")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, mutation, newJudgeInput(strings.NewReader("NoSuch 99[ 6")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 6, score)
 	assert.Contains(t, output.String(), `no mutable genes match "NoSuch"`, "missing zero match report")
@@ -170,9 +170,27 @@ func TestJudgeMutationRejectsUnusableGenePattern(t *testing.T) {
 func TestJudgeMutationKeepsShortAnswersOffThePatternPath(t *testing.T) {
 	mutation := newJudgeTestMutation(t, defaultEvolutionSettings())
 	var output strings.Builder
-	score, err := judgeMutation(context.Background(), func() error { return nil }, mutation, newJudgeInput(strings.NewReader("x 4")), &output)
+	score, err := judgeMutation(context.Background(), func(context.Context) error { return nil }, mutation, newJudgeInput(strings.NewReader("x 4")), &output)
 	require.NoError(t, err, "judgeMutation")
 	assert.Equal(t, 4, score)
 	assert.Contains(t, output.String(), `not "x"`, "single character answer became a pattern")
 	assert.Nil(t, mutation.settings.mutateFilter, "single character answer set a filter")
+}
+
+func TestJudgeMutationInterruptsAuditionForAnswer(t *testing.T) {
+	interrupted := make(chan error, 1)
+	var output strings.Builder
+	// A terminal is what makes an answer interrupt the
+	// melody; a piped score plays the audition out in full.
+	input := newJudgeInput(strings.NewReader("7"))
+	input.interactive = true
+	score, err := judgeMutation(context.Background(), func(ctx context.Context) error {
+		<-ctx.Done()
+		interrupted <- ctx.Err()
+		return ctx.Err()
+	}, nil, input, &output)
+	require.NoError(t, err, "judgeMutation")
+	assert.Equal(t, 7, score)
+	assert.ErrorIs(t, <-interrupted, context.Canceled, "the answer did not interrupt the audition")
+	assert.Contains(t, output.String(), judgePrompt, "missing prompt after the interruption")
 }

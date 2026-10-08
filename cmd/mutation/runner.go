@@ -65,7 +65,10 @@ func (runner *mutationRunner) run(ctx context.Context) error {
 				}
 				continue
 			}
-			score, err := judgeMutation(ctx, func() error {
+			// The audition runs under the context the judge
+			// passes it, so a value entered during the melody
+			// stops it instead of waiting the melody out.
+			score, err := judgeMutation(ctx, func(ctx context.Context) error {
 				return runner.auditioner.audition(ctx, patch)
 			}, runner.engine, judgeInput, runner.output)
 			if errors.Is(err, io.EOF) {

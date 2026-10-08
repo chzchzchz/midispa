@@ -135,6 +135,11 @@ Input is whitespace-delimited, so press Enter after:
 - `<` and `>` to lower or raise the mutation rate in steps of 0.1.
 - a Go regexp of two or more characters, such as `Pitch` or `^Osc`, to mutate and crossover only matching genes in the next generation.
 
+A value entered while the melody plays stops it, and the
+value counts as the answer for that candidate, so a judge
+who has heard enough does not wait out the probe or the
+playback pattern.
+
 The tuning keys echo their new value and apply from the next
 generation; the candidates already being judged keep their round.
 Every generation opens with a line naming its active settings.
