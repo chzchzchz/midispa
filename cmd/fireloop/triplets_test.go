@@ -631,7 +631,6 @@ func TestPlacingANoteOnAConsumedCellRepaintsTheRow(t *testing.T) {
 	voice := kit.voices[0]
 	pattern := bank.CurrentPattern()
 	require.NoError(t, bank.SelectTrackRow(1))
-	require.NoError(t, bank.setStepCursor(8))
 	for _, note := range []int{54, 55, 56} {
 		pressPad(t, bank, note)
 	}
@@ -640,6 +639,9 @@ func TestPlacingANoteOnAConsumedCellRepaintsTheRow(t *testing.T) {
 	pressButton(t, bank, NoteAlt)
 
 	pressPad(t, bank, 57)
+	// The press put the cursor on the cell it placed, so the
+	// cursor is parked off the beat before the row is read.
+	require.NoError(t, bank.setStepCursor(8))
 
 	events := pattern.EventsForVoice(voice)
 	require.Len(t, events, 4, "the note placed on the drawn cell is missing")
@@ -1242,10 +1244,12 @@ func TestSixteenthGroupPlaysThreeNotesInsideHalfABeat(t *testing.T) {
 func TestSixteenthGroupHasNoPadMark(t *testing.T) {
 	bank, _, sim := recordedBank(t, trackWindowKit(8, -1))
 	require.NoError(t, bank.SelectTrackRow(1))
-	require.NoError(t, bank.setStepCursor(8))
 	for _, note := range []int{54, 55, 56} {
 		pressPad(t, bank, note)
 	}
+	// The presses put the cursor on the last one, so the
+	// cursor is parked off the beat before the group is set.
+	require.NoError(t, bank.setStepCursor(8))
 	pressButton(t, bank, NoteAlt)
 	pressButton(t, bank, NoteShift)
 	pressPad(t, bank, 54)
@@ -1293,10 +1297,16 @@ func TestSixteenthGroupReadsOnTheStepStatus(t *testing.T) {
 // cells the notes came from.
 func TestTraceSixteenthGroupPacksThreeCells(t *testing.T) {
 	snapshots := traceUI(t, []uiStep{
-		press("select row 1", NoteMute1),
+		// The notes are placed before a row is selected, because a
+		// press on a selected row moves the cursor onto the step it
+		// placed, and the cursor's own mark would light the cell the
+		// group leaves free. The gesture answers the row the press
+		// came from, not the row selected, so the selection only
+		// arrives once the notes are down.
 		press("note one", 54),
 		press("note two", 55),
 		press("note three", 56),
+		press("select row 1", NoteMute1),
 		press("alt", NoteAlt),
 		press("shift", NoteShift),
 		press("gesture on the first cell", 54),

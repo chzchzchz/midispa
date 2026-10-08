@@ -116,6 +116,19 @@ func (p *PatternBank) setStepCursor(step int) error {
 	return p.repaintEditView()
 }
 
+// followStepCursor moves the step cursor onto the step a pad press touched, when
+// the press landed on the selected row. The cursor is what the Volume knob and
+// the status row aim at, so a percussive hit can be trimmed the moment it is
+// placed instead of after a walk along the grid buttons. A press on any other row
+// leaves it where it is: those rows edit their own tracks, and the selection is
+// what decides which voice the knob trims.
+func (p *PatternBank) followStepCursor(row, col int) error {
+	if row+1 != p.selTrackRow {
+		return nil
+	}
+	return p.setStepCursor(col)
+}
+
 // repaintEditView puts the display back after an edit: the pitch palette while note
 // editing owns the grid, the step rows otherwise, and then the readout the edit is
 // reported on. Which of those two the redraw is depends on the mode rather than on the

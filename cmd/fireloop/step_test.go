@@ -41,7 +41,6 @@ func TestPercussionStatusFollowsTheSelectedStep(t *testing.T) {
 	require.NoError(t, bank.SelectTrackRow(1))
 	voice := voiceBank.voices[0]
 	require.NoError(t, bank.controller.handlePatternGrid(nil, 2, 0, 84))
-	require.NoError(t, bank.MoveStepCursor(2))
 	require.Equal(t, "S03 @084", recorder.row(readoutRow))
 	// An empty step shows nothing, the same as a chromatic one, so a velocity belonging to
 	// no step cannot make two steps look equal.
@@ -50,6 +49,47 @@ func TestPercussionStatusFollowsTheSelectedStep(t *testing.T) {
 	event, ok := bank.CurrentPattern().EventAtStep(2, voice)
 	require.True(t, ok, "moving the cursor removed the step")
 	require.Equal(t, 84, event.Velocity, "moving the cursor changed the step's dynamics")
+}
+
+// A percussive pad press on the selected row toggles its step and puts the
+// cursor on it, which is what makes the hit just placed the one the Volume
+// knob trims without the grid buttons. A press on another row still toggles
+// without moving the cursor: the selection is what decides which voice the
+// knob aims at, and two pads on the selected row are two steps, not a tie.
+func TestPercussivePadPressMovesTheStepCursor(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := trackWindowKit(8, -1)
+	controller := useController(t, fire, voiceBank)
+	bank := controller.patbank
+	recorder := useScreenRecorder(t, &bank.screen)
+	require.NoError(t, bank.SelectTrackRow(1))
+	voice := voiceBank.voices[0]
+
+	// Row 1 is the selected row, so its press both places the step and
+	// moves the cursor onto it, and the readout names the pair.
+	require.NoError(t, dispatch(bank, padMessage(54+5, pressVelocity)))
+	require.Equal(t, 5, bank.StepCursor(), "the press did not move the cursor")
+	event, ok := bank.CurrentPattern().EventAtStep(5, voice)
+	require.True(t, ok, "the press did not place the step")
+	require.Equal(t, pressVelocity, event.Velocity)
+	require.Equal(t, "S06 @100", recorder.row(readoutRow))
+
+	// A press on an unselected row toggles that row's own step and
+	// leaves the cursor where it was.
+	require.NoError(t, dispatch(bank, padMessage(54+16+3, pressVelocity)))
+	require.Equal(t, 5, bank.StepCursor(), "a press off the selected row moved the cursor")
+	other := voiceBank.voices[1]
+	_, ok = bank.CurrentPattern().EventAtStep(3, other)
+	require.True(t, ok, "the press did not toggle the unselected row's step")
+
+	// Two pads on the selected row are two steps rather than a tie: each
+	// press toggles its own step, and the cursor ends on the second.
+	require.NoError(t, dispatch(bank, padMessage(54+7, pressVelocity)))
+	require.Equal(t, 7, bank.StepCursor(), "the second press did not move the cursor")
+	_, ok = bank.CurrentPattern().EventAtStep(7, voice)
+	require.True(t, ok, "the second press did not place its step")
+	_, first := bank.CurrentPattern().EventAtStep(5, voice)
+	require.True(t, first, "the second press took the first step off")
 }
 
 func TestModeDoesNotStopPlayback(t *testing.T) {

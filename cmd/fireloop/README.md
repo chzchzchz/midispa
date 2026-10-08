@@ -122,7 +122,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 
 ### Pattern mode
 
-- Pad grid: toggle steps for a percussive voice. How hard the pad is hit becomes that step's velocity, so a soft hit and a hard hit play differently. Empty chromatic steps are ignored here.
+- Pad grid: toggle steps for a percussive voice. How hard the pad is hit becomes that step's velocity, so a soft hit and a hard hit play differently. A press on the selected row also moves the step cursor onto the step it touched, so the hit just placed is the one the readout names and the Volume knob trims. Empty chromatic steps are ignored here.
 - In pattern/step mode, a pad on the selected chromatic track moves the editing step cursor. Two held pads still create a tie.
 - Pattern up/down: change the selected pattern from 1 to 999 and stop playback.
 - Mute 1 through 4: select a track row and its voice. The selected row lights green, and pressing it again deselects. A running pattern keeps playing, so a row can be followed while the pattern loops.
@@ -174,10 +174,9 @@ A track is a voice from the kit, and any voice can go on any track.
 A percussive step stores the velocity of the pad press that placed it, and plays at that velocity. A pattern is therefore hit-sensitive: hit the pad harder and the step is louder.
 
 1. Select a percussive voice with Mute 1 through 4 and the Encoder if needed.
-2. Press a pad to toggle the step. It lands with the velocity of that press.
-3. Move the step cursor onto it with Grid left/right. A percussive pad press toggles a step without selecting it, so this is what puts the edit on the step just placed.
-4. Turn the Volume knob. Each detent moves the step's velocity by one from the value it already holds, so the first detent trims the hit instead of jumping to whatever value the knob was last left at.
-5. Every detent auditions the step, so the velocity is heard while it is being set.
+2. Press a pad to toggle the step. It lands with the velocity of that press, and the step cursor moves onto it, so the readout names the step just placed and the knob below has something to trim without the grid buttons.
+3. Turn the Volume knob. Each detent moves the step's velocity by one from the value it already holds, so the first detent trims the hit instead of jumping to whatever value the knob was last left at.
+4. Every detent auditions the step, so the velocity is heard while it is being set.
 
 The knob works differently from the chromatic one on purpose. A chromatic step counts from the knob's own carried value, so a step picked after the knob was set takes that value on its next detent. A percussive step counts from itself, because the hit that placed it is the expressive part and the knob is there to trim a hit rather than overwrite it.
 

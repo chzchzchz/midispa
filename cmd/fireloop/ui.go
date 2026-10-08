@@ -586,6 +586,13 @@ func (c *Controller) handlePatternGrid(aseq sequencerWriter, x, y, vel int) erro
 	if err != nil {
 		return err
 	}
+	// A press on the selected row is also a cursor move, so the step it just
+	// toggled is the one the readout names and the Volume knob trims. The tie
+	// gesture's own cursor move happens in the handler above, which a selected
+	// chromatic row never gets past.
+	if err := c.patbank.followStepCursor(y, x); err != nil {
+		return err
+	}
 	if c.playing() || patEv.Velocity == 0 {
 		return nil
 	}

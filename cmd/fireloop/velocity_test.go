@@ -77,9 +77,9 @@ func TestPercussionVelocityKnobTrimsTheHit(t *testing.T) {
 	event, ok := bank.CurrentPattern().EventAtStep(3, voice)
 	require.True(t, ok, "the pad press placed no step")
 	require.Equal(t, hit, event.Velocity)
-	// A percussive pad press toggles a step without selecting it, so the edit still has to
-	// be moved onto it before the knob has anything to trim.
-	require.NoError(t, bank.MoveStepCursor(3))
+	// The press put the cursor on the step it placed, so the knob has a
+	// step to trim without the grid buttons moving the edit first.
+	require.Equal(t, 3, bank.StepCursor(), "the pad press did not move the cursor")
 	// A detent counts from the hit, not from the encoder's own much higher value.
 	require.NoError(t, dispatch(bank, encoderCC(EncoderLeft)))
 	event, _ = bank.CurrentPattern().EventAtStep(3, voice)
