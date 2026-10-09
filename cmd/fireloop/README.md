@@ -25,8 +25,6 @@ A file and a directory can be mixed in one command line. A path that fails to lo
 
 `-port` selects the Fire MIDI port. Each device in the kit supplies its own destination port in `MidiPort`.
 
-`-shared-midi-destination` sends instrument MIDI through Fireloop's main ALSA port to every connected destination, matching the legacy broadcast behavior. The default remains per-device routing; shared mode intentionally sends every note to all connected outputs.
-
 `-log-level` sets log verbosity: `debug`, `info` (the default), `warn` or `error`. At `debug` the sequencer logs every MIDI message it writes, every change to the Fire's display, and the steps its editors act on, which is what to capture when a note or a light is not behaving:
 
 ```sh
@@ -115,7 +113,6 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - The file is sent on every Play, in pattern mode and in song mode alike, and again after Stop. It is not re-sent at a pattern boundary.
 - `Settle` is how long a device is given to absorb a vendor dump before the first note, written as text such as `"100ms"`. It exists because a dump is not a channel message: on some instruments a note sent too early still sounds the previous patch. It is off unless the kit asks for it, it only applies when a dump was actually sent, and where several devices ask, the waits overlap and the longest one is used. Stopping during the wait takes effect at once rather than waiting it out.
 - A patch is read and played at startup, so a path that is missing, of the wrong type, or unreadable stops fireloop before any port is opened. A patch that turns out to be unreadable later is logged and playback starts anyway. A file is read once and kept for the session, so pressing Play again does not go back to the disk; a file that could not be read is looked for again on the next Play, and is reported once however many voices name it.
-- `-shared-midi-destination` applies to patches as it does to notes.
 - Nothing is filtered out of the file, including the volume, pan and reverb-send controllers a file may open with, so what the instrument hears is what the file says.
 
 ## Controls

@@ -20,7 +20,6 @@ import (
 )
 
 var syncPort alsa.SeqAddr
-var sharedMIDIDestination bool
 
 const (
 	midiChannelMax = 16
@@ -129,18 +128,10 @@ func isNilMidiWriter(aseq any) bool {
 	return false
 }
 
-func midiDestination(destination alsa.SeqAddr) alsa.SeqAddr {
-	if sharedMIDIDestination {
-		return alsa.SubsSeqAddr
-	}
-	return destination
-}
-
 func writeMidiMsgs(aseq alsa.EventWriter, sa alsa.SeqAddr, msgs [][]byte) error {
 	if isNilMidiWriter(aseq) {
 		return nil
 	}
-	sa = midiDestination(sa)
 	for _, msg := range msgs {
 		logOutbound("", sa, msg)
 		if err := aseq.Write(alsa.SeqEvent{SeqAddr: sa, Data: msg}); err != nil {
@@ -461,7 +452,6 @@ func run() error {
 	midiPort := flag.String("port", "FL STUDIO FIRE Jack 1", "midi port for akai fire")
 	logLevel := flag.String("log-level", "info", "log verbosity: debug, info, warn or error")
 	logFormat := flag.String("log-format", "text", "log format: text or json")
-	flag.BoolVar(&sharedMIDIDestination, "shared-midi-destination", false, "broadcast MIDI output to all connected destinations")
 	stateFile := flag.String("state", "", "session file: loaded at startup when it exists, saved on exit, saved and loaded from the panel")
 	flag.DurationVar(&shutdownSettleLinger, "shutdown-settle", shutdownSettleLinger, "time shutdown waits after blanking the unit and before the sequencer closes, so the unit has taken the whole blackout burst in")
 	flag.Parse()
@@ -475,7 +465,7 @@ func run() error {
 	}
 	setLogger(newLogger(level, *logFormat))
 	logger.Info("fireloop starting",
-		"kits", kits.String(), "port", *midiPort, "shared", sharedMIDIDestination,
+		"kits", kits.String(), "port", *midiPort,
 		"level", level.String(), "format", strings.ToLower(*logFormat))
 
 	devs, err := loadKit(kits.all())

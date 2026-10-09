@@ -437,32 +437,6 @@ func TestReadFireReportsReadFailure(t *testing.T) {
 	require.Len(t, inc, 2, "readFire should pump the 2 events the reader held")
 }
 
-// Whether a write is shared is one property with two answers, and the difference is the
-// only thing under test here.
-func TestSharedMIDIDestination(t *testing.T) {
-	previous := sharedMIDIDestination
-	t.Cleanup(func() { sharedMIDIDestination = previous })
-	destination := alsa.SeqAddr{Client: 28, Port: 0}
-	message := []byte{midi.MakeNoteOn(0), 60, 100}
-
-	tests := []struct {
-		name   string
-		shared bool
-		want   alsa.SeqAddr
-	}{
-		{name: "a per-device write keeps its own address", shared: false, want: destination},
-		{name: "a shared write goes to subscribers", shared: true, want: alsa.SubsSeqAddr},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sharedMIDIDestination = tt.shared
-			writer := &captureMidiWriter{}
-			require.NoError(t, writeMidiMsgs(writer, destination, [][]byte{message}))
-			require.Equal(t, tt.want, writer.events[0].SeqAddr)
-		})
-	}
-}
-
 // A name is how the palette, the log and the display talk about a device, so two of them
 // answering to one name is a kit nobody can read back. A repeated port or channel is not
 // the same thing: a kit may put two devices on one destination deliberately, so only the

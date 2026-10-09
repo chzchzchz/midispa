@@ -696,9 +696,9 @@ func TestPatchRawStreamIsReadWhenTheFileIsNotAnSMF(t *testing.T) {
 	dir := t.TempDir()
 	rawPatchFile(t, dir, "instrument.mid",
 		0xb0, 74, 90, // control change
-		0xf8,       // MIDI clock, dropped
-		75, 20,     // running status: another control change
-		0xc0, 42,   // program change
+		0xf8,   // MIDI clock, dropped
+		75, 20, // running status: another control change
+		0xc0, 42, // program change
 	)
 	device := patchedDevice(dir, "instrument.mid")
 	writer := &captureMidiWriter{}
@@ -731,7 +731,7 @@ func TestPatchRawSysExDumpIsSentUnchanged(t *testing.T) {
 func TestPatchRawStreamNoteOffs(t *testing.T) {
 	dir := t.TempDir()
 	rawPatchFile(t, dir, "notes.mid",
-		0x90, 60, 0,  // note on with velocity zero: a note off
+		0x90, 60, 0, // note on with velocity zero: a note off
 		0x80, 60, 40, // note off with release velocity
 	)
 	device := patchedDevice(dir, "notes.mid")

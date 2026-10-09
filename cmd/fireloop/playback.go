@@ -236,7 +236,7 @@ func (p *Playback) playChromaticEvent(aseq alsa.EventWriter, event Event) error 
 	current := activeChromaticNote{
 		channel:     channel,
 		note:        event.NoteNumber(),
-		destination: midiDestination(eventDestination(event)),
+		destination: eventDestination(event),
 		tie:         event.Tie,
 		beat:        event.Beat,
 	}
@@ -397,7 +397,7 @@ func (p *Playback) silenceTargets() []silenceTarget {
 		}
 		target := silenceTarget{
 			channel:     channel,
-			destination: midiDestination(eventDestination(Event{Voice: voice})),
+			destination: eventDestination(Event{Voice: voice}),
 		}
 		if seen[target] {
 			continue
