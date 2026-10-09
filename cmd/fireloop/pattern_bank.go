@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/chzchzchz/midispa/sysex/akai"
 )
@@ -70,6 +71,16 @@ type PatternBank struct {
 	// view setting: it decides which pitches a pad press can reach and leaves the notes
 	// already written into a pattern exactly where they are.
 	paletteOctave int
+	// The Volume knob's timing, all of it owned by the event loop that
+	// turns the knob: when it last turned, how far the detents of the
+	// current fast turn count, the audition a turn is holding back until
+	// the knob rests, and how many of those auditions are still in
+	// flight, which is what a shutdown joins before it closes the
+	// sequencer.
+	lastDetent time.Time
+	detentStep int
+	audition   *time.Timer
+	auditions  sync.WaitGroup
 	// trackMu guards the track window. The playback worker draws the visible tracks
 	// from its own goroutine, so scrolling must not race with it.
 	trackMu sync.RWMutex

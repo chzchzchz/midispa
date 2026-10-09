@@ -293,6 +293,10 @@ func shutdown(c *Controller, aseq alsa.Closer) error {
 	if err := c.stopPlayback(); err != nil {
 		firstErr = err
 	}
+	// A velocity the knob is still holding back is written from the timer that
+	// fires when the knob rests, so it is waited out here, the way the playback
+	// worker above is, before the client it writes to is closed.
+	c.patbank.stopAuditions()
 	if err := blankDevice(c); err != nil && firstErr == nil {
 		firstErr = err
 	}
