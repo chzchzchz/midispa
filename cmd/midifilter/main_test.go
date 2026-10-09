@@ -51,7 +51,7 @@ type filterHarness struct {
 func newFilterHarness(t *testing.T, p policy) *filterHarness {
 	t.Helper()
 	harness := &filterHarness{seq: fake.New()}
-	harness.FilterSeq = newFilterSeq(harness.seq, harness.seq, p)
+	harness.FilterSeq = newFilterSeq(harness.seq, harness.seq, alsa.SubsSeqAddr, p)
 	t.Cleanup(harness.stop)
 	return harness
 }

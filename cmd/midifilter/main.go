@@ -60,7 +60,8 @@ func makeWriter(aseq alsa.EventWriter, dst alsa.SeqAddr) *EvWriter {
 type FilterSeq struct {
 	reader alsa.EventReader
 	writer alsa.EventWriter
-	bcast  *EvWriter
+	// out is the default output, used when no route claims the message.
+	out    *EvWriter
 	routes [16]*EvWriter
 	// routing counts the armed routes. It is what turns broadcast off: once any channel
 	// is routed somewhere, an unrouted one is dropped rather than leaked to subscribers
@@ -69,11 +70,11 @@ type FilterSeq struct {
 	policy  Policy
 }
 
-func newFilterSeq(reader alsa.EventReader, writer alsa.EventWriter, p Policy) *FilterSeq {
+func newFilterSeq(reader alsa.EventReader, writer alsa.EventWriter, out alsa.SeqAddr, p Policy) *FilterSeq {
 	return &FilterSeq{
 		reader: reader,
 		writer: writer,
-		bcast:  makeWriter(writer, alsa.SubsSeqAddr),
+		out:    makeWriter(writer, out),
 		policy: p,
 	}
 }
@@ -118,7 +119,7 @@ func (f *FilterSeq) handleEvent() error {
 	} else if f.policy.handle(ev.Data) {
 		return nil
 	}
-	outc := f.bcast.outc
+	outc := f.out.outc
 	if midi.IsChannelMessage(ev.Data[0]) {
 		ch := midi.Channel(ev.Data[0])
 		if r := f.routes[ch]; r != nil {
@@ -133,7 +134,7 @@ func (f *FilterSeq) handleEvent() error {
 }
 
 func (f *FilterSeq) Close() {
-	f.bcast.Close()
+	f.out.Close()
 	for _, r := range f.routes {
 		if r != nil {
 			r.Close()
@@ -145,8 +146,16 @@ func main() {
 	cnFlag := flag.String("name", "midifilter", "midi client name")
 	policyFlag := flag.String("bpf", defaultPolicyPath, "bpf elf path")
 	inputFlag := flag.String("i", "", "input midi port (optional)")
+	outputFlag := flag.String("o", "", "output midi port (optional), connected for writing on startup")
+	broadcastFlag := flag.Bool("broadcast", true, "broadcast output to every subscriber; false sends only to -o")
 
 	flag.Parse()
+	// Turning broadcast off is only meaningful with a port to send to
+	// instead, so a lone -broadcast=false is refused before anything is
+	// opened.
+	if !*broadcastFlag && *outputFlag == "" {
+		panic("-broadcast=false needs -o")
+	}
 	// Create midi sequencer for reading/writing events.
 	aseq, err := alsa.OpenSeq(*cnFlag)
 	if err != nil {
@@ -159,9 +168,23 @@ func main() {
 		must(aseq.OpenPortRead(sa))
 	}
 
+	// out is the default output destination: the subscribers address
+	// while broadcast is on, or the -o port once -broadcast is false, so
+	// an unrouted message reaches only that port. The port is connected
+	// either way, so broadcast mode still reaches it as a subscriber.
+	out := alsa.SubsSeqAddr
+	if *outputFlag != "" {
+		sa, err := aseq.PortAddress(*outputFlag)
+		must(err)
+		must(aseq.OpenPortWrite(sa))
+		if !*broadcastFlag {
+			out = sa
+		}
+	}
+
 	log.Printf("%q: %+v", *cnFlag, aseq.SeqAddr)
-	policy := initPolicy(*policyFlag, aseq.NewWriter(alsa.SubsSeqAddr))
-	f := newFilterSeq(aseq, aseq, policy)
+	policy := initPolicy(*policyFlag, aseq.NewWriter(out))
+	f := newFilterSeq(aseq, aseq, out, policy)
 	defer f.Close()
 	for {
 		if err := f.handleEvent(); err != nil {

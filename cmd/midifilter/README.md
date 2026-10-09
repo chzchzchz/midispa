@@ -12,6 +12,14 @@ go build -tags bpf
 
 midi packets will be modified using the bpf filter specified by `--bpf <path>`. See examples/ for filters.
 
+## Ports
+
+`-i <port>` connects an input port for reading on startup. Without it the filter reads from every client subscribed to it.
+
+`-o <port>` connects an output port for writing on startup. Output still broadcasts to every subscriber by default, so the connected port receives it alongside any other subscriber.
+
+`-broadcast=false` turns broadcast off: output goes only to the port named by `-o`, which `-broadcast=false` therefore requires. Per-channel SysEx routes override the default output either way.
+
 ## Routing
 
 NB: routing turns off broadcasting
