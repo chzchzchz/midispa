@@ -1,4 +1,4 @@
-all: clock.elf song_select.elf mmc_play_stop.elf
+all: clock.elf song_select.elf mmc_play_stop.elf volca_drum_velocity.elf
 clean:
 	rm *.elf
 
