@@ -491,7 +491,7 @@ func TestPlayheadKeepsChromaticPitchColour(t *testing.T) {
 	pattern.ToggleEvent(Event{Voice: percussive, Beat: stepBeat(3), Velocity: 100})
 
 	pitch := chromaticPaletteColor(40)
-	drum := chromaticEventColor(Event{Voice: percussive})
+	drum := stepColor(Event{Voice: percussive, Velocity: pressVelocity})
 
 	require.NoError(t, bank.drawPadColumnInvert(3))
 	require.Equal(t, invertColor(pitch), sim.pads[3], "the inverted chromatic step")

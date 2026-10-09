@@ -638,7 +638,7 @@ func (p *PatternBank) redrawTrackPads(row int) error {
 		if idx < 0 || idx >= len(rgb) {
 			continue
 		}
-		rgb[idx] = chromaticEventColor(ev)
+		rgb[idx] = stepColor(ev)
 		if ev.Tie {
 			rgb[idx] = markTieColor(rgb[idx], false)
 		}
@@ -676,7 +676,7 @@ func (p *PatternBank) drawPadColumnInvert(col int) error {
 // either way, so the playhead does not paint it green and the column behind it restores
 // the real colour rather than a flat one.
 func playheadEventColor(event Event, invert bool) [3]int {
-	color := chromaticEventColor(event)
+	color := stepColor(event)
 	if invert {
 		return invertColor(color)
 	}
@@ -849,7 +849,7 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 	}
 	// The press lights the step it placed and puts out the one it removed, so the pad
 	// says what the press did without waiting for a redraw of the whole row.
-	color := percussionStepColor
+	color := stepColor(ev)
 	if !added {
 		color = [3]int{}
 	}

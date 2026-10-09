@@ -92,6 +92,53 @@ func TestPercussivePadPressMovesTheStepCursor(t *testing.T) {
 	require.True(t, first, "the second press took the first step off")
 }
 
+// A percussive step's pad carries the step's dynamics as its brightness, so a
+// hard hit is a bright pad and a soft one dark. The cursor's own mark is
+// brighter than any velocity colour, so the cursor parks off the steps under
+// test before the row is read; the knob trim is asserted through the mark
+// because the trim repaints with the cursor on the step it just trimmed.
+func TestPercussionPadBrightnessFollowsTheStepVelocity(t *testing.T) {
+	fire := NewFire(func([]byte) error { return nil })
+	voiceBank := trackWindowKit(8, -1)
+	controller := useController(t, fire, voiceBank)
+	bank := controller.patbank
+	pads := usePadRecorder(t, &bank.pads)
+	require.NoError(t, bank.SelectTrackRow(1))
+
+	soft, hard := 8, 120
+	require.NoError(t, dispatch(bank, padMessage(54, soft)))
+	require.NoError(t, dispatch(bank, padMessage(54+1, hard)))
+	// Park the cursor off the two steps so their pads read their own
+	// brightness rather than the cursor's mark.
+	require.NoError(t, bank.setStepCursor(2))
+	require.NoError(t, bank.redrawTrackPads(1))
+	require.Equal(t, percussionStepColor(soft), pads.pad(0, 0), "a soft hit is a dark pad")
+	require.Equal(t, percussionStepColor(hard), pads.pad(1, 0), "a hard hit is a bright pad")
+	require.NotEqual(t, pads.pad(0, 0), pads.pad(1, 0), "hits of different strengths read the same")
+
+	// The knob trims the step under the cursor, and the pad follows the trim.
+	require.NoError(t, bank.setStepCursor(0))
+	require.NoError(t, dispatch(bank, encoderCC(EncoderLeft)))
+	event, ok := bank.CurrentPattern().EventAtStep(0, voiceBank.voices[0])
+	require.True(t, ok, "the knob removed the step")
+	require.Equal(t, soft-velocityStep, event.Velocity, "the knob did not trim the hit")
+	require.Equal(t, markCursorColor(percussionStepColor(event.Velocity)), pads.pad(0, 0),
+		"the pad kept the hit's brightness after the trim")
+	require.NotEqual(t, markCursorColor(percussionStepColor(soft)), pads.pad(0, 0),
+		"the pad did not dim after the trim")
+	require.Equal(t, percussionStepColor(hard), pads.pad(1, 0),
+		"the trim dimmed a step it did not touch")
+
+	// A press on an unselected row paints its own pad straight
+	// away, and nothing repaints over it until the next redraw: a
+	// press on the selected row is repainted within the same event
+	// by the cursor move, so this is the one press the feedback is
+	// left showing on.
+	require.NoError(t, dispatch(bank, padMessage(54+padColumns, soft)))
+	require.Equal(t, percussionStepColor(soft), pads.pad(0, 1),
+		"an unselected row's press did not show its own velocity")
+}
+
 func TestModeDoesNotStopPlayback(t *testing.T) {
 	bank, _ := chromaBank(t)
 	require.NoError(t, bank.SelectTrackRow(1))

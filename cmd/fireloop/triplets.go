@@ -114,5 +114,5 @@ func tripletConsumedColor(pattern *Pattern, group tripletGroup, v *Voice, invert
 	if !ok {
 		return [3]int{}
 	}
-	return tripletShadeColor(chromaticEventColor(first), invert)
+	return tripletShadeColor(stepColor(first), invert)
 }

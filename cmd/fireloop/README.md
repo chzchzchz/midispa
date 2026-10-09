@@ -168,12 +168,12 @@ A track is a voice from the kit, and any voice can go on any track.
 
 #### Percussion dynamics
 
-A percussive step stores the velocity of the pad press that placed it, and plays at that velocity. A pattern is therefore hit-sensitive: hit the pad harder and the step is louder.
+A percussive step stores the velocity of the pad press that placed it, and plays at that velocity. A pattern is therefore hit-sensitive: hit the pad harder and the step is louder. The step's pad shows the same dynamics: green at the brightness of its velocity, so a hard hit is a bright pad and a soft one dark.
 
 1. Select a percussive voice with Mute 1 through 4 and the Encoder if needed.
 2. Press a pad to toggle the step. It lands with the velocity of that press, and the step cursor moves onto it, so the readout names the step just placed and the knob below has something to trim without the grid buttons.
 3. Turn the Volume knob. Each detent moves the step's velocity by one from the value it already holds, so the first detent trims the hit instead of jumping to whatever value the knob was last left at.
-4. Every detent auditions the step, so the velocity is heard while it is being set.
+4. Every detent auditions the step, so the velocity is heard while it is being set, and the step's pad dims or brightens with the trim.
 
 The knob works differently from the chromatic one on purpose. A chromatic step counts from the knob's own carried value, so a step picked after the knob was set takes that value on its next detent. A percussive step counts from itself, because the hit that placed it is the expressive part and the knob is there to trim a hit rather than overwrite it.
 
@@ -191,7 +191,7 @@ The readout follows the cursor for a percussive track as well: `S<STEP> @<VELOCI
 - Rows 2 to 5: the voice on each visible track row, inverted for the selected row.
 - Row 6 is the readout row and carries one of: `Length NN steps` in length mode, `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, `S<STEP> @<VELOCITY>` for a selected percussive track, `S<STEP> --` for a step with no note, or `Tempo: NNN` while a tempo is being entered. It is blank otherwise.
 
-The pad grid shows the notes of the four visible tracks and the editing step is lit slightly brighter. A chromatic step is coloured by pitch, using the same colour as that pitch's palette pad, and a percussive step is dark green.
+The pad grid shows the notes of the four visible tracks and the editing step is lit slightly brighter. A chromatic step is coloured by pitch, using the same colour as that pitch's palette pad, and a percussive step is green at the brightness of its velocity: 127 is full green and 0 is dark, so a hard hit is a bright pad and a soft one dark.
 
 During playback the playing column is inverted while the others are redrawn dimmer. Inversion is per channel, so a chromatic step keeps its pitch colour while being played and returns to it exactly when the playhead moves on. A tied step is marked by pushing its colour away from the playhead, lifted normally and lowered when inverted.
 

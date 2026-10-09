@@ -335,17 +335,21 @@ func chromaticPaletteColor(note int) [3]int {
 	return Dim(oledColorTable[chromaticColorIndex(note)], chromaticPaletteDim)
 }
 
-// percussionStepColor is how a percussive step reads on the grid: one dark green. It has
-// no pitch to colour by, so it is held apart from the chromatic colour rule rather than
-// borrowing one, which is what tells the two kinds of step apart at a glance.
-var percussionStepColor = [3]int{0, 50, 0}
+// percussionStepColor is how a percussive step reads on the grid: green at the
+// brightness of the step's velocity, so a hard hit is a bright pad and a soft
+// one is dark. It has no pitch to colour by, so it is held apart from the
+// chromatic colour rule rather than borrowing one, which is what tells the two
+// kinds of step apart at a glance.
+func percussionStepColor(velocity int) [3]int {
+	return [3]int{0, clampMidiDataValue(velocity), 0}
+}
 
-// chromaticEventColor is how a step reads on the grid. A chromatic step carries its pitch,
-// so it takes that pitch's palette colour; a percussive one has no pitch and is the drum
-// green.
-func chromaticEventColor(event Event) [3]int {
+// stepColor is how a step reads on the grid. A chromatic step carries its pitch,
+// so it takes that pitch's palette colour; a percussive one has no pitch and is green at
+// the step's velocity.
+func stepColor(event Event) [3]int {
 	if !event.IsChromatic() {
-		return percussionStepColor
+		return percussionStepColor(event.Velocity)
 	}
 	return chromaticPaletteColor(event.ChromaticNote)
 }

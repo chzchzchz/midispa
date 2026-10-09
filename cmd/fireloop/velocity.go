@@ -55,9 +55,18 @@ func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) er
 			return err
 		}
 	}
-	// Only the palette is repainted here, and only while note editing owns the grid: a
-	// velocity is not part of what a step row shows, so repainting the rows would send
-	// four pad messages for a change none of them would show.
+	// A percussive step carries its velocity as its brightness, so a trim
+	// repaints the rows the voice is on; a chromatic step keeps its pitch
+	// colour whatever its dynamics, so only its readout moves. The repaint
+	// rides the same gate as the audition: over an empty step the knob does
+	// nothing, and a repaint would send pad rows nothing changed.
+	if updated && !voice.IsChromatic() {
+		if err := p.redrawRowsWithVoice(voice); err != nil {
+			return err
+		}
+	}
+	// Only the palette is repainted here, and only while note editing owns the
+	// grid, which is the one other place a velocity is shown.
 	if p.noteEditActive() {
 		if err := p.drawNotePalette(); err != nil {
 			return err
