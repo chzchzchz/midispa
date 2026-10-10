@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/chzchzchz/midispa/sysex/behringer/pro800"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -195,7 +196,7 @@ type unwritableFactory struct {
 	reason    error
 }
 
-func (factory unwritableFactory) newPatch(map[string]geneSemantic) (patch, error) {
+func (factory unwritableFactory) newPatch(map[string]fieldrules.Rule) (patch, error) {
 	return unwritablePatch{SysexPatch: factory.candidate, remaining: factory.remaining, reason: factory.reason}, nil
 }
 
@@ -297,7 +298,7 @@ func TestPro800RunWritesDecodableGenerations(t *testing.T) {
 func TestPro800GeneSemanticsUseReflectedNames(t *testing.T) {
 	fixed := 4000
 	format := newPro800Format()
-	candidate, err := newSysexPatch(format, format.NewRoot(), map[string]geneSemantic{
+	candidate, err := newSysexPatch(format, format.NewRoot(), map[string]fieldrules.Rule{
 		"Patch.Filter.Cutoff": {Policy: "fixed", Value: &fixed},
 	})
 	require.NoError(t, err, "newSysexPatch")
@@ -308,7 +309,7 @@ func TestPro800GeneSemanticsUseReflectedNames(t *testing.T) {
 	}
 	assert.NoError(t, candidate.validateFixedValues(), "validateFixedValues")
 	// A field the record marks as not a sound parameter cannot be named.
-	_, err = newSysexPatch(format, format.NewRoot(), map[string]geneSemantic{
+	_, err = newSysexPatch(format, format.NewRoot(), map[string]fieldrules.Rule{
 		"Patch.OscA.Fine": {Policy: "fixed", Value: &fixed},
 	})
 	assert.Error(t, err, "accepted a rule for a field that is not a gene")

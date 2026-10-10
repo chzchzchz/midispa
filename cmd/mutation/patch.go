@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/chzchzchz/midispa/cc"
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/chzchzchz/midispa/midi"
 )
 
@@ -20,7 +21,7 @@ type Patch struct {
 	patchGenes
 }
 
-func newPatchWithSemantics(modelName string, semantics map[string]geneSemantic) (*Patch, error) {
+func newPatchWithSemantics(modelName string, semantics map[string]fieldrules.Rule) (*Patch, error) {
 	params, err := cc.NewModelParams(modelName)
 	if err != nil {
 		return nil, err
@@ -39,7 +40,7 @@ func newPatchWithSemantics(modelName string, semantics map[string]geneSemantic) 
 		knownNames[field.Name] = true
 		controllers[field.Name] = field.Controller
 		rule, hasRule := semantics[field.Name]
-		if hasRule && rule.Policy == excludePolicy {
+		if hasRule && rule.Policy == fieldrules.PolicyExclude {
 			continue
 		}
 		policy := genePolicyMutable

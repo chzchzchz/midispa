@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"regexp"
 	"sort"
+
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 )
 
 const (
@@ -108,7 +110,7 @@ type Mutation struct {
 	generation  int
 }
 
-func newMutation(factory patchFactory, settings evolutionSettings, random *rand.Rand, semantics map[string]geneSemantic, seedPath string) (*Mutation, error) {
+func newMutation(factory patchFactory, settings evolutionSettings, random *rand.Rand, semantics map[string]fieldrules.Rule, seedPath string) (*Mutation, error) {
 	if random == nil {
 		return nil, fmt.Errorf("random source is nil")
 	}

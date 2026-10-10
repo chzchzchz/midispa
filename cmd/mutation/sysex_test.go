@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/chzchzchz/midispa/midi"
 	dx7 "github.com/chzchzchz/midispa/sysex/yamaha/dx7"
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func newTestSysexPatch(t *testing.T) *SysexPatch {
 	return newTestSysexPatchFrom(t, testSingleVoiceMessage(t, 0), nil)
 }
 
-func newTestSysexPatchFrom(t *testing.T, message []byte, semantics map[string]geneSemantic) *SysexPatch {
+func newTestSysexPatchFrom(t *testing.T, message []byte, semantics map[string]fieldrules.Rule) *SysexPatch {
 	t.Helper()
 	format := newDX7Format(0)
 	candidate, err := newSysexPatch(format, format.NewRoot(), semantics)
@@ -195,7 +196,7 @@ func TestSysexSeedAcceptsANonPrintableVoiceName(t *testing.T) {
 
 func TestSysexGeneSemanticsUseReflectedNames(t *testing.T) {
 	fixed := 42
-	semantics := map[string]geneSemantic{
+	semantics := map[string]fieldrules.Rule{
 		"Osc[0].EgRate[0]": {Policy: "exclude"},
 		"Osc[0].EgRate[1]": {Policy: "fixed", Value: &fixed},
 	}
@@ -216,7 +217,7 @@ func TestSysexFixedValueMustFitItsOwnField(t *testing.T) {
 	// A DX7 field carries its own bounds, so a value that is a legal MIDI
 	// data byte can still be outside what the instrument accepts.
 	outOfRange := 50
-	candidate := newTestSysexPatchFrom(t, testSingleVoiceMessage(t, 0), map[string]geneSemantic{
+	candidate := newTestSysexPatchFrom(t, testSingleVoiceMessage(t, 0), map[string]fieldrules.Rule{
 		"Transpose": {Policy: "fixed", Value: &outOfRange},
 	})
 	assert.Error(t, candidate.validateFixedValues(), "accepted a fixed value outside its field")
@@ -225,14 +226,14 @@ func TestSysexFixedValueMustFitItsOwnField(t *testing.T) {
 func TestSysexRuleCannotNameASkippedField(t *testing.T) {
 	// A field the record marks as not a sound parameter is not in the
 	// catalog, so a rule naming it is a mistake rather than a silent no-op.
-	_, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), map[string]geneSemantic{
+	_, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), map[string]fieldrules.Rule{
 		"VoiceName[0]": {Policy: "fixed"},
 	})
 	assert.Error(t, err, "accepted a rule for a field that is not a gene")
 }
 
 func TestSysexPatchRejectsAnUnknownGeneName(t *testing.T) {
-	semantics := map[string]geneSemantic{"NotAField": {Policy: "exclude"}}
+	semantics := map[string]fieldrules.Rule{"NotAField": {Policy: "exclude"}}
 	_, err := newSysexPatch(newDX7Format(0), (&dx7.SingleVoice{}), semantics)
 	assert.Error(t, err, "accepted semantics for a field that does not exist")
 }

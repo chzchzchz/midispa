@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/chzchzchz/midispa/sysex"
 )
 
@@ -18,7 +19,7 @@ const (
 // encoding, so a parent and the candidates mutated from it cannot alias.
 type SysexPatch struct {
 	format    sysexFormat
-	semantics map[string]geneSemantic
+	semantics map[string]fieldrules.Rule
 	root      any
 	specs     []sysex.FieldSpec
 	patchGenes
@@ -27,7 +28,7 @@ type SysexPatch struct {
 // newSysexPatch reads every constrained field of a decoded program into a gene
 // list. Names and bounds come from reflection over the program's own struct
 // tags, so no DX7 field name appears in the mutation code.
-func newSysexPatch(format sysexFormat, root any, semantics map[string]geneSemantic) (*SysexPatch, error) {
+func newSysexPatch(format sysexFormat, root any, semantics map[string]fieldrules.Rule) (*SysexPatch, error) {
 	specs, err := sysex.FieldSpecs(root)
 	if err != nil {
 		return nil, err
@@ -37,7 +38,7 @@ func newSysexPatch(format sysexFormat, root any, semantics map[string]geneSemant
 	known := make(map[string]bool, len(specs))
 	for _, spec := range specs {
 		known[spec.Name] = true
-		if semantics[spec.Name].Policy == excludePolicy {
+		if semantics[spec.Name].Policy == fieldrules.PolicyExclude {
 			continue
 		}
 		value, err := geneValue(root, spec)
@@ -69,7 +70,7 @@ func newSysexPatch(format sysexFormat, root any, semantics map[string]geneSemant
 // only source a SysEx gene can be seeded from. A field the record marks as not
 // a sound parameter never reaches here: the walker leaves it out of the
 // catalog, so the vendor declares that on its own struct.
-func newGene(spec sysex.FieldSpec, value int, rule geneSemantic) gene {
+func newGene(spec sysex.FieldSpec, value int, rule fieldrules.Rule) gene {
 	current := gene{
 		name:   spec.Name,
 		value:  value,
@@ -219,7 +220,7 @@ func newSysexPatchFactory(name string, midiChannel int) (patchFactory, error) {
 	}
 }
 
-func (factory sysexPatchFactory) newPatch(semantics map[string]geneSemantic) (patch, error) {
+func (factory sysexPatchFactory) newPatch(semantics map[string]fieldrules.Rule) (patch, error) {
 	return newSysexPatch(factory.format, factory.format.NewRoot(), semantics)
 }
 

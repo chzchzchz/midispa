@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,7 +62,7 @@ func TestRunMutationWithDumpExcludesNeverStartsASession(t *testing.T) {
 	assert.Contains(t, output.String(), "Volca Bass", "missing report")
 	assert.Contains(t, output.String(), "excluded parameters", "missing report")
 
-	semantics, err := loadGeneSemantics(path)
+	semantics, err := fieldrules.Load(path)
 	require.NoError(t, err, "the dumped file is not a gene semantics file")
 	catalog, err := newPatchWithSemantics("Volca Bass", nil)
 	require.NoError(t, err, "catalog")

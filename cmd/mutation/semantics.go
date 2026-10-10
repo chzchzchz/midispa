@@ -5,71 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
-)
 
-// The two policies the format defines, named once because a rule is written
-// out as well as read back in, and a file that dumps one policy must not be
-// able to drift from the parser that will read it.
-const (
-	excludePolicy = "exclude"
-	fixedPolicy   = "fixed"
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 )
 
 // geneSemanticsFileMode matches the mode every other file this command writes
 // uses, so a dumped template is not more readable than a generated patch.
 const geneSemanticsFileMode = 0o600
-
-type geneSemantic struct {
-	Policy string `json:"policy"`
-	Value  *int   `json:"value,omitempty"`
-}
-
-// loadGeneSemantics reads one rule per array entry so duplicate gene names can
-// be rejected instead of silently choosing one policy.
-func loadGeneSemantics(path string) (map[string]geneSemantic, error) {
-	semantics := make(map[string]geneSemantic)
-	if path == "" {
-		return semantics, nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read gene semantics %q: %w", path, err)
-	}
-	var entries []map[string]geneSemantic
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("parse gene semantics %q: %w", path, err)
-	}
-	for entryIndex, entry := range entries {
-		if len(entry) != 1 {
-			return nil, fmt.Errorf("gene semantics entry %d must contain one gene name", entryIndex)
-		}
-		for name, rule := range entry {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				return nil, fmt.Errorf("gene semantics entry %d has an empty gene name", entryIndex)
-			}
-			if _, exists := semantics[name]; exists {
-				return nil, fmt.Errorf("gene %q has more than one semantic rule", name)
-			}
-			policy := strings.ToLower(strings.TrimSpace(rule.Policy))
-			switch policy {
-			case excludePolicy:
-				if rule.Value != nil {
-					return nil, fmt.Errorf("gene %q cannot be excluded with a value", name)
-				}
-			case fixedPolicy:
-				// The numeric bound is checked against the gene's own domain when
-				// the patch is built, because a SysEx field is not a 0-127 CC.
-			default:
-				return nil, fmt.Errorf("gene %q has unsupported policy %q", name, rule.Policy)
-			}
-			rule.Policy = policy
-			semantics[name] = rule
-		}
-	}
-	return semantics, nil
-}
 
 // dumpExcludedGenes writes every parameter the selected model exposes as an
 // exclude rule, and does nothing else.
@@ -128,18 +70,18 @@ func dumpLabel(format patchFactory, config configuration) string {
 // excludeEveryGene renders one rule per gene in the order the model declares
 // them, so two dumps of the same model are the same file and a diff between
 // them shows a change in the model rather than in the order of a map.
-func excludeEveryGene(genes []gene) []map[string]geneSemantic {
-	entries := make([]map[string]geneSemantic, 0, len(genes))
+func excludeEveryGene(genes []gene) []map[string]fieldrules.Rule {
+	entries := make([]map[string]fieldrules.Rule, 0, len(genes))
 	for _, current := range genes {
-		entries = append(entries, map[string]geneSemantic{current.name: {Policy: excludePolicy}})
+		entries = append(entries, map[string]fieldrules.Rule{current.name: {Policy: fieldrules.PolicyExclude}})
 	}
 	return entries
 }
 
-// writeGeneSemantics writes the shape loadGeneSemantics reads. The result is
+// writeGeneSemantics writes the shape fieldrules.Load reads. The result is
 // indented and newline-terminated because its purpose is to be edited: one gene
 // per line is what makes deleting the ones worth keeping a readable edit.
-func writeGeneSemantics(path string, entries []map[string]geneSemantic) error {
+func writeGeneSemantics(path string, entries []map[string]fieldrules.Rule) error {
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode gene semantics %q: %w", path, err)

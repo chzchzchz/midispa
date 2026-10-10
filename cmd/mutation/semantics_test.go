@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/chzchzchz/midispa/cc"
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,8 +29,8 @@ func TestLoadGeneSemantics(t *testing.T) {
 		{"SoundController2":{"policy":"fixed","value":40}},
 		{"SoundController3":{"policy":"fixed"}}
 	]`)
-	semantics, err := loadGeneSemantics(path)
-	require.NoError(t, err, "loadGeneSemantics")
+	semantics, err := fieldrules.Load(path)
+	require.NoError(t, err, "fieldrules.Load")
 	require.Len(t, semantics, 3, "loaded semantics")
 	assert.Equal(t, "exclude", semantics["SoundController1"].Policy, "unexpected exclude rule")
 	if assert.NotNil(t, semantics["SoundController2"].Value, "unexpected fixed value") {
@@ -51,7 +52,7 @@ func TestLoadGeneSemanticsRejectsInvalidRules(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := loadGeneSemantics(writeSemanticsFile(t, test.contents))
+			_, err := fieldrules.Load(writeSemanticsFile(t, test.contents))
 			assert.Error(t, err, "accepted invalid semantics: %s", test.contents)
 		})
 	}
@@ -59,7 +60,7 @@ func TestLoadGeneSemanticsRejectsInvalidRules(t *testing.T) {
 
 func TestPatchGeneSemanticsExcludeAndFix(t *testing.T) {
 	fixedValue := 40
-	semantics := map[string]geneSemantic{
+	semantics := map[string]fieldrules.Rule{
 		"SoundController1": {Policy: "exclude"},
 		"SoundController2": {Policy: "fixed", Value: &fixedValue},
 	}
@@ -106,7 +107,7 @@ func TestFixedGeneUsesSeedValue(t *testing.T) {
 	seedPatch.genes[0].value = 40
 	seedPath := filepath.Join(t.TempDir(), "seed.mid")
 	require.NoError(t, writePatchSMFForChannel(seedPath, seedPatch, 1), "write seed")
-	semantics := map[string]geneSemantic{
+	semantics := map[string]fieldrules.Rule{
 		"SoundController1": {Policy: "fixed"},
 	}
 	mutation, err := newMutation(newTestCCFactory("Sound Controller"), defaultEvolutionSettings(), rand.New(rand.NewSource(2)), semantics, seedPath)
@@ -123,7 +124,7 @@ func TestExplicitFixedValueOverridesSeed(t *testing.T) {
 	seedPath := filepath.Join(t.TempDir(), "seed.mid")
 	require.NoError(t, writePatchSMFForChannel(seedPath, seedPatch, 1), "write seed")
 	fixedValue := 40
-	semantics := map[string]geneSemantic{
+	semantics := map[string]fieldrules.Rule{
 		"SoundController1": {Policy: "fixed", Value: &fixedValue},
 	}
 	mutation, err := newMutation(newTestCCFactory("Sound Controller"), defaultEvolutionSettings(), rand.New(rand.NewSource(4)), semantics, seedPath)
@@ -134,7 +135,7 @@ func TestExplicitFixedValueOverridesSeed(t *testing.T) {
 }
 
 func TestFixedGeneWithoutValueOrSeedFails(t *testing.T) {
-	semantics := map[string]geneSemantic{
+	semantics := map[string]fieldrules.Rule{
 		"SoundController1": {Policy: "fixed"},
 	}
 	_, err := newMutation(newTestCCFactory("Sound Controller"), defaultEvolutionSettings(), rand.New(rand.NewSource(3)), semantics, "")
@@ -142,7 +143,7 @@ func TestFixedGeneWithoutValueOrSeedFails(t *testing.T) {
 }
 
 func TestPatchGeneSemanticsRejectsUnknownGene(t *testing.T) {
-	semantics := map[string]geneSemantic{
+	semantics := map[string]fieldrules.Rule{
 		"NotAGene": {Policy: "exclude"},
 	}
 	_, err := newPatchWithSemantics("Sound Controller", semantics)
@@ -215,7 +216,7 @@ func TestDumpExcludedGenesWritesOneRulePerParameter(t *testing.T) {
 			// The dumped file has to satisfy the reader that a run will use, so
 			// this loads it back rather than comparing text: a name the loader
 			// would reject is a name the dump got wrong.
-			semantics, err := loadGeneSemantics(path)
+			semantics, err := fieldrules.Load(path)
 			require.NoError(t, err, "the dumped file is not a gene semantics file")
 			catalog := catalogGenes(t, target.format, target.modelName)
 			require.NotEmpty(t, catalog, "model has no parameters")
@@ -223,7 +224,7 @@ func TestDumpExcludedGenesWritesOneRulePerParameter(t *testing.T) {
 			for _, current := range catalog {
 				rule, listed := semantics[current.name]
 				if assert.True(t, listed, "parameter %s is missing from the dump", current.name) {
-					assert.Equal(t, excludePolicy, rule.Policy, "parameter %s policy", current.name)
+					assert.Equal(t, fieldrules.PolicyExclude, rule.Policy, "parameter %s policy", current.name)
 					assert.Nil(t, rule.Value, "parameter %s was dumped with a value", current.name)
 				}
 			}
@@ -249,18 +250,18 @@ func TestEditedDumpNarrowsTheSearchToWhatItKept(t *testing.T) {
 	catalog := newTestPatch(t, "Sound Controller")
 	require.Greater(t, len(catalog.genes), 2, "the model has too few parameters to edit")
 	kept := map[string]bool{catalog.genes[0].name: true, catalog.genes[1].name: true}
-	edited := make([]map[string]geneSemantic, 0, len(catalog.genes))
+	edited := make([]map[string]fieldrules.Rule, 0, len(catalog.genes))
 	keptControllers := make([]int, 0, len(kept))
 	for _, current := range catalog.genes {
 		if kept[current.name] {
 			keptControllers = append(keptControllers, catalog.controllers[current.name])
 			continue
 		}
-		edited = append(edited, map[string]geneSemantic{current.name: {Policy: excludePolicy}})
+		edited = append(edited, map[string]fieldrules.Rule{current.name: {Policy: fieldrules.PolicyExclude}})
 	}
 	require.NoError(t, writeGeneSemantics(path, edited), "writeGeneSemantics")
 
-	semantics, err := loadGeneSemantics(path)
+	semantics, err := fieldrules.Load(path)
 	require.NoError(t, err, "the edited dump is not a gene semantics file")
 	require.Len(t, semantics, len(catalog.genes)-len(kept), "one rule per edited parameter")
 	searched, err := newPatchWithSemantics("Sound Controller", semantics)
@@ -336,7 +337,7 @@ func TestDumpExcludedGenesKeepsDeclarationOrder(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err, "read dumped semantics")
 
-	var entries []map[string]geneSemantic
+	var entries []map[string]fieldrules.Rule
 	require.NoError(t, json.Unmarshal(data, &entries), "parse dumped semantics")
 	require.NotEmpty(t, entries, "dumped semantics are empty")
 	// Declaration order is what makes two dumps of the same model the same

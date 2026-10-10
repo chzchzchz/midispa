@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/chzchzchz/midispa/track"
 )
 
@@ -155,7 +156,7 @@ func runMutationWithFactory(ctx context.Context, config configuration, input io.
 		randomSeed = config.rngSeed
 	}
 	random := rand.New(rand.NewSource(randomSeed))
-	semantics, err := loadGeneSemantics(config.geneSemantics)
+	semantics, err := fieldrules.Load(config.geneSemantics)
 	if err != nil {
 		return err
 	}

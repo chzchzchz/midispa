@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"regexp"
 
+	"github.com/chzchzchz/midispa/internal/fieldrules"
 	"github.com/chzchzchz/midispa/track"
 )
 
@@ -37,7 +38,7 @@ type patch interface {
 // overlays controller values on a randomized patch, while a SysEx seed
 // replaces the decoded program and therefore every gene value.
 type patchFactory interface {
-	newPatch(semantics map[string]geneSemantic) (patch, error)
+	newPatch(semantics map[string]fieldrules.Rule) (patch, error)
 	loadSeed(path string, target patch) error
 	store(outputPath string) patchStore
 	requiresSeed() bool
@@ -96,7 +97,7 @@ type ccPatchFactory struct {
 	jsonOutput  bool
 }
 
-func (factory ccPatchFactory) newPatch(semantics map[string]geneSemantic) (patch, error) {
+func (factory ccPatchFactory) newPatch(semantics map[string]fieldrules.Rule) (patch, error) {
 	return newPatchWithSemantics(factory.modelName, semantics)
 }
 
