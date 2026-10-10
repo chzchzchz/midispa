@@ -134,6 +134,49 @@ func TestApplySeedIgnoresNonCC(t *testing.T) {
 	}
 }
 
+// TestApplyControlChange drives one control change from
+// a table: it sets every field whose controller it
+// carries, under the channel filter, and reports how
+// many fields it set. Controller 10 is shared by Alpha
+// and Echo, so one change sets both fields.
+func TestApplyControlChange(t *testing.T) {
+	tests := []struct {
+		name        string
+		filter      int
+		message     []byte
+		wantApplied int
+		wantValues  []int
+	}{
+		{"sets every field sharing the controller", 0,
+			[]byte{midi.MakeCC(0), 10, 42}, 2, []int{42, 0, 0, 0, 42}},
+		{"ignores an unknown controller", 0,
+			[]byte{midi.MakeCC(0), 99, 100}, 0, []int{0, 0, 0, 0, 0}},
+		{"ignores a note", 0,
+			[]byte{0x90, 60, 100}, 0, []int{0, 0, 0, 0, 0}},
+		{"ignores a short message", 0,
+			[]byte{midi.MakeCC(0), 10}, 0, []int{0, 0, 0, 0, 0}},
+		{"accepts every channel when the filter is zero", 0,
+			[]byte{midi.MakeCC(9), 13, 55}, 1, []int{0, 0, 0, 55, 0}},
+		{"filters another channel out", 1,
+			[]byte{midi.MakeCC(9), 13, 55}, 0, []int{0, 0, 0, 0, 0}},
+		{"accepts the filtered channel", 1,
+			[]byte{midi.MakeCC(0), 13, 66}, 1, []int{0, 0, 0, 66, 0}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fields := testFields()
+			if got := applyControlChange(fields, test.message, test.filter); got != test.wantApplied {
+				t.Errorf("applied = %d, want %d", got, test.wantApplied)
+			}
+			for index, field := range fields {
+				if *field.Value != test.wantValues[index] {
+					t.Errorf("%s = %d, want %d", field.Name, *field.Value, test.wantValues[index])
+				}
+			}
+		})
+	}
+}
+
 func TestLoadSeedFromSMF(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seed.mid")
 	writeSeedSMF(t, path, [3]int{1, 10, 42}, [3]int{1, 12, 7})

@@ -79,28 +79,38 @@ func applyExcludes(fields []cc.ControlField, rules map[string]fieldrules.Rule) (
 
 // applySeed applies the seed's messages in recording order, so the
 // last message for a controller wins, the same precedence the
-// hardware gives a stream of control changes. Matching is on the
-// controller number only, and controllers the model does not know
-// are ignored. A filter channel of zero accepts control changes
-// stamped with any channel; otherwise only the ones stamped with
-// the filter channel are applied, so a file carrying several
-// instruments' channels can seed just the one the editor talks to.
+// hardware gives a stream of control changes.
 func applySeed(fields []cc.ControlField, messages [][]byte, filterMIDIChannel int) int {
 	applied := 0
 	for _, message := range messages {
-		if len(message) < 3 || !midi.IsCC(message[0]) {
+		applied += applyControlChange(fields, message, filterMIDIChannel)
+	}
+	return applied
+}
+
+// applyControlChange applies one control change to every field whose
+// controller it carries, and returns how many fields it set. The wire
+// is matched by the same function a seed is, so a file and a live
+// source cannot disagree about what a control change means. Matching
+// is on the controller number only, and controllers the model does
+// not know are ignored. A filter channel of zero accepts control
+// changes stamped with any channel; otherwise only the ones stamped
+// with the filter channel are applied, so a source carrying several
+// instruments' channels feeds just the one the editor talks to.
+func applyControlChange(fields []cc.ControlField, message []byte, filterMIDIChannel int) int {
+	if len(message) < 3 || !midi.IsCC(message[0]) {
+		return 0
+	}
+	if filterMIDIChannel > 0 && midi.Channel(message[0]) != filterMIDIChannel-1 {
+		return 0
+	}
+	applied := 0
+	for index := range fields {
+		if fields[index].Controller != int(message[1]) {
 			continue
 		}
-		if filterMIDIChannel > 0 && midi.Channel(message[0]) != filterMIDIChannel-1 {
-			continue
-		}
-		for index := range fields {
-			if fields[index].Controller != int(message[1]) {
-				continue
-			}
-			*fields[index].Value = int(message[2])
-			applied++
-		}
+		*fields[index].Value = int(message[2])
+		applied++
 	}
 	return applied
 }

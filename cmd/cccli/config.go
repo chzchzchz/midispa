@@ -16,6 +16,7 @@ type configuration struct {
 	portName          string
 	outputMIDIChannel int
 	filterMIDIChannel int
+	inputPort         string
 	inputPath         string
 	output            string
 	fieldRules        string
@@ -30,6 +31,7 @@ func parseConfiguration(arguments []string, output io.Writer) (configuration, er
 	portName := flags.String("port", "", "MIDI output port")
 	outputMIDIChannel := flags.Int("output-midi-channel", defaultMIDIChannelNumber, "MIDI channel control changes are sent on (1-16)")
 	filterMIDIChannel := flags.Int("filter-midi-channel", 0, "optional MIDI channel a seed file is filtered to (1-16), or 0 to accept every channel")
+	inputPort := flags.String("input-port", "", "optional MIDI input port to watch for control changes; omitted watches every readable port")
 	inputPath := flags.String("input", "", "optional seed file, SMF or raw MIDI, whose control changes populate the model")
 	outputPath := flags.String("output", "", "path the save command writes the model to")
 	fieldRulesPath := flags.String("field-rules", "", "optional JSON array of field rules, same format as cmd/mutation -gene-semantics")
@@ -44,6 +46,7 @@ func parseConfiguration(arguments []string, output io.Writer) (configuration, er
 		portName:          *portName,
 		outputMIDIChannel: *outputMIDIChannel,
 		filterMIDIChannel: *filterMIDIChannel,
+		inputPort:         *inputPort,
 		inputPath:         *inputPath,
 		output:            *outputPath,
 		fieldRules:        *fieldRulesPath,

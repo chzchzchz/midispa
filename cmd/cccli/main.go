@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/chzchzchz/midispa/alsa"
 )
 
 type terminationError struct {
@@ -101,14 +103,25 @@ func runEditor(ctx context.Context, config configuration) error {
 			return err
 		}
 	}
-	output, closer, err := openMIDIOutput(config.portName)
+	sequence, output, err := openMIDI(config.portName)
 	if err != nil {
 		return err
 	}
-	defer closer.Close()
+	defer sequence.Close()
+	if err := openMIDIInput(sequence, config.inputPort); err != nil {
+		return err
+	}
 
 	model := newCLI(config, fields, output)
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	// The termination signals are cccli's to catch: the context
+	// above turns them into a quit carrying the signal's exit
+	// status. Bubble Tea catches the interrupt and the term
+	// signal as well and turns each into a quit message of its
+	// own, and its handler races the context's: once the context
+	// has quit the program, the message send blocks forever and
+	// the program's shutdown hangs. WithoutSignals leaves the
+	// signals to cccli.
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignals())
 	// A termination signal has to reach the program from outside
 	// Update, which only sees terminal messages, so quitting on
 	// ctx.Done is a goroutine rather than a key handler.
@@ -116,6 +129,26 @@ func runEditor(ctx context.Context, config configuration) error {
 		<-ctx.Done()
 		program.Quit()
 	}()
+	// Live input runs beside the program: the reader goroutine
+	// forwards every control change as an inputMsg, and the
+	// program's Send is safe from any goroutine and stops
+	// blocking once the program has exited. The read cannot be
+	// interrupted, so the goroutine stays blocked in the
+	// sequencer the editor closes on its way out, and the
+	// process exit reclaims it, the arrangement fireloop's read
+	// makes too.
+	go func() {
+		readInput(sequence, func(ev alsa.SeqEvent) {
+			program.Send(inputMsg{message: ev.Data})
+		})
+	}()
 	_, err = program.Run()
+	// A signal quit the program through the context, whose cause
+	// names the signal, so the caller turns it into the
+	// conventional exit status; a quit from the keyboard leaves
+	// the cause unset and the program's own error stands.
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
 	return err
 }

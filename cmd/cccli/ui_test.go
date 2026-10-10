@@ -305,6 +305,91 @@ func TestEscapeAndCtrlCQuit(t *testing.T) {
 	}
 }
 
+// startCellEdit leaves a half-typed edit in one
+// field's cell: the model holds the value, the cell
+// is focused, and its buffer is empty, the state a
+// keystroke that has not parsed as a value yet
+// leaves behind.
+func startCellEdit(model *cliModel, fields []cc.ControlField, index int, value int) {
+	*fields[index].Value = value
+	model.inputs[index].SetValue("")
+	model.setFocus(index)
+}
+
+// TestInputMsg drives one control change from the
+// wire from a table: it applies under the seed's
+// matching rules, refreshes the cells it names, and
+// reports the first field sharing the controller.
+// Nothing goes back out, and an edit under way in
+// another field survives.
+func TestInputMsg(t *testing.T) {
+	tests := []struct {
+		name       string
+		filter     int
+		message    []byte
+		edit       bool
+		wantValues []int
+		wantCells  []string
+		wantStatus string
+	}{
+		{"applies to the named field", 0, []byte{midi.MakeCC(0), 11, 42}, false,
+			[]int{0, 42, 0, 0, 0}, []string{"0", "42", "0", "0", "0"}, "Beta = 42"},
+		{"sets every field sharing the controller", 0, []byte{midi.MakeCC(0), 10, 42}, false,
+			[]int{42, 0, 0, 0, 42}, []string{"42", "0", "0", "0", "42"}, "Alpha = 42"},
+		{"ignores an unknown controller", 0, []byte{midi.MakeCC(0), 99, 100}, true,
+			[]int{0, 5, 0, 0, 0}, []string{"0", "", "0", "0", "0"}, ""},
+		{"ignores a filtered channel", 1, []byte{midi.MakeCC(9), 11, 42}, true,
+			[]int{0, 5, 0, 0, 0}, []string{"0", "", "0", "0", "0"}, ""},
+		{"replaces a half-typed edit in the named field", 0, []byte{midi.MakeCC(0), 11, 42}, true,
+			[]int{0, 42, 0, 0, 0}, []string{"0", "42", "0", "0", "0"}, "Beta = 42"},
+		{"leaves another field's edit alone", 0, []byte{midi.MakeCC(0), 10, 42}, true,
+			[]int{42, 5, 0, 0, 42}, []string{"42", "", "0", "0", "42"}, "Alpha = 42"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model, fields, buffer := newTestModel(t, "")
+			model.cfg.filterMIDIChannel = test.filter
+			if test.edit {
+				// The edit sits in Beta, the field the
+				// first two cases leave untouched.
+				startCellEdit(model, fields, 1, 5)
+			}
+			buffer.Reset()
+			model.Update(inputMsg{message: test.message})
+			for index, field := range fields {
+				if *field.Value != test.wantValues[index] {
+					t.Errorf("%s = %d, want %d", field.Name, *field.Value, test.wantValues[index])
+				}
+				if got := model.inputs[index].Value(); got != test.wantCells[index] {
+					t.Errorf("%s cell shows %q, want %q", field.Name, got, test.wantCells[index])
+				}
+			}
+			if model.status != test.wantStatus || model.statusKind != statusPlain {
+				t.Errorf("status = %q (kind %d), want %q plain",
+					model.status, model.statusKind, test.wantStatus)
+			}
+			if buffer.Len() != 0 {
+				t.Errorf("a received control change sent %d bytes, want none", buffer.Len())
+			}
+		})
+	}
+}
+
+func TestInputMsgValueIsSaved(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "saved.mid")
+	model, _, _ := newTestModel(t, output)
+	model.Update(inputMsg{message: []byte{midi.MakeCC(0), 11, 42}})
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	messages, err := readCCSMF(output)
+	if err != nil {
+		t.Fatalf("read back the save: %v", err)
+	}
+	want := []byte{midi.MakeCC(0), 11, 42}
+	if !bytes.Equal(messages[1], want) {
+		t.Errorf("second message = %v, want %v", messages[1], want)
+	}
+}
+
 func TestSaveWritesOutputFile(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "saved.mid")
 	model, fields, _ := newTestModel(t, output)

@@ -150,6 +150,12 @@ func (m *cliModel) Init() tea.Cmd {
 	return nil
 }
 
+// inputMsg is one control change that arrived from the
+// wire, forwarded by the reader goroutine.
+type inputMsg struct {
+	message []byte
+}
+
 func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -165,6 +171,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyMsg:
 		return m, m.updateKey(msg)
+	case inputMsg:
+		m.applyInput(msg.message)
+		return m, nil
 	}
 	return m, nil
 }
@@ -265,11 +274,18 @@ func (m *cliModel) setFocus(index int) tea.Cmd {
 	if index < 0 || index >= len(m.inputs) {
 		return nil
 	}
-	m.inputs[m.focusIndex].SetValue(strconv.Itoa(*m.fields[m.focusIndex].Value))
+	m.syncCell(m.focusIndex)
 	m.inputs[m.focusIndex].Blur()
 	m.focusIndex = index
 	m.ensureFocusedVisible()
 	return m.inputs[m.focusIndex].Focus()
+}
+
+// syncCell restores one cell's buffer from the model, the
+// same restore a focus move performs, so a live update and
+// a focus move refresh a cell the same way.
+func (m *cliModel) syncCell(index int) {
+	m.inputs[index].SetValue(strconv.Itoa(*m.fields[index].Value))
 }
 
 // stepFocused moves the focused field's value by delta, clamped
@@ -344,6 +360,31 @@ func (m *cliModel) save() {
 		return
 	}
 	m.setStatus(fmt.Sprintf("saved %d controls", len(m.fields)), statusGood)
+}
+
+// applyInput applies one control change that arrived from the
+// wire, under the seed's matching rules, so a file and a live
+// source cannot disagree about what a control change means. The
+// cells the change names are refreshed from the model, so the
+// model, the grid and those cells' buffers agree, and a
+// half-typed edit in another field survives. Nothing goes back
+// out: a received control change is news about the instrument,
+// not an action the editor took, so the send count does not move.
+func (m *cliModel) applyInput(message []byte) {
+	if applyControlChange(m.fields, message, m.cfg.filterMIDIChannel) == 0 {
+		return
+	}
+	name := ""
+	for index := range m.fields {
+		if m.fields[index].Controller != int(message[1]) {
+			continue
+		}
+		m.syncCell(index)
+		if name == "" {
+			name = m.fields[index].Name
+		}
+	}
+	m.setStatus(fmt.Sprintf("%s = %d", name, message[2]), statusPlain)
 }
 
 // ensureFocusedVisible scrolls the focused field's row into

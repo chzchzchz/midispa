@@ -18,7 +18,7 @@ func TestParseConfigurationDefaults(t *testing.T) {
 	if config.filterMIDIChannel != 0 {
 		t.Errorf("filter midi channel = %d, want 0, every channel", config.filterMIDIChannel)
 	}
-	if config.modelName != "" || config.portName != "" || config.inputPath != "" || config.output != "" || config.fieldRules != "" {
+	if config.modelName != "" || config.portName != "" || config.inputPort != "" || config.inputPath != "" || config.output != "" || config.fieldRules != "" {
 		t.Errorf("unexpected non-empty defaults: %+v", config)
 	}
 }
@@ -29,6 +29,7 @@ func TestParseConfigurationValues(t *testing.T) {
 		"--port", "hw:1",
 		"--output-midi-channel", "10",
 		"--filter-midi-channel", "5",
+		"--input-port", "hw:2",
 		"--input", "seed.mid",
 		"--output", "out.mid",
 		"--field-rules", "rules.json",
@@ -41,6 +42,7 @@ func TestParseConfigurationValues(t *testing.T) {
 		portName:          "hw:1",
 		outputMIDIChannel: 10,
 		filterMIDIChannel: 5,
+		inputPort:         "hw:2",
 		inputPath:         "seed.mid",
 		output:            "out.mid",
 		fieldRules:        "rules.json",
