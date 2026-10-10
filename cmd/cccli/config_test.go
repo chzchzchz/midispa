@@ -12,8 +12,11 @@ func TestParseConfigurationDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if config.midiChannel != defaultMIDIChannelNumber {
-		t.Errorf("midi channel = %d, want default %d", config.midiChannel, defaultMIDIChannelNumber)
+	if config.outputMIDIChannel != defaultMIDIChannelNumber {
+		t.Errorf("output midi channel = %d, want default %d", config.outputMIDIChannel, defaultMIDIChannelNumber)
+	}
+	if config.filterMIDIChannel != 0 {
+		t.Errorf("filter midi channel = %d, want 0, every channel", config.filterMIDIChannel)
 	}
 	if config.modelName != "" || config.portName != "" || config.inputPath != "" || config.output != "" || config.fieldRules != "" {
 		t.Errorf("unexpected non-empty defaults: %+v", config)
@@ -24,7 +27,8 @@ func TestParseConfigurationValues(t *testing.T) {
 	config, err := parseConfiguration([]string{
 		"--model", "Meeblip SE",
 		"--port", "hw:1",
-		"--midi-channel", "10",
+		"--output-midi-channel", "10",
+		"--filter-midi-channel", "5",
 		"--input", "seed.mid",
 		"--output", "out.mid",
 		"--field-rules", "rules.json",
@@ -33,12 +37,13 @@ func TestParseConfigurationValues(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	want := configuration{
-		modelName:   "Meeblip SE",
-		portName:    "hw:1",
-		midiChannel: 10,
-		inputPath:   "seed.mid",
-		output:      "out.mid",
-		fieldRules:  "rules.json",
+		modelName:         "Meeblip SE",
+		portName:          "hw:1",
+		outputMIDIChannel: 10,
+		filterMIDIChannel: 5,
+		inputPath:         "seed.mid",
+		output:            "out.mid",
+		fieldRules:        "rules.json",
 	}
 	if config != want {
 		t.Errorf("config = %+v, want %+v", config, want)
@@ -66,8 +71,10 @@ func TestValidateConfiguration(t *testing.T) {
 	}{
 		{"no model", configuration{portName: "hw:1"}, "--model is required"},
 		{"no port", configuration{modelName: "Meeblip SE"}, "--port is required"},
-		{"channel below range", configuration{modelName: "Meeblip SE", portName: "hw:1", midiChannel: 0}, "--midi-channel must be between 1 and 16"},
-		{"channel above range", configuration{modelName: "Meeblip SE", portName: "hw:1", midiChannel: 17}, "--midi-channel must be between 1 and 16"},
+		{"output channel below range", configuration{modelName: "Meeblip SE", portName: "hw:1", outputMIDIChannel: 0}, "--output-midi-channel must be between 1 and 16"},
+		{"output channel above range", configuration{modelName: "Meeblip SE", portName: "hw:1", outputMIDIChannel: 17}, "--output-midi-channel must be between 1 and 16"},
+		{"filter channel below range", configuration{modelName: "Meeblip SE", portName: "hw:1", outputMIDIChannel: 1, filterMIDIChannel: -1}, "--filter-midi-channel must be between 1 and 16, or 0 to accept every channel"},
+		{"filter channel above range", configuration{modelName: "Meeblip SE", portName: "hw:1", outputMIDIChannel: 1, filterMIDIChannel: 17}, "--filter-midi-channel must be between 1 and 16, or 0 to accept every channel"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -84,15 +91,21 @@ func TestValidateConfiguration(t *testing.T) {
 
 func TestValidateConfigurationAcceptsBounds(t *testing.T) {
 	for _, channel := range []int{1, 16} {
-		config := configuration{modelName: "Meeblip SE", portName: "hw:1", midiChannel: channel}
+		config := configuration{modelName: "Meeblip SE", portName: "hw:1", outputMIDIChannel: channel}
 		if err := validateConfiguration(config); err != nil {
 			t.Errorf("channel %d: %v", channel, err)
+		}
+	}
+	for _, channel := range []int{0, 1, 16} {
+		config := configuration{modelName: "Meeblip SE", portName: "hw:1", outputMIDIChannel: 1, filterMIDIChannel: channel}
+		if err := validateConfiguration(config); err != nil {
+			t.Errorf("filter channel %d: %v", channel, err)
 		}
 	}
 }
 
 func TestValidateConfigurationRejectsUnknownModel(t *testing.T) {
-	config := configuration{modelName: "No Such Model", portName: "hw:1", midiChannel: 1}
+	config := configuration{modelName: "No Such Model", portName: "hw:1", outputMIDIChannel: 1}
 	fields, _, _, err := loadModelFields(config.modelName, "")
 	if err == nil {
 		t.Fatalf("unknown model loaded %d fields", len(fields))

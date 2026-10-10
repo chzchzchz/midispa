@@ -12,12 +12,13 @@ const defaultMIDIChannelNumber = 1
 // names the same file format cmd/mutation reads with
 // --gene-semantics, so one rule file serves both tools.
 type configuration struct {
-	modelName   string
-	portName    string
-	midiChannel int
-	inputPath   string
-	output      string
-	fieldRules  string
+	modelName         string
+	portName          string
+	outputMIDIChannel int
+	filterMIDIChannel int
+	inputPath         string
+	output            string
+	fieldRules        string
 }
 
 // parseConfiguration isolates flag state so configuration tests do
@@ -27,7 +28,8 @@ func parseConfiguration(arguments []string, output io.Writer) (configuration, er
 	flags.SetOutput(output)
 	modelName := flags.String("model", "", "model name from cc/model.go")
 	portName := flags.String("port", "", "MIDI output port")
-	midiChannel := flags.Int("midi-channel", defaultMIDIChannelNumber, "MIDI channel for control changes (1-16)")
+	outputMIDIChannel := flags.Int("output-midi-channel", defaultMIDIChannelNumber, "MIDI channel control changes are sent on (1-16)")
+	filterMIDIChannel := flags.Int("filter-midi-channel", 0, "optional MIDI channel a seed file is filtered to (1-16), or 0 to accept every channel")
 	inputPath := flags.String("input", "", "optional seed file, SMF or raw MIDI, whose control changes populate the model")
 	outputPath := flags.String("output", "", "path the save command writes the model to")
 	fieldRulesPath := flags.String("field-rules", "", "optional JSON array of field rules, same format as cmd/mutation -gene-semantics")
@@ -38,12 +40,13 @@ func parseConfiguration(arguments []string, output io.Writer) (configuration, er
 		return configuration{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
 	return configuration{
-		modelName:   *modelName,
-		portName:    *portName,
-		midiChannel: *midiChannel,
-		inputPath:   *inputPath,
-		output:      *outputPath,
-		fieldRules:  *fieldRulesPath,
+		modelName:         *modelName,
+		portName:          *portName,
+		outputMIDIChannel: *outputMIDIChannel,
+		filterMIDIChannel: *filterMIDIChannel,
+		inputPath:         *inputPath,
+		output:            *outputPath,
+		fieldRules:        *fieldRulesPath,
 	}, nil
 }
 
@@ -58,8 +61,13 @@ func validateConfiguration(config configuration) error {
 	if config.portName == "" {
 		return fmt.Errorf("--port is required")
 	}
-	if config.midiChannel < 1 || config.midiChannel > 16 {
-		return fmt.Errorf("--midi-channel must be between 1 and 16")
+	if config.outputMIDIChannel < 1 || config.outputMIDIChannel > 16 {
+		return fmt.Errorf("--output-midi-channel must be between 1 and 16")
+	}
+	// Zero means no filtering, so a filter is either off or a
+	// channel of its own.
+	if config.filterMIDIChannel < 0 || config.filterMIDIChannel > 16 {
+		return fmt.Errorf("--filter-midi-channel must be between 1 and 16, or 0 to accept every channel")
 	}
 	return nil
 }

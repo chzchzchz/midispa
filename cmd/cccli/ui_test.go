@@ -22,10 +22,10 @@ func newTestModel(t *testing.T, output string) (*cliModel, []cc.ControlField, *b
 	fields := testFields()
 	buffer := &bytes.Buffer{}
 	cfg := configuration{
-		modelName:   "Meeblip SE",
-		portName:    "test port",
-		midiChannel: 1,
-		output:      output,
+		modelName:         "Meeblip SE",
+		portName:          "test port",
+		outputMIDIChannel: 1,
+		output:            output,
 	}
 	model := newCLI(cfg, fields, buffer)
 	model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -345,10 +345,10 @@ func TestSaveWritesOnlyNonExcludedFields(t *testing.T) {
 		t.Fatalf("applyExcludes: %v", err)
 	}
 	cfg := configuration{
-		modelName:   "Meeblip SE",
-		portName:    "test port",
-		midiChannel: 1,
-		output:      output,
+		modelName:         "Meeblip SE",
+		portName:          "test port",
+		outputMIDIChannel: 1,
+		output:            output,
 	}
 	model := newCLI(cfg, fields, &bytes.Buffer{})
 	model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
@@ -409,7 +409,7 @@ func TestViewHidesExcludedFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyExcludes: %v", err)
 	}
-	cfg := configuration{modelName: "Meeblip SE", portName: "test port", midiChannel: 1}
+	cfg := configuration{modelName: "Meeblip SE", portName: "test port", outputMIDIChannel: 1}
 	model := newCLI(cfg, fields, &bytes.Buffer{})
 	model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	if view := model.View(); strings.Contains(view, "Gamma") {
@@ -427,7 +427,7 @@ func TestMouseWheelScrolls(t *testing.T) {
 			Value:      &values[index],
 		}
 	}
-	cfg := configuration{modelName: "Meeblip SE", portName: "test port", midiChannel: 1}
+	cfg := configuration{modelName: "Meeblip SE", portName: "test port", outputMIDIChannel: 1}
 	model := newCLI(cfg, fields, &bytes.Buffer{})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
 	if model.vp.Height != 2 {
@@ -464,7 +464,7 @@ func TestFocusMoveKeepsFocusedRowVisible(t *testing.T) {
 			Value:      &values[index],
 		}
 	}
-	cfg := configuration{modelName: "Meeblip SE", portName: "test port", midiChannel: 1}
+	cfg := configuration{modelName: "Meeblip SE", portName: "test port", outputMIDIChannel: 1}
 	model := newCLI(cfg, fields, &bytes.Buffer{})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
 	// Two columns of twenty rows inside the box:
@@ -505,7 +505,7 @@ func TestInitialStatusReportsNrpnFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadModelFields: %v", err)
 	}
-	cfg := configuration{modelName: "microKORG2", portName: "test port", midiChannel: 1}
+	cfg := configuration{modelName: "microKORG2", portName: "test port", outputMIDIChannel: 1}
 	model := newCLI(cfg, fields, &bytes.Buffer{})
 	if !strings.Contains(model.status, "nrpn fields are not shown") {
 		t.Errorf("status = %q, want the nrpn notice", model.status)
@@ -523,7 +523,7 @@ func TestNewCLISeededValuesShowInCells(t *testing.T) {
 	fields := testFields()
 	*fields[0].Value = 42
 	*fields[3].Value = 127
-	cfg := configuration{modelName: "Meeblip SE", portName: "test port", midiChannel: 1}
+	cfg := configuration{modelName: "Meeblip SE", portName: "test port", outputMIDIChannel: 1}
 	model := newCLI(cfg, fields, &bytes.Buffer{})
 	if got := model.inputs[0].Value(); got != "42" {
 		t.Errorf("first cell shows %q, want 42", got)

@@ -119,7 +119,7 @@ func newCLI(cfg configuration, fields []cc.ControlField, out io.Writer) *cliMode
 		cfg:     cfg,
 		fields:  fields,
 		out:     out,
-		channel: cfg.midiChannel - 1,
+		channel: cfg.outputMIDIChannel - 1,
 		columns: 1,
 		vp:      viewport.New(0, 0),
 	}
@@ -201,7 +201,7 @@ func (m *cliModel) View() string {
 	m.vp.SetContent(joinGrid(m.renderCells(), m.columns))
 	header := headerStyle.Width(m.width).BorderBottom(true).Render(
 		fmt.Sprintf("%s channel %d port %s (%d sent)",
-			m.cfg.modelName, m.cfg.midiChannel, m.cfg.portName, m.sentCount))
+			m.cfg.modelName, m.cfg.outputMIDIChannel, m.cfg.portName, m.sentCount))
 	grid := gridStyle.Width(max(0, m.width-boxColumns)).Render(m.vp.View())
 	footer := footerStyle.Width(m.width).BorderTop(true).Render(m.footerText())
 	return renderView(grid, header, footer)
@@ -339,7 +339,7 @@ func (m *cliModel) save() {
 		m.setStatus("--output is required to save", statusBad)
 		return
 	}
-	if err := writeCCSMF(m.cfg.output, m.fields, m.cfg.modelName, m.cfg.midiChannel); err != nil {
+	if err := writeCCSMF(m.cfg.output, m.fields, m.cfg.modelName, m.cfg.outputMIDIChannel); err != nil {
 		m.setStatus(fmt.Sprintf("save failed: %v", err), statusBad)
 		return
 	}

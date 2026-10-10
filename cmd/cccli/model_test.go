@@ -31,11 +31,11 @@ func testFields() []cc.ControlField {
 }
 
 // writeSeedSMF writes a Standard MIDI File holding the given
-// control changes, all on the given one-based channel, so a
-// test can build seeds the encoder would not produce itself.
-func writeSeedSMF(t *testing.T, path string, channelNumber int, controls ...[2]int) {
+// control changes, each a channel, controller, and value
+// triple, so a test can build seeds the encoder would not
+// produce itself.
+func writeSeedSMF(t *testing.T, path string, controls ...[3]int) {
 	t.Helper()
-	channelIndex := channelNumber - 1
 	var writeErr error
 	err := smfwriter.WriteFile(path, func(midiWriter smf.Writer) {
 		if writeErr = midiWriter.Write(meta.Instrument("seed")); writeErr != nil {
@@ -43,7 +43,7 @@ func writeSeedSMF(t *testing.T, path string, channelNumber int, controls ...[2]i
 		}
 		midiWriter.SetDelta(0)
 		for _, control := range controls {
-			change := channel.Channel(channelIndex).ControlChange(byte(control[0]), byte(control[1]))
+			change := channel.Channel(control[0]-1).ControlChange(byte(control[1]), byte(control[2]))
 			if writeErr = midiWriter.Write(change); writeErr != nil {
 				return
 			}
@@ -67,7 +67,7 @@ func TestApplySeed(t *testing.T) {
 		{midi.MakeCC(0), 12, 7},
 		{midi.MakeCC(0), 99, 100},
 	}
-	if applied := applySeed(fields, messages); applied != 3 {
+	if applied := applySeed(fields, messages, 0); applied != 3 {
 		t.Errorf("applied = %d, want 3 (the duplicate controller sets two fields)", applied)
 	}
 	if *fields[0].Value != 42 || *fields[4].Value != 42 {
@@ -87,7 +87,7 @@ func TestApplySeedLastMessageWins(t *testing.T) {
 		{midi.MakeCC(0), 11, 1},
 		{midi.MakeCC(0), 11, 99},
 	}
-	applySeed(fields, messages)
+	applySeed(fields, messages, 0)
 	if *fields[1].Value != 99 {
 		t.Errorf("controller 11 = %d, want the last message's 99", *fields[1].Value)
 	}
@@ -98,9 +98,23 @@ func TestApplySeedIgnoresChannel(t *testing.T) {
 	messages := [][]byte{
 		{midi.MakeCC(9), 13, 55},
 	}
-	applySeed(fields, messages)
+	applySeed(fields, messages, 0)
 	if *fields[3].Value != 55 {
 		t.Errorf("controller 13 = %d, want 55 from another channel", *fields[3].Value)
+	}
+}
+
+func TestApplySeedFiltersChannel(t *testing.T) {
+	fields := testFields()
+	messages := [][]byte{
+		{midi.MakeCC(9), 13, 55},
+		{midi.MakeCC(0), 13, 66},
+	}
+	if applied := applySeed(fields, messages, 1); applied != 1 {
+		t.Errorf("applied = %d, want 1, the channel 1 message only", applied)
+	}
+	if *fields[3].Value != 66 {
+		t.Errorf("controller 13 = %d, want 66 from the filtered channel", *fields[3].Value)
 	}
 }
 
@@ -112,7 +126,7 @@ func TestApplySeedIgnoresNonCC(t *testing.T) {
 	}
 	// Controller 10 is shared by Alpha and Echo, so one
 	// control change sets both fields.
-	if applied := applySeed(fields, messages); applied != 2 {
+	if applied := applySeed(fields, messages, 0); applied != 2 {
 		t.Errorf("applied = %d, want 2", applied)
 	}
 	if *fields[0].Value != 3 || *fields[4].Value != 3 {
@@ -122,10 +136,10 @@ func TestApplySeedIgnoresNonCC(t *testing.T) {
 
 func TestLoadSeedFromSMF(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seed.mid")
-	writeSeedSMF(t, path, 1, [2]int{10, 42}, [2]int{12, 7})
+	writeSeedSMF(t, path, [3]int{1, 10, 42}, [3]int{1, 12, 7})
 
 	fields := testFields()
-	if err := loadSeed(path, fields); err != nil {
+	if err := loadSeed(path, fields, 0); err != nil {
 		t.Fatalf("loadSeed: %v", err)
 	}
 	if *fields[0].Value != 42 || *fields[2].Value != 7 {
@@ -144,7 +158,7 @@ func TestLoadSeedFromRawStream(t *testing.T) {
 	}
 
 	fields := testFields()
-	if err := loadSeed(path, fields); err != nil {
+	if err := loadSeed(path, fields, 0); err != nil {
 		t.Fatalf("loadSeed: %v", err)
 	}
 	if *fields[1].Value != 20 || *fields[3].Value != 21 {
@@ -154,17 +168,44 @@ func TestLoadSeedFromRawStream(t *testing.T) {
 
 func TestLoadSeedRejectsSeedWithoutModelValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.mid")
-	writeSeedSMF(t, path, 1, [2]int{99, 100})
+	writeSeedSMF(t, path, [3]int{1, 99, 100})
 
 	fields := testFields()
-	if err := loadSeed(path, fields); err == nil {
+	if err := loadSeed(path, fields, 0); err == nil {
 		t.Error("a seed that sets no field was accepted")
+	}
+}
+
+func TestLoadSeedFiltersChannel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seed.mid")
+	writeSeedSMF(t, path, [3]int{1, 10, 42}, [3]int{2, 12, 7})
+
+	fields := testFields()
+	if err := loadSeed(path, fields, 1); err != nil {
+		t.Fatalf("loadSeed: %v", err)
+	}
+	if *fields[0].Value != 42 {
+		t.Errorf("controller 10 = %d, want 42 from channel 1", *fields[0].Value)
+	}
+	if *fields[2].Value != 0 {
+		t.Errorf("controller 12 = %d, want 0, channel 2 was filtered out", *fields[2].Value)
+	}
+}
+
+func TestLoadSeedRejectsFilteredOutSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seed.mid")
+	writeSeedSMF(t, path, [3]int{2, 10, 42})
+
+	fields := testFields()
+	err := loadSeed(path, fields, 1)
+	if err == nil {
+		t.Error("a seed whose only channel was filtered out was accepted")
 	}
 }
 
 func TestLoadSeedRejectsUnreadableFile(t *testing.T) {
 	fields := testFields()
-	if err := loadSeed(filepath.Join(t.TempDir(), "missing.mid"), fields); err == nil {
+	if err := loadSeed(filepath.Join(t.TempDir(), "missing.mid"), fields, 0); err == nil {
 		t.Error("a missing seed file was accepted")
 	}
 }

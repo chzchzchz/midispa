@@ -17,7 +17,8 @@ The command uses the repository's ALSA output support and expects an ALSA sequen
 out/cccli \
   --model "Volca Bass" \
   --port "MIDI Out" \
-  --midi-channel 1 \
+  --output-midi-channel 1 \
+  --filter-midi-channel 1 \
   --input seed.mid \
   --field-rules rules.json \
   --output edited.mid
@@ -26,6 +27,8 @@ out/cccli \
 Model names are the canonical names accepted by `cc.NewModelParams`, such as `Craft Synth 2`, `Volca Bass`, `Uno Synth`, or `Sound Controller`.
 
 The editor opens with every field at the value the model declares, zero for a field the model leaves unset, or at the value a seed file set. The header names the model, the channel, the port, and how many control changes have been sent so far.
+
+`--output-midi-channel` is the channel every edit is sent on and saved with. `--filter-midi-channel` limits a seed file to the control changes stamped with that channel; 0, the default, accepts every channel.
 
 ## Editing
 
@@ -62,7 +65,7 @@ A field named by an `exclude` rule is not shown, not seeded, and not saved. A `f
 
 ## Seed and save
 
-`--input` reads a seed file, trying SMF framing first and a raw MIDI stream second, and applies its control changes to the model. The last message for a controller wins, controllers the model does not know are ignored, and the channel a message was stamped with is ignored. A seed that sets no field of the model is rejected, because a model left at zero is indistinguishable from an editor that failed to load.
+`--input` reads a seed file, trying SMF framing first and a raw MIDI stream second, and applies its control changes to the model. The last message for a controller wins, controllers the model does not know are ignored, and the channel a message was stamped with is ignored unless `--filter-midi-channel` is set, in which case control changes on other channels are dropped. A seed that sets no field of the model is rejected, because a model left at zero is indistinguishable from an editor that failed to load; the same check applies after filtering, so a seed whose channels are all filtered out is refused.
 
 `ctrl+s` writes every field in declaration order to `--output` as a Standard MIDI File. Saving with no `--output` is refused with a message on the status line rather than an error.
 

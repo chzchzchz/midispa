@@ -97,7 +97,7 @@ func runEditor(ctx context.Context, config configuration) error {
 		fmt.Fprintf(os.Stderr, "cccli: ignoring %d fixed field rules\n", ignoredFixed)
 	}
 	if config.inputPath != "" {
-		if err := loadSeed(config.inputPath, fields); err != nil {
+		if err := loadSeed(config.inputPath, fields, config.filterMIDIChannel); err != nil {
 			return err
 		}
 	}

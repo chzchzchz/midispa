@@ -81,11 +81,17 @@ func applyExcludes(fields []cc.ControlField, rules map[string]fieldrules.Rule) (
 // last message for a controller wins, the same precedence the
 // hardware gives a stream of control changes. Matching is on the
 // controller number only, and controllers the model does not know
-// are ignored.
-func applySeed(fields []cc.ControlField, messages [][]byte) int {
+// are ignored. A filter channel of zero accepts control changes
+// stamped with any channel; otherwise only the ones stamped with
+// the filter channel are applied, so a file carrying several
+// instruments' channels can seed just the one the editor talks to.
+func applySeed(fields []cc.ControlField, messages [][]byte, filterMIDIChannel int) int {
 	applied := 0
 	for _, message := range messages {
 		if len(message) < 3 || !midi.IsCC(message[0]) {
+			continue
+		}
+		if filterMIDIChannel > 0 && midi.Channel(message[0]) != filterMIDIChannel-1 {
 			continue
 		}
 		for index := range fields {
@@ -104,12 +110,12 @@ func applySeed(fields []cc.ControlField, messages [][]byte) int {
 // field is rejected, the same check a mutation run makes, because a
 // model left at zero is indistinguishable from an editor that failed
 // to load.
-func loadSeed(path string, fields []cc.ControlField) error {
+func loadSeed(path string, fields []cc.ControlField, filterMIDIChannel int) error {
 	messages, err := readSeedMessages(path)
 	if err != nil {
 		return fmt.Errorf("read seed %q: %w", path, err)
 	}
-	if applySeed(fields, messages) == 0 {
+	if applySeed(fields, messages, filterMIDIChannel) == 0 {
 		return fmt.Errorf("seed %q has no CC values for the model", path)
 	}
 	return nil
