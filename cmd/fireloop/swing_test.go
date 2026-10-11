@@ -539,7 +539,7 @@ func TestSwingSurvivesASessionRoundTrip(t *testing.T) {
 	writer := stateTestBank(t, stateKit())
 	path := stateFilePath(t)
 	setSwing(t, 66.7)
-	saveTo(t, path, writer.patbank, writer.songbank, nil)
+	saveTo(t, path, writer, nil)
 
 	setSwing(t, straightSwingPct)
 	far := stateTestBank(t, stateKit())
@@ -554,7 +554,7 @@ func TestStraightSwingWritesNoKey(t *testing.T) {
 	writer := stateTestBank(t, stateKit())
 	path := stateFilePath(t)
 	setSwing(t, straightSwingPct)
-	saveTo(t, path, writer.patbank, writer.songbank, nil)
+	saveTo(t, path, writer, nil)
 
 	written, err := os.ReadFile(path)
 	require.NoError(t, err)

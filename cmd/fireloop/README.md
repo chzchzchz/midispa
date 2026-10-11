@@ -47,12 +47,13 @@ A missing file at startup is not an error, because that is what a first run look
 
 ## Session file
 
-`-state` names one file holding what the controls make: the patterns, the songs that arrange them, the kit's voices assigned to the tracks, the tempo and the swing.
+`-state` names one file holding what the controls make: the pages, each with its patterns, the songs that arrange them, the kit's voices assigned to its tracks, the tempo and the swing.
 
 - The write is atomic. A save either lands whole or leaves the previous file untouched, so an interrupted save never costs a set.
 - Voice references are positions in the kit as this run loaded it, so the file records the kit paths and the voice count. A file loaded against a different kit is reported rather than trusted: everything that still resolves is kept, and what did not is counted and shown on the display.
+- The page table is written in index order, one entry per page in use. A page deleted before the save leaves no entry, so it does not come back from the file, and each entry carries the page's track voices and whether the page plays in song mode.
 - Values outside their range are clamped, not refused. A set with one bad number in it is still mostly a set.
-- Where you were looking is not saved. The selected pattern and row, the scroll windows, the step cursor and the palette octave are the display's business, so a load lands on whatever pattern was showing. Notes, arrangement, tempo, swing and kit layout are what come back.
+- Where you were looking is not saved. The current page, the selected pattern and row, the scroll windows, the step cursor and the palette octave are the display's business, so a load lands on page 1, on pattern 1. Notes, arrangement, tempo, swing, kit layout and each page's enabled flag are what come back.
 - A straight swing is written as no key at all, so a session that has never been swung is the same file the earlier build wrote, and a file with no `swingPct` loads as straight.
 - Editing modes, held pads, the playhead and the clipboard are not saved either. They mean nothing across a restart, and a loaded clipboard would paste on the next accidental Play press.
 - Patterns are written in index order, so the file can be diffed and read by eye after a show.
@@ -152,6 +153,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Play while copied: paste the pattern.
 - Stop: stop playback, release the notes it is tracking, then send All Notes Off on every channel the kit plays on, so nothing is left sounding.
 - Pattern/song: switch between pattern editing and [song mode](#song-mode). Switching releases `Alt` and `Shift`, so neither carries into the other mode.
+- Browser: enter page mode, from either view; Browser again returns to the view it was entered from. See [Pages](#pages).
 - The bottom row carries whichever mode owns it: the step being edited, `Length NN steps`, the swing being typed, a triplet gesture's line, or a message from a save, a load or a controller.
 - The separator row under the header carries the swing whenever it is not straight, for example `----------- Sw 66`, so the groove is visible while nothing is being edited. A straight swing leaves that row bare.
 - The four lights at the top left, labelled Channel, Mixer, User 1 and User 2, are indicators with no button behind them. Fireloop does not report state on them yet, and clears them whenever it clears the indicators, so they stay dark.
@@ -294,7 +296,7 @@ A song holds up to 1000 measures, so the 48 measure pads only ever show part of 
 
 #### Display
 
-- Row 0: the song slot, for example `Song 001`.
+- Row 0: the song slot and the page it belongs to, for example `Song 001 Pg 003 on`, where the page is enabled.
 - Row 1: the selected pattern and its length in steps, for example `Pattern 003 L16`.
 - Row 2: the current tempo and, when it is not straight, the swing beside it, for example `Tempo 139 Sw 66`.
 - Row 3: the visible windows, for example `P 001-016 M 001-048`.
@@ -311,6 +313,7 @@ A song holds up to 1000 measures, so the 48 measure pads only ever show part of 
 - `Shift` plus a measure pad: jump playback to that measure. The jump only applies while the song is playing, takes effect at the next pattern boundary, and the display reports the move.
 - Play: play the song from the top and loop it. The playing measure lights up and rows 4 and 5 follow it.
 - Stop: stop playback, release the notes it is tracking, then send All Notes Off on every channel the kit plays on, so nothing is left sounding.
+- Browser: enter page mode. See [Pages](#pages).
 - `Alt` is a pattern-mode modifier and does nothing here, so there is no blackout in song mode.
 - The Fire's own knobs do nothing in song mode either. A controller's tempo and swing controls work in both views, which is where a groove is usually set against the arrangement.
 - `Shift` plus Browser saves the session and `Shift` plus Accent loads it, the same as in pattern mode. A song is usually saved from here, since that is where the arrangement is.
@@ -327,6 +330,39 @@ Only song slot 1 is reachable from the controls today; the display names the slo
 6. Press Pattern/Song to go back and edit any pattern in the song; every measure holding that pattern changes with it, including its length.
 
 Measures reference the pattern itself rather than a copy, so edits are shared. Percussive and chromatic patterns can be mixed freely in one song. With `-state` the arrangement is written to the session file described above; without it, patterns and songs are held in memory for the lifetime of the process and are lost when the process ends.
+
+### Pages
+
+A page is a snapshot of the set: its patterns, its songs, its track voices and the view it was left on. Pages give one unit several sets at once, and give song mode more than one arrangement to play.
+
+#### Entering page mode
+
+- Press Browser on its own, from either view. Playback stops and the grid becomes the page grid. Browser again returns to the view page mode was entered from, and Pattern/Song while page mode shows leaves it and toggles the underlying view, with the mode light reporting the view landed on.
+- The edit mode is page state, so it survives the round trip through page mode: a page left in note-edit mode comes back in note-edit mode.
+- The Fire's own knobs mean nothing in page mode, as in song mode. A controller's tempo and swing controls keep working everywhere.
+
+#### The page grid
+
+Every pad is a page: 64 of them, numbered from the top left across and down, so page 1 is the top-left pad. Row 0 reads `Page 001  2/64`, the current page and how many are in use, row 1 carries the gesture hint `Pad:on/off 2x:jump`, and rows 2 to 5 are clear.
+
+- A dark pad creates an enabled page.
+- A page's pad toggles whether the page plays: dim at the palette's brightness while enabled, dimmed while disabled. A disabled page keeps its state and its pad; it just stays out of song mode's mix.
+- Two presses of the same pad within 300ms jump to that page. The first press's toggle stands, but a jump always enables the page, so a double tap lands on an enabled page, and a double tap on a dark pad creates the page and jumps to it.
+- `Shift` plus a pad deletes the page on it. Deleting the current page jumps to the first remaining page; deleting the last page leaves a fresh, enabled page 1.
+
+#### What a page holds
+
+Each page keeps its own patterns, songs, track voices, pattern and song selection, track window, step cursor, edit mode, chromatic velocity, palette octave, clipboard, view and enabled flag. Tempo, swing and the kit are shared by every page: a groove set on one page is the groove on all of them.
+
+A jump commits the live banks into the page being left and restores the target page's snapshot into the same banks, so the display shows exactly the state the page was left with, including where it was looking.
+
+#### Playing several pages
+
+In song mode, Play plays every enabled page's song at the current page's selected song index, all starting on the same beat. The current page's session draws the visible arrangement; every other enabled page plays its own song with nothing drawn. A page with no song at that index plays silence, and a disabled page plays nothing. The Play press enables the current page before building the set, so the page on screen always belongs in the mix, and `Shift` plus a measure pad seeks every playing page to that measure, which keeps the pages in step.
+
+#### Pages and the session file
+
+With `-state`, every page's patterns, songs, track voices and enabled flag are written to the session file. Where you were looking is not: a load lands on page 1 on the pattern view, on pattern 1 and song 1, because the current page, the selections, the windows and the cursor are the display's business. `Shift` plus Browser saves and `Shift` plus Accent loads from page mode without leaving it.
 
 ## MIDI controls
 

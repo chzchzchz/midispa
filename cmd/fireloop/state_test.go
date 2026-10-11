@@ -43,10 +43,20 @@ func stateFilePath(t *testing.T) string {
 
 // saveTo writes the session a test is holding, so a test that only cares that the file
 // landed does not have to carry the same error check as one that reads the report back.
-func saveTo(t *testing.T, path string, bank *PatternBank, songs *SongBank, kit []string) {
+// The current page's memento is written first, because the banks hold that page
+// live and the file is written from the table.
+func saveTo(t *testing.T, path string, controller *Controller, kit []string) {
 	t.Helper()
-	_, err := saveState(path, bank, songs, kit)
+	controller.saveCurrentPage()
+	_, err := saveState(path, controller, kit)
 	require.NoError(t, err)
+}
+
+// snapshotOf serializes the session a controller holds, writing the
+// current page's memento first the way a save gesture does.
+func snapshotOf(controller *Controller) stateFile {
+	controller.saveCurrentPage()
+	return stateFrom(controller, nil)
 }
 
 // loadInto installs the session at path into a controller's banks, which is the far side of
@@ -73,7 +83,7 @@ type loadedSession struct {
 func roundTrip(t *testing.T, bank *PatternBank, songs *SongBank, kit []string) loadedSession {
 	t.Helper()
 	path := stateFilePath(t)
-	saveTo(t, path, bank, songs, kit)
+	saveTo(t, path, bank.controller, kit)
 	loadedKit := stateKit()
 	far := stateTestBank(t, loadedKit)
 	report, err := loadInto(far, path, kit)
@@ -162,7 +172,7 @@ func TestStateRoundTrip(t *testing.T) {
 	bank, songs := session.patbank, session.songbank
 	fillStateSession(t, bank, songs, kit)
 	loaded := roundTrip(t, bank, songs, []string{"kits/gm_drums.json"})
-	assertSameSession(t, stateFrom(bank, songs, nil), stateFrom(loaded.bank, loaded.songs, nil))
+	assertSameSession(t, snapshotOf(bank.controller), snapshotOf(loaded.bank.controller))
 }
 
 // A measure refers to the pattern itself, so a load has to rebuild one pattern per index and
@@ -197,14 +207,14 @@ func TestStateKeepsMeasuresSharingOnePattern(t *testing.T) {
 func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {
 	kit := stateKit()
 	session := stateTestBank(t, kit)
-	bank, songs := session.patbank, session.songbank
+	bank := session.patbank
 	pattern := bank.CurrentPattern()
 	pattern.SetChromaticNote(0, kit.voices[2], 60, 100)
 	// A percussive voice near the end of the kit, which the smaller kit will not have.
 	pattern.ToggleEvent(Event{Voice: kit.voices[5], Beat: stepBeat(1), Velocity: 100})
 
 	path := stateFilePath(t)
-	saveTo(t, path, bank, songs, []string{"kits/gm_drums.json"})
+	saveTo(t, path, bank.controller, []string{"kits/gm_drums.json"})
 	smaller := trackWindowKit(4, 2)
 	far := stateTestBank(t, smaller)
 	loaded := far.patbank
@@ -234,11 +244,11 @@ func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {
 func TestStateRecordsAndReportsTheKit(t *testing.T) {
 	kit := stateKit()
 	session := stateTestBank(t, kit)
-	bank, songs := session.patbank, session.songbank
+	bank := session.patbank
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 60, 100)
 	written := []string{"kits/gm_drums.json", "my_leads.json"}
 	path := stateFilePath(t)
-	saveTo(t, path, bank, songs, written)
+	saveTo(t, path, bank.controller, written)
 	saved, err := readStateFile(path)
 	require.NoError(t, err)
 	require.Equal(t, written, saved.Kit)
@@ -258,7 +268,7 @@ func TestStateRecordsAndReportsTheKit(t *testing.T) {
 func TestStateRestoresTheKitAssignment(t *testing.T) {
 	kit := stateKit()
 	session := stateTestBank(t, kit)
-	bank, songs := session.patbank, session.songbank
+	bank := session.patbank
 	// Move every track's voice away from where the bank starts it, so a load that fell back
 	// to the defaults would be visibly wrong rather than coincidentally right.
 	want := make([]int, len(bank.trackVoices))
@@ -268,7 +278,7 @@ func TestStateRestoresTheKitAssignment(t *testing.T) {
 	}
 	copy(want, bank.trackVoices)
 	path := stateFilePath(t)
-	saveTo(t, path, bank, songs, nil)
+	saveTo(t, path, bank.controller, nil)
 	// Wipe the bank's own assignment afterwards, so a load that fell back to the defaults
 	// would be visibly wrong rather than coincidentally right.
 	for index := range bank.trackVoices {
@@ -301,18 +311,24 @@ func TestStateSavesInIndexOrder(t *testing.T) {
 		bank.CurrentPattern().SetChromaticNote(index%maxPatternSteps, kit.voices[2], 60+index%12, 90)
 		song.SetPattern(bank.Patterns[bank.selPatIdx], index%8)
 	}
-	first := stateFrom(bank, songs, nil)
-	for i := 1; i < len(first.Patterns); i++ {
-		require.LessOrEqualf(t, first.Patterns[i-1].Index, first.Patterns[i].Index,
+	first := snapshotOf(bank.controller)
+	for i := 1; i < len(first.Pages); i++ {
+		require.LessOrEqualf(t, first.Pages[i-1].Index, first.Pages[i].Index,
+			"pages are out of order at %d", i)
+	}
+	require.Len(t, first.Pages, 1)
+	patterns := first.Pages[0].Patterns
+	for i := 1; i < len(patterns); i++ {
+		require.LessOrEqualf(t, patterns[i-1].Index, patterns[i].Index,
 			"patterns are out of order at %d", i)
 	}
-	require.Len(t, first.Songs, 1)
-	measures := first.Songs[0].Measures
+	require.Len(t, first.Pages[0].Songs, 1)
+	measures := first.Pages[0].Songs[0].Measures
 	require.NotEqual(t, emptyMeasure, measures[len(measures)-1], "the trailing empties should be trimmed")
 
 	// Two saves of the same session have to produce the same payload. The timestamp is the
 	// one field that moves, and its length varies with the precision of the clock.
-	again := stateFrom(bank, songs, nil)
+	again := snapshotOf(bank.controller)
 	first.SavedAt = time.Time{}
 	again.SavedAt = time.Time{}
 	require.Equal(t, mustStateJSON(t, first), mustStateJSON(t, again), "two saves of one session differ")
@@ -329,7 +345,7 @@ func TestStateLoadKeepsTheSelectedSong(t *testing.T) {
 	// Song 1 gets a measure so the file carries it, and song 7 stays empty so it does not.
 	songs.CurrentSong().SetPattern(bank.Patterns[1], 0)
 	path := stateFilePath(t)
-	saveTo(t, path, bank, songs, nil)
+	saveTo(t, path, bank.controller, nil)
 	require.NoError(t, songs.Jump(6))
 	require.Equal(t, 7, songs.selSongIdx)
 
@@ -351,7 +367,7 @@ func TestStateLoadEmptiesTheSelectedSong(t *testing.T) {
 	bank, songs := session.patbank, session.songbank
 	songs.CurrentSong().SetPattern(bank.Patterns[1], 0)
 	path := stateFilePath(t)
-	saveTo(t, path, bank, songs, nil)
+	saveTo(t, path, bank.controller, nil)
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[2], 72, 100)
 
 	withSession(session, path, nil)
@@ -378,9 +394,9 @@ func TestStateSavesTheArrangementSetPatternWouldLeave(t *testing.T) {
 	song.SetPattern(nil, 8) // a trailing empty is not a measure the file should carry
 	tail := len(song.measurePatterns())
 
-	saved := stateFrom(bank, songs, nil)
-	require.Len(t, saved.Songs, 1)
-	measures := saved.Songs[0].Measures
+	saved := snapshotOf(bank.controller)
+	require.Len(t, saved.Pages, 1)
+	measures := saved.Pages[0].Songs[0].Measures
 	require.Equalf(t, tail, len(measures), "wrote the wrong number of measures")
 	for measure, want := range map[int]int{0: 1, 1: emptyMeasure, 4: 1, 7: 2} {
 		assert.Equalf(t, want, measures[measure], "measure %d", measure)
@@ -531,8 +547,8 @@ func TestLeavingSavesAfterAPanic(t *testing.T) {
 
 	saved, err := readStateFile(path)
 	require.NoErrorf(t, err, "the panic took the session with it")
-	require.Lenf(t, saved.Patterns, 1, "the edit the handler was making should be the one saved")
-	require.Len(t, saved.Patterns[0].Events, 1)
+	require.Lenf(t, saved.Pages, 1, "the edit the handler was making should be the one saved")
+	require.Len(t, saved.Pages[0].Patterns[0].Events, 1)
 }
 
 // A write publishes the whole file with a rename, so what is on disk is always one whole
@@ -540,7 +556,7 @@ func TestLeavingSavesAfterAPanic(t *testing.T) {
 func TestStatePublishesOneWholeFile(t *testing.T) {
 	kit := stateKit()
 	session := stateTestBank(t, kit)
-	bank, songs := session.patbank, session.songbank
+	bank := session.patbank
 	dir := t.TempDir()
 	path := filepath.Join(dir, "set.json")
 
@@ -549,7 +565,7 @@ func TestStatePublishesOneWholeFile(t *testing.T) {
 		t.Helper()
 		_, err := bank.ToggleEvent(0, 0, 100)
 		require.NoError(t, err)
-		saveTo(t, path, bank, songs, nil)
+		saveTo(t, path, bank.controller, nil)
 		info, err := os.Stat(path)
 		require.NoError(t, err)
 		return info.Size()
@@ -563,15 +579,17 @@ func TestStatePublishesOneWholeFile(t *testing.T) {
 
 	state, err := readStateFile(path)
 	require.NoErrorf(t, err, "the replaced file is not readable")
-	for _, pattern := range state.Patterns {
-		require.Emptyf(t, pattern.Events, "pattern %d still holds events after the notes were removed", pattern.Index)
+	for _, page := range state.Pages {
+		for _, pattern := range page.Patterns {
+			require.Emptyf(t, pattern.Events, "pattern %d still holds events after the notes were removed", pattern.Index)
+		}
 	}
 
 	// A save that cannot be written leaves the previous set exactly where it was, and says
 	// so rather than reporting a file it never wrote.
 	before, err := os.ReadFile(path)
 	require.NoError(t, err)
-	_, err = saveState(filepath.Join(dir, "no-such-dir", "set.json"), bank, songs, nil)
+	_, err = saveState(filepath.Join(dir, "no-such-dir", "set.json"), bank.controller, nil)
 	require.Error(t, err, "a save into a missing directory was accepted")
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -590,14 +608,14 @@ func TestStateSaveWhilePlayingMatchesSaveAtRest(t *testing.T) {
 	session := stateTestBank(t, kit)
 	bank, songs := session.patbank, session.songbank
 	fillStateSession(t, bank, songs, kit)
-	atRest := stateFrom(bank, songs, nil)
+	atRest := snapshotOf(bank.controller)
 
 	writer := &captureMidiWriter{}
 	controller := bank.controller
 	controller.startPlayback(writer, bank.newPlayback())
 	// Let the worker get into the pattern and start moving the playhead.
 	time.Sleep(20 * time.Millisecond)
-	playing := stateFrom(bank, songs, nil)
+	playing := snapshotOf(bank.controller)
 	require.NoError(t, bank.controller.stopPlayback())
 	require.NotEmpty(t, writer.events, "the playback worker wrote nothing, so this test proves nothing")
 	assertSameSession(t, atRest, playing)
@@ -663,25 +681,31 @@ func TestStateHandlesUnusableFiles(t *testing.T) {
 		{
 			name: "a tie with no successor is repaired",
 			kit:  chromatic,
-			file: stateFile{App: stateApp, Version: stateVersion, VoiceCount: 2, Patterns: []statePattern{{
+			file: stateFile{App: stateApp, Version: stateVersion, VoiceCount: 2, Pages: []statePage{{
 				Index: 1,
-				Events: []stateEvent{
-					{Voice: 0, Step: 0, Velocity: 100, Tie: true},
-					{Voice: 0, Step: 2, Velocity: 100, Tie: true},
-				},
+				Patterns: []statePattern{{
+					Index: 1,
+					Events: []stateEvent{
+						{Voice: 0, Step: 0, Velocity: 100, Tie: true},
+						{Voice: 0, Step: 2, Velocity: 100, Tie: true},
+					},
+				}},
 			}}},
 			wantEvents: "step0:tie step2",
 		},
 		{
 			name: "an event past the restored length is dropped",
 			kit:  chromatic,
-			file: stateFile{App: stateApp, Version: stateVersion, VoiceCount: 1, Patterns: []statePattern{{
-				Index:       1,
-				LengthSteps: 4,
-				Events: []stateEvent{
-					{Voice: 0, Step: 0, Velocity: 100, Tie: true},
-					{Voice: 0, Step: 9, Velocity: 100},
-				},
+			file: stateFile{App: stateApp, Version: stateVersion, VoiceCount: 1, Pages: []statePage{{
+				Index: 1,
+				Patterns: []statePattern{{
+					Index:       1,
+					LengthSteps: 4,
+					Events: []stateEvent{
+						{Voice: 0, Step: 0, Velocity: 100, Tie: true},
+						{Voice: 0, Step: 9, Velocity: 100},
+					},
+				}},
 			}}},
 			wantEvents: "step0",
 		},
@@ -711,21 +735,24 @@ func TestStateHandlesUnusableFiles(t *testing.T) {
 func TestStateClampsOutOfRangeValues(t *testing.T) {
 	kit := trackWindowKit(2, 1)
 	bank, report, err := loadCrafted(t, stateFile{
-		App:         stateApp,
-		Version:     stateVersion,
-		VoiceCount:  2,
-		BPM:         900,
-		TrackVoices: []int{1, 9, -4},
-		Patterns: []statePattern{{
-			Index:       2,
-			LengthSteps: 99,
-			Events: []stateEvent{
-				{Voice: 0, Step: 3, Velocity: 200},
-				{Voice: 0, Step: 99},
-				{Voice: 44, Step: 4},
-			},
+		App:        stateApp,
+		Version:    stateVersion,
+		VoiceCount: 2,
+		BPM:        900,
+		Pages: []statePage{{
+			Index:       1,
+			TrackVoices: []int{1, 9, -4},
+			Patterns: []statePattern{{
+				Index:       2,
+				LengthSteps: 99,
+				Events: []stateEvent{
+					{Voice: 0, Step: 3, Velocity: 200},
+					{Voice: 0, Step: 99},
+					{Voice: 44, Step: 4},
+				},
+			}},
+			Songs: []stateSong{{Index: 1, Measures: []int{2, 7}}},
 		}},
-		Songs: []stateSong{{Index: 1, Measures: []int{2, 7}}},
 	}, kit)
 	require.NoError(t, err)
 	pattern := bank.Patterns[2]
@@ -766,12 +793,17 @@ func TestStateRefusesIndexesTheBankHasNoRoomFor(t *testing.T) {
 		Version:    stateVersion,
 		VoiceCount: 2,
 		BPM:        defaultBPM,
-		Patterns:   []statePattern{{Index: 0}, {Index: maxPatternIndex + 1}, {Index: 4}},
-		Songs: []stateSong{
-			{Index: 0},
-			{Index: maxPatternIndex + 1},
-			{Index: 2, Measures: []int{4}},
-		},
+		Pages: []statePage{{
+			Index: 1,
+			Patterns: []statePattern{
+				{Index: 0}, {Index: maxPatternIndex + 1}, {Index: 4},
+			},
+			Songs: []stateSong{
+				{Index: 0},
+				{Index: maxPatternIndex + 1},
+				{Index: 2, Measures: []int{4}},
+			},
+		}},
 	}, trackWindowKit(2, 0))
 	require.NoError(t, err)
 	require.Equal(t, 4, report.Dropped, "the two patterns and two songs the bank has no room for")
@@ -899,7 +931,7 @@ func TestStateLoadRepaintsTheCurrentView(t *testing.T) {
 	song.SetPattern(pattern, 0)
 	song.SetPattern(pattern, 5)
 	path := stateFilePath(t)
-	saveTo(t, path, bank, songs, nil)
+	saveTo(t, path, bank.controller, nil)
 	controller := withSession(session, path, nil)
 	recorder := useScreenRecorder(t, &bank.screen)
 	// Both banks draw through one recorder on purpose: which view a load repaints is the
@@ -945,8 +977,8 @@ func TestLeavingSavesBehindTheQueuedEditsOnce(t *testing.T) {
 	require.NoErrorf(t, err, "leaving did not leave a readable file")
 	state, err := readStateFile(path)
 	require.NoError(t, err)
-	require.Len(t, state.Patterns, 1, "the queued edit should land before the save")
-	require.Len(t, state.Patterns[0].Events, 1)
+	require.Len(t, state.Pages, 1, "the queued edit should land before the save")
+	require.Len(t, state.Pages[0].Patterns[0].Events, 1)
 
 	controller.saveSessionOnExit() // reaching the exit by another route must not write again
 	again, err := os.ReadFile(path)
@@ -961,16 +993,18 @@ func TestLeavingSavesBehindTheQueuedEditsOnce(t *testing.T) {
 func TestStateOmitsUntouchedPatternsButKeepsShortenedOnes(t *testing.T) {
 	kit := stateKit()
 	session := stateTestBank(t, kit)
-	bank, songs := session.patbank, session.songbank
+	bank := session.patbank
 	for _, index := range []int{2, 5, 9, 6} {
 		require.NoError(t, bank.Jump(index))
 	}
 	shortened := bank.selPatIdx
 	bank.CurrentPattern().SetLengthSteps(4)
-	state := stateFrom(bank, songs, nil)
-	require.Len(t, state.Patterns, 1, "only the shortened pattern should be written")
-	require.Equalf(t, shortened, state.Patterns[0].Index, "the wrong pattern was written")
-	require.Equal(t, 4, state.Patterns[0].LengthSteps)
+	state := snapshotOf(bank.controller)
+	require.Len(t, state.Pages, 1)
+	page := state.Pages[0]
+	require.Len(t, page.Patterns, 1, "only the shortened pattern should be written")
+	require.Equalf(t, shortened, page.Patterns[0].Index, "the wrong pattern was written")
+	require.Equal(t, 4, page.Patterns[0].LengthSteps)
 
 	path := stateFilePath(t)
 	_, err := writeStateFile(path, state)

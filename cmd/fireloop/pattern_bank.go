@@ -194,31 +194,69 @@ func (p *PatternBank) maxTrackOffsetLocked() int {
 	return len(p.trackVoices) - padRows
 }
 
-// snapshotSession copies the track window and hands back the pattern map under the lock
-// the playback worker reads the window through, so a save taken while a pattern plays
-// cannot race the redraw, and cannot see the bank half-way through a load.
-//
-// The map itself comes back by reference rather than copied. The patterns in it carry their
-// own locks and a save reads each one through them, so what needs protecting is the map,
-// and copying it would be a shallow copy that costs the walk twice.
-func (p *PatternBank) snapshotSession() ([]int, map[int]*Pattern) {
-	p.trackMu.RLock()
-	defer p.trackMu.RUnlock()
-	return append([]int(nil), p.trackVoices...), p.Patterns
+// pagePatternState is the pattern bank's share of a page: the
+// patterns the page holds, where its selection and track window
+// sit, and how its grid is set up. The pattern map moves by
+// reference, which is safe because the bank only ever mutates
+// what it currently points at: after a load, the bank points at
+// the new page's map, so the page that was just left is frozen
+// by the very reassignment that loaded the new one.
+type pagePatternState struct {
+	Patterns          map[int]*Pattern
+	SelPatIdx         int
+	SelTrackRow       int
+	TrackOffset       int
+	Mode              editMode
+	StepCursor        int
+	ChromaticVelocity int
+	TrackVoices       []int
+	PaletteOctave     int
 }
 
-// restoreState installs a loaded session. The pattern map is replaced whole rather than
-// merged, so a pattern that is gone from the file is gone from the session. The selection
-// is left where it was: where the user was looking is the display's business, not part of
-// a set, so a load only needs to make sure that pattern exists.
-func (p *PatternBank) restoreState(state stateFile, patterns map[int]*Pattern) {
+// savePageState snapshots the bank into a page. The track window
+// is read through the lock the playback worker reads it under,
+// the way a save takes it, and the voices are copied because a
+// memento must not alias the slice a later scroll rewrites.
+func (p *PatternBank) savePageState() pagePatternState {
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	return pagePatternState{
+		Patterns:          p.Patterns,
+		SelPatIdx:         p.selPatIdx,
+		SelTrackRow:       p.selTrackRow,
+		TrackOffset:       p.trackOffset,
+		Mode:              p.mode,
+		StepCursor:        p.stepCursor,
+		ChromaticVelocity: p.chromaticVelocity,
+		TrackVoices:       append([]int(nil), p.trackVoices...),
+		PaletteOctave:     p.paletteOctave,
+	}
+}
+
+// loadPageState restores a page into the bank. The memento is
+// assigned verbatim, UI fields and all, because a jump must put
+// back exactly the state the page was left with; the defaults a
+// loaded session lands on are a property of how a memento is
+// built from a file, not of this load. The track window is
+// clamped against the kit through restoreTracks, the same way a
+// loaded session's window is, so a scrolled page cannot park the
+// pads on rows its own track list cannot show.
+func (p *PatternBank) loadPageState(state pagePatternState) {
+	if state.Patterns == nil {
+		state.Patterns = make(map[int]*Pattern)
+	}
 	p.restoreTracks(state.TrackVoices)
 	p.trackMu.Lock()
-	if _, ok := patterns[p.selPatIdx]; !ok {
-		patterns[p.selPatIdx] = &Pattern{}
-	}
-	p.Patterns = patterns
+	p.Patterns = state.Patterns
+	p.selPatIdx = state.SelPatIdx
+	p.selTrackRow = clampIndex(state.SelTrackRow, 0, padRows)
+	p.trackOffset = clampIndex(state.TrackOffset, 0, p.maxTrackOffsetLocked())
+	p.mode = state.Mode
+	p.stepCursor = state.StepCursor
+	p.chromaticVelocity = state.ChromaticVelocity
+	p.paletteOctave = state.PaletteOctave
 	p.trackMu.Unlock()
+	p.clampStepCursor()
 }
 
 // restoreTracks clamps the loaded voices into what the kit can supply. A track holding a

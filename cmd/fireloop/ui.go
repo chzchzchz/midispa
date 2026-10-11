@@ -271,7 +271,7 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 	switch int(ev.Data[1]) {
 	case NotePlay:
 		if !c.playing() {
-			c.startPlayback(aseq, c.songbank.newPlayback())
+			return c.startSongPlayback(aseq)
 		}
 	case NoteStop:
 		return c.stopPlayback()
@@ -361,10 +361,12 @@ func (c *Controller) handleControlChange(aseq sequencerWriter, ev alsa.SeqEvent)
 	if channel != fireControlChannel {
 		return c.handleSequencerControl(controller, value, channel)
 	}
-	// The Fire's controls mean nothing on the arrangement screen, which is how they behave
-	// today. Routing them through a shared handler must not start joging a track selection
-	// that song mode has no concept of.
-	if c.mode == songView {
+	// The Fire's controls mean nothing outside the pattern screen, which is
+	// how they behave today: the arrangement has no track to jog and the page
+	// grid is a mode of the controller rather than a view of a page. Routing
+	// them through a shared handler must not start joging a track selection
+	// those screens have no concept of.
+	if c.mode != patternView {
 		return nil
 	}
 	return c.handleDeviceControl(aseq, controller, value)
@@ -465,12 +467,20 @@ func (c *Controller) handlePatternMute(n int) error {
 	return c.patbank.SelectTrackRow(n)
 }
 
-// handleStateButton binds the two unclaimed buttons to the state file. Both gestures take
-// Shift: Browser and Accent mean nothing on their own, and the modifier keeps a plain
-// press from writing over a set or replacing one mid-performance. Alt is not a candidate
-// because Shift plus Alt is the blackout.
+// handleStateButton binds the two unclaimed buttons to the state file and,
+// on its own, Browser to the page grid. Both session gestures take Shift,
+// which keeps a plain press from writing over a set or replacing one
+// mid-performance; a plain Browser press moves the controls onto the page
+// grid, and off it again from page mode. Alt is not a candidate because
+// Shift plus Alt is the blackout.
 func (c *Controller) handleStateButton(note int) error {
 	if !c.shift {
+		if note == NoteBrowser {
+			if c.mode == pageView {
+				return c.leavePageMode()
+			}
+			return c.enterPageMode()
+		}
 		return nil
 	}
 	switch note {
@@ -522,15 +532,7 @@ func (c *Controller) loadSession() error {
 	// The repaint belongs here rather than in loadState, which is deliberately kept from
 	// knowing the view: which one is showing is the controller's business, and it is what
 	// says which bank has to be repainted and which mode light put back.
-	if err := c.restoreIndicators(); err != nil {
-		return err
-	}
-	if c.mode == songView {
-		err = c.songbank.redraw()
-	} else {
-		err = c.patbank.redraw()
-	}
-	if err != nil {
+	if err := c.redrawMode(); err != nil {
 		return err
 	}
 	return c.reportState(report.loadText())

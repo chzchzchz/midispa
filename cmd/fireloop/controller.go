@@ -16,6 +16,9 @@ type viewMode int
 const (
 	patternView viewMode = iota
 	songView
+	// pageView is the page grid: a mode of the controller rather
+	// than a view of a page, because no page is ever left on it.
+	pageView
 )
 
 // Controller owns everything a Fire event can change: the banks, the clipboard, the view
@@ -41,6 +44,36 @@ type Controller struct {
 	// installed after its worker ends, so the question is whether the session is running
 	// and not whether this field is nil.
 	playback *PlaybackSession
+
+	// extra holds the sessions of the other enabled pages while a
+	// song-mode set plays more than one page: the primary in
+	// playback draws the visible arrangement, and these play the
+	// same song index from their own pages with nothing to draw.
+	// They are stopped by the same stopPlayback that ends the
+	// primary, so a set has one place to ask about and one place
+	// to end.
+	extra []*PlaybackSession
+
+	// pages is the page table, one entry per pad, and pageIdx is
+	// the page the controller is sitting on. The current page's
+	// live state is authoritative: its memento is written by the
+	// save that precedes every jump and every save to disk, so
+	// the table and the banks hold the same objects from the
+	// first jump on.
+	pages   map[int]*Page
+	pageIdx int
+
+	// prevMode is the view page mode was entered from, and the
+	// view a jump from page mode records for the page being
+	// left, because page mode is a mode of the controller
+	// rather than a view of a page.
+	prevMode viewMode
+
+	// pagePad and pagePadTime track the double tap that jumps
+	// to a page: the pad last pressed in page mode, and when.
+	// pagePad is -1 when no press is being watched.
+	pagePad     int
+	pagePadTime time.Time
 
 	// sessionPath is the file the set is saved to and loaded from, and sessionKit is the
 	// kit it is measured against. Both stay empty until run wires the flag, so the panel
@@ -69,9 +102,17 @@ type Controller struct {
 // configuration can be missed without anything noticing.
 func newController(f *Fire, vb *VoiceBank, sessionPath string) *Controller {
 	bank := NewPatternBank(f, vb)
-	controller := &Controller{patbank: bank, mode: patternView, sessionPath: sessionPath}
+	controller := &Controller{
+		patbank:     bank,
+		mode:        patternView,
+		pages:       map[int]*Page{1: newPage(vb)},
+		pageIdx:     1,
+		pagePad:     -1,
+		sessionPath: sessionPath,
+	}
 	controller.songbank = NewSongBank(f, bank)
 	bank.controller = controller
+	controller.updatePageIndicator()
 	return controller
 }
 
@@ -89,11 +130,23 @@ func (c *Controller) startPlayback(aseq sequencerWriter, playback *Playback) {
 	session.Start(aseq)
 }
 
-// playing reports whether a set is running. Every guard that decides to leave something
-// alone because a set is playing asks this, so those guards cannot disagree about what
-// playing means: a session whose worker has ended does not pass for a running one.
+// playing reports whether a set is running, on the primary
+// or on any extra session. A worker only ends when it is
+// stopped or its write fails, and a failed write can end one
+// session's worker while another's keeps running, so the
+// guards have to ask about all of them: starting a new set
+// replaces the extras, which would orphan a still-running one
+// with nothing left that can stop it.
 func (c *Controller) playing() bool {
-	return c.playback != nil && c.playback.Running()
+	if c.playback != nil && c.playback.Running() {
+		return true
+	}
+	for _, session := range c.extra {
+		if session.Running() {
+			return true
+		}
+	}
+	return false
 }
 
 // stopPlayback ends the running set, if there is one, and puts the pattern view back the
@@ -107,6 +160,12 @@ func (c *Controller) stopPlayback() error {
 			firstErr = err
 		}
 	}
+	for _, session := range c.extra {
+		if err := session.Stop(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	c.extra = nil
 	if c.patbank == nil {
 		return firstErr
 	}
@@ -120,8 +179,9 @@ func (c *Controller) stopPlayback() error {
 }
 
 // seekSongBeat schedules a seek on the running set and reports the beat it seeks away
-// from, which is the arrangement readout's before-and-after. It is the one thing a bank
-// needs the running set for that is not stopping it, and it is why a bank can reach its
+// from, which is the arrangement readout's before-and-after. Every installed session is
+// sought, so all the pages a set plays stay in sync. It is the one thing a bank needs
+// the running set for that is not stopping it, and it is why a bank can reach its
 // owner for a seek without holding a handle of its own.
 //
 // Nothing is scheduled when nothing is playing, which the caller checks first; -1 is what
@@ -130,17 +190,25 @@ func (c *Controller) seekSongBeat(beat float32) float32 {
 	if c.playback == nil {
 		return -1
 	}
-	return c.playback.SeekSongBeat(beat)
+	oldSongBeat := c.playback.SeekSongBeat(beat)
+	for _, session := range c.extra {
+		session.SeekSongBeat(beat)
+	}
+	return oldSongBeat
 }
 
 // Handle applies one Fire event to whichever view is showing. This is the whole dispatch:
 // the mode decides which handler runs, so a test that drives Handle exercises the same
 // choice production makes rather than naming a handler directly.
 func (c *Controller) Handle(aseq sequencerWriter, ev alsa.SeqEvent) error {
-	if c.mode == songView {
+	switch c.mode {
+	case songView:
 		return c.processSongEvent(aseq, ev)
+	case pageView:
+		return c.processPageEvent(aseq, ev)
+	default:
+		return c.processPatternEvent(aseq, ev)
 	}
-	return c.processPatternEvent(aseq, ev)
 }
 
 // setMode moves between the pattern view and the arrangement. Playback stops because the
@@ -159,4 +227,23 @@ func (c *Controller) setMode(mode viewMode, songLight int) error {
 	}
 	c.mode = mode
 	return c.patbank.pads.SetLed(NotePatternSong, songLight)
+}
+
+// redrawMode puts the mode lights back and repaints the view the
+// controller is on. Every way out of page mode and every load ends
+// here: the mode is the one record of which view's redraw is the
+// right one, so the caller sets it and asks, rather than each
+// caller carrying its own copy of the choice.
+func (c *Controller) redrawMode() error {
+	if err := c.restoreIndicators(); err != nil {
+		return err
+	}
+	switch c.mode {
+	case songView:
+		return c.songbank.redraw()
+	case pageView:
+		return c.drawPageMode()
+	default:
+		return c.patbank.redraw()
+	}
 }

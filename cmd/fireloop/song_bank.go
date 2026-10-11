@@ -12,7 +12,15 @@ type SongBank struct {
 	// Viewport offsets stay independent from the selected pattern and measure.
 	patternStart int
 	measureStart int
-	pb           *PatternBank
+	// pageIdx and pageOn are the page the arrangement is
+	// showing, as plain display state: the controller, which
+	// owns the page table, sets them whenever they change,
+	// because the bank redraws itself from its own gestures
+	// and cannot be handed them then. The bank formats the
+	// two values into row 0 and knows nothing beyond that.
+	pageIdx int
+	pageOn  bool
+	pb      *PatternBank
 	// pads is this bank's own seam, so a test can redirect the arrangement's pads without
 	// also redirecting the pattern's.
 	pads unitScreen
@@ -45,19 +53,62 @@ func (sb *SongBank) CurrentSong() *Song {
 	return sb.Songs[sb.selSongIdx]
 }
 
-// installSongs moves in songs that were already built against the restored patterns, so
-// the measures and the pattern bank keep pointing at one object each. The song slots and
-// the arrangement window are left where they were: where the user was scrolling is the
-// display's business, not part of a set.
-//
-// The selected song is the one slot a load has to supply, because a song holding no
-// measures is not written to a file. Restoring the bank onto a song the file does not
-// carry would leave CurrentSong nil, and the arrangement view reads it on every pad press.
-func (s *SongBank) installSongs(songs map[int]*Song) {
-	if _, ok := songs[s.selSongIdx]; !ok {
-		songs[s.selSongIdx] = &Song{}
+// pageSongState is the song bank's share of a page: the
+// songs the page holds, which one it has selected and where
+// its two viewports sit. The song map moves by reference
+// under the same rule as the pattern map: the bank only ever
+// mutates what it currently points at.
+type pageSongState struct {
+	Songs        map[int]*Song
+	SelSongIdx   int
+	PatternStart int
+	MeasureStart int
+}
+
+// savePageState snapshots the bank into a page.
+func (sb *SongBank) savePageState() pageSongState {
+	return pageSongState{
+		Songs:        sb.Songs,
+		SelSongIdx:   sb.selSongIdx,
+		PatternStart: sb.patternStart,
+		MeasureStart: sb.measureStart,
 	}
-	s.Songs = songs
+}
+
+// loadPageState restores a page into the bank, verbatim, UI
+// fields and all: a jump must put back exactly the state the
+// page was left with. The selected slot is made to exist, the
+// guarantee a load performs today, because an arrangement view
+// reads the selected song on every pad press and a slot the
+// page does not have would leave it reading nothing.
+func (sb *SongBank) loadPageState(state pageSongState) {
+	if state.Songs == nil {
+		state.Songs = make(map[int]*Song)
+	}
+	if _, ok := state.Songs[state.SelSongIdx]; !ok {
+		state.Songs[state.SelSongIdx] = &Song{}
+	}
+	sb.Songs = state.Songs
+	sb.selSongIdx = state.SelSongIdx
+	sb.patternStart = state.PatternStart
+	sb.measureStart = state.MeasureStart
+}
+
+// setPageIndicator records the page the arrangement is showing
+// and whether that page is enabled, for row 0. The controller is
+// the page table's owner and so the only caller: the bank cannot
+// be handed the values when its own gestures redraw it.
+func (sb *SongBank) setPageIndicator(idx int, on bool) {
+	sb.pageIdx = idx
+	sb.pageOn = on
+}
+
+// pageFlagText is how row 0 reads a page's enabled flag.
+func pageFlagText(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 // askStop stops whatever is playing on behalf of an edit that rewrites a measure. The
@@ -214,7 +265,8 @@ func (s *SongBank) SelectPattern(n int) error {
 }
 
 func (s *SongBank) PrintSong() error {
-	return s.printRow(0, fmt.Sprintf("Song %03d", s.selSongIdx))
+	return s.printRow(0, fmt.Sprintf("Song %03d Pg %03d %s",
+		s.selSongIdx, s.pageIdx, pageFlagText(s.pageOn)))
 }
 
 func (s *SongBank) PrintPattern() error {

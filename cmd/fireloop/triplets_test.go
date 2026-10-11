@@ -133,7 +133,7 @@ func TestTripletGroupSurvivesASessionSaveAndLoad(t *testing.T) {
 			kit := stateKit()
 			voice := kit.voices[2]
 			session := stateTestBank(t, kit)
-			bank, songs := session.patbank, session.songbank
+			bank := session.patbank
 			pattern := bank.CurrentPattern()
 			pattern.SetChromaticNote(0, voice, 60, 100)
 			pattern.SetChromaticNote(1, voice, 62, 100)
@@ -148,7 +148,7 @@ func TestTripletGroupSurvivesASessionSaveAndLoad(t *testing.T) {
 
 			index := bank.selPatIdx
 			path := stateFilePath(t)
-			saveTo(t, path, bank, songs, nil)
+			saveTo(t, path, bank.controller, nil)
 			saved, err := readStateFile(path)
 			require.NoError(t, err)
 			raw, err := os.ReadFile(path)
@@ -157,9 +157,11 @@ func TestTripletGroupSurvivesASessionSaveAndLoad(t *testing.T) {
 				"the file does not carry the group")
 
 			var savedEvents []stateEvent
-			for _, statePattern := range saved.Patterns {
-				if statePattern.Index == index {
-					savedEvents = statePattern.Events
+			for _, page := range saved.Pages {
+				for _, statePattern := range page.Patterns {
+					if statePattern.Index == index {
+						savedEvents = statePattern.Events
+					}
 				}
 			}
 			require.Len(t, savedEvents, 3, "the saved pattern does not hold the three notes")

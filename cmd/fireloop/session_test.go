@@ -48,7 +48,7 @@ func TestAMeasureSeekWithNothingPlayingSchedulesNothing(t *testing.T) {
 	songs := NewSongBank(NewFire(func([]byte) error { return nil }), bank)
 	arrangement := &Song{}
 	arrangement.SetPattern(bank.CurrentPattern(), 0)
-	songs.installSongs(map[int]*Song{1: arrangement})
+	songs.Songs = map[int]*Song{1: arrangement}
 	require.Nil(t, bank.controller.playback)
 
 	require.NoError(t, songs.JumpMeasure(0, 0))

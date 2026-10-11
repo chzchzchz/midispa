@@ -625,14 +625,30 @@ func (pb *PatternBank) newPlayback() *Playback {
 	return &Playback{updatePads: update, nextPattern: next, vb: pb.vb}
 }
 
-// newPlayback is the song bank's counterpart. It measures against the song rather than
-// against a pattern, and it is where the running measure readout comes from.
+// newPlayback is the song bank's counterpart. It measures against the song it
+// is showing rather than against a pattern, and it is where the running measure
+// readout comes from.
 func (sb *SongBank) newPlayback() *Playback {
+	return sb.newPlaybackOf(sb.Songs, sb.selSongIdx, true)
+}
+
+// newPlaybackOf builds a playback over any page's songs, at any song index. The
+// drawing closures exist only for the page on screen: every other enabled page
+// plays the same song index from its own map with nothing to draw, because that
+// page is not on screen. A map with no song at the index yields a session with
+// no pattern source, which the playback loop plays as silence, because
+// Song.BeatToPattern does not take a nil receiver.
+func (sb *SongBank) newPlaybackOf(songs map[int]*Song, songIdx int, draw bool) *Playback {
 	p := &Playback{vb: sb.kit()}
 	// Move to next song pattern.
-	p.nextPattern = func(beat float32) *Pattern {
-		pat, _ := sb.CurrentSong().BeatToPattern(beat)
-		return pat
+	if song := songs[songIdx]; song != nil {
+		p.nextPattern = func(beat float32) *Pattern {
+			pat, _ := song.BeatToPattern(beat)
+			return pat
+		}
+	}
+	if !draw {
+		return p
 	}
 	// Light playing measure.
 	lastSongBeat := float32(-99999)

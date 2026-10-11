@@ -32,7 +32,7 @@ const (
 	stateApp = "fireloop"
 	// stateVersion changes whenever the layout changes in a way an older build cannot
 	// read. A version this build does not know is refused rather than half-read.
-	stateVersion = 1
+	stateVersion = 2
 	// stateIndent keeps the file readable and diffable, which matters because it is the
 	// one artefact of a session a user can inspect after a show.
 	stateIndent = "  "
@@ -64,10 +64,26 @@ type stateFile struct {
 	// build wrote; swingPctFrom reads that zero back as straight. The tenths are not
 	// dropped by the file, so 66.7 survives a save.
 	SwingPct float64 `json:"swingPct,omitempty"`
-	// TrackVoices is the voice sitting on each track. It belongs to the pattern bank
-	// rather than to any one pattern, and it is not recoverable from the patterns: a
-	// pattern records which voice sounds on a step, not which track row it sits on, and
-	// two rows are allowed to hold the same voice. Its length is the track count.
+	// Pages is the page table, one entry per page in use, in index
+	// order. Everything a page owns travels inside its entry: the voice
+	// on each of its tracks, the patterns it holds and the songs that
+	// arrange them. A page that is no longer in use leaves no entry, so
+	// a page deleted before the save does not come back from it.
+	Pages []statePage `json:"pages"`
+}
+
+// statePage is one page of the session. What the page was looking at is
+// not here, the way it is not in a live page's memento: the selection and
+// the windows are the display's business, and a loaded page comes back on
+// the view a run starts on.
+type statePage struct {
+	Index   int  `json:"index"`
+	Enabled bool `json:"enabled"`
+	// TrackVoices is the voice sitting on each of the page's tracks. It
+	// belongs to the page rather than to any one pattern, and it is not
+	// recoverable from the patterns: a pattern records which voice sounds
+	// on a step, not which track row it sits on, and two rows are allowed
+	// to hold the same voice. Its length is the track count.
 	TrackVoices []int          `json:"trackVoices"`
 	Patterns    []statePattern `json:"patterns"`
 	Songs       []stateSong    `json:"songs"`
@@ -156,11 +172,14 @@ var (
 	errStateVersion = errors.New("unreadable session version")
 )
 
-// stateFrom takes the snapshot the banks own and turns it into the file layout. It reads
-// only, so it is safe to call while a pattern is playing: the playback worker is handed the
-// pattern to sound rather than reaching into the bank, so the only writer of the pattern map
-// is the goroutine that calls this, which is also the goroutine a load installs from.
-func stateFrom(pb *PatternBank, sb *SongBank, kit []string) stateFile {
+// stateFrom takes the snapshot the page table holds and turns it into the file
+// layout. The caller has to have saved the current page's memento first, because
+// the banks hold that page live: the table is the whole session, and the banks are
+// one page of it. It reads only, so it is safe to call while a pattern is playing:
+// the playback worker is handed the pattern to sound rather than reaching into the
+// bank, so the only writer of a pattern map is the goroutine that saved before this
+// one, which is also the goroutine a load installs from.
+func stateFrom(c *Controller, kit []string) stateFile {
 	state := stateFile{
 		App:      stateApp,
 		Version:  stateVersion,
@@ -169,31 +188,41 @@ func stateFrom(pb *PatternBank, sb *SongBank, kit []string) stateFile {
 		BPM:      currentBPM(),
 		SwingPct: swingPctFor(currentSwingPct()),
 	}
-	if pb == nil {
+	if c == nil || c.patbank == nil {
 		return state
 	}
-	state.VoiceCount = len(pb.vb.voices)
-	trackVoices, patterns := pb.snapshotSession()
-	state.TrackVoices = trackVoices
-	voices := pb.vb.voiceIndex()
-	// The banks are maps and Go randomises map iteration, so the keys are walked in index
-	// order: without that two saves of one session would differ byte for byte and the file
-	// could not be diffed.
-	for _, index := range slices.Sorted(maps.Keys(patterns)) {
-		saved := statePatternFrom(index, patterns[index], voices)
-		// An untouched pattern is not worth a file entry: every pattern the user ever
-		// landed on has one, and hundreds of empty placeholders make the file harder to
-		// read without making it more complete. A shortened empty pattern still goes in,
-		// because its length is not the default.
-		if len(saved.Events) == 0 && saved.LengthSteps == defaultPatternSteps {
-			continue
-		}
-		state.Patterns = append(state.Patterns, saved)
-	}
-	if sb != nil {
-		state.Songs = stateSongsFrom(sb, patternIndexMap(patterns))
+	state.VoiceCount = len(c.patbank.vb.voices)
+	voices := c.patbank.vb.voiceIndex()
+	// The page table is a map and Go randomises map iteration, so the pages are
+	// walked in index order: without that two saves of one session would differ
+	// byte for byte and the file could not be diffed.
+	for _, index := range slices.Sorted(maps.Keys(c.pages)) {
+		state.Pages = append(state.Pages, statePageFrom(index, c.pages[index], voices))
 	}
 	return state
+}
+
+// statePageFrom records one page. The patterns and the songs are read through
+// the same rules the whole bank was read through before pages existed: an
+// untouched pattern is not worth a file entry, because every pattern the user
+// ever landed on has one and hundreds of empty placeholders make the file harder
+// to read without making it more complete, and a shortened empty one still goes
+// in, because its length is not the default.
+func statePageFrom(index int, page *Page, voices map[*Voice]int) statePage {
+	saved := statePage{
+		Index:       index,
+		Enabled:     page.on,
+		TrackVoices: append([]int(nil), page.pattern.TrackVoices...),
+	}
+	for _, patternIndex := range slices.Sorted(maps.Keys(page.pattern.Patterns)) {
+		pattern := statePatternFrom(patternIndex, page.pattern.Patterns[patternIndex], voices)
+		if len(pattern.Events) == 0 && pattern.LengthSteps == defaultPatternSteps {
+			continue
+		}
+		saved.Patterns = append(saved.Patterns, pattern)
+	}
+	saved.Songs = stateSongsFrom(page.song.Songs, patternIndexMap(page.pattern.Patterns))
+	return saved
 }
 
 // validPatternIndex reports whether a pattern or song index names a slot the banks have.
@@ -244,23 +273,25 @@ func stateBeat(event Event) float64 {
 	return float64(event.Beat)
 }
 
-// stateSongsFrom records each measure as the pattern index it holds, from the pointer to
-// index map the bank builds for exactly this question.
+// stateSongsFrom records each measure as the pattern index it holds, from the
+// pointer to index map the page builds for exactly this question. The songs are
+// the page's own: a measure of one page can only hold a pattern of that page,
+// so the map the caller hands in is the one that matches.
 //
 // The arrangement is rebuilt through SetPattern rather than scanned for its own last
 // measure, so the trimming rule lives in one place. A second copy of that rule here would
 // drift the moment SetPattern changed, and the drift would only show up as a file that does
 // not match the set it was written from.
-func stateSongsFrom(sb *SongBank, indices map[*Pattern]int) []stateSong {
-	var songs []stateSong
-	for _, index := range slices.Sorted(maps.Keys(sb.Songs)) {
+func stateSongsFrom(songs map[int]*Song, indices map[*Pattern]int) []stateSong {
+	var savedSongs []stateSong
+	for _, index := range slices.Sorted(maps.Keys(songs)) {
 		rebuilt := &Song{}
-		for measure, pattern := range sb.Songs[index].measurePatterns() {
+		for measure, pattern := range songs[index].measurePatterns() {
 			if pattern == nil {
 				continue
 			}
 			if _, ok := indices[pattern]; !ok {
-				logger.Warn("state measure holds a pattern the bank does not have", "song", index, "measure", measure)
+				logger.Warn("state measure holds a pattern the page does not have", "song", index, "measure", measure)
 				continue
 			}
 			rebuilt.SetPattern(pattern, measure)
@@ -279,15 +310,17 @@ func stateSongsFrom(sb *SongBank, indices map[*Pattern]int) []stateSong {
 				saved.Measures[measure] = patternIndex
 			}
 		}
-		songs = append(songs, saved)
+		savedSongs = append(savedSongs, saved)
 	}
-	return songs
+	return savedSongs
 }
 
 // saveState writes the session to path. It reads only, so it is safe to call while a
-// pattern is playing, which is exactly when a user reaches for it.
-func saveState(path string, pb *PatternBank, sb *SongBank, kit []string) (stateReport, error) {
-	return publishState(path, stateFrom(pb, sb, kit))
+// pattern is playing, which is exactly when a user reaches for it. The caller has to
+// have saved the current page first, which every route through the controller does: the
+// banks hold that page live, and the file is written from the table.
+func saveState(path string, c *Controller, kit []string) (stateReport, error) {
+	return publishState(path, stateFrom(c, kit))
 }
 
 // publishState writes a snapshot that has already been taken. Taking the snapshot and
@@ -298,11 +331,15 @@ func publishState(path string, state stateFile) (stateReport, error) {
 	if err != nil {
 		return stateReport{}, err
 	}
-	return stateReport{
-		Bytes:    written,
-		Patterns: len(state.Patterns),
-		Songs:    len(state.Songs),
-	}, nil
+	report := stateReport{Bytes: written}
+	// The counts the report carries are the file's, summed over the pages: a
+	// set is no longer one bank's worth of patterns and songs, but every
+	// page's.
+	for _, page := range state.Pages {
+		report.Patterns += len(page.Patterns)
+		report.Songs += len(page.Songs)
+	}
+	return report, nil
 }
 
 // saveOffLoop takes the snapshot on the event loop and publishes it on its own goroutine.
@@ -314,7 +351,11 @@ func publishState(path string, state stateFile) (stateReport, error) {
 // on a unit nobody touched again. That is how the other transient readouts work: the tempo
 // entry writes its row and the next redraw replaces it. The save only adds a log line.
 func (c *Controller) saveOffLoop() {
-	state := stateFrom(c.patbank, c.songbank, c.sessionKit)
+	// The snapshot belongs to the event loop: the banks hold the current page
+	// live, so that page's memento is written here, where nothing else can be
+	// touching the banks.
+	c.saveCurrentPage()
+	state := stateFrom(c, c.sessionKit)
 	c.saves.Add(1)
 	go func() {
 		defer c.saves.Done()
@@ -419,35 +460,45 @@ func (c *Controller) loadState(path string) (stateReport, error) {
 		logger.Warn("state written against a different kit",
 			"path", path, "reason", reason, "fileKit", state.Kit, "fileVoices", state.VoiceCount)
 	}
-	patterns, droppedPatterns := resolvePatterns(state, voiceBank)
-	// Playback is stopped only once there is something to install. The worker reads the
-	// banks from its own goroutine, and stopping joins it, so from here on no reader is
-	// left holding a pattern the load is about to replace.
+	// Playback is stopped before anything live is touched. The worker reads the
+	// banks from its own goroutine, and stopping joins it, so from here on no
+	// reader is left holding a page the load is about to replace.
 	if err := c.stopPlayback(); err != nil {
 		return stateReport{}, err
 	}
-	report := stateReport{Patterns: len(patterns), Dropped: droppedPatterns}
-	if c.patbank != nil {
-		c.patbank.restoreState(state, patterns)
+	pages, dropped := resolvePages(state, voiceBank)
+	// A file with no usable page still leaves the controller on a page: a fresh
+	// one, the page a run starts on.
+	if len(pages) == 0 {
+		pages = map[int]*Page{1: newPage(voiceBank)}
 	}
-	songs, droppedMeasures := resolveSongs(state, patterns)
-	report.Songs = len(songs)
-	report.Dropped += droppedMeasures
-	if c.songbank != nil {
-		c.songbank.installSongs(songs)
+	report := stateReport{Dropped: dropped}
+	for _, page := range pages {
+		report.Patterns += len(page.pattern.Patterns)
+		report.Songs += len(page.song.Songs)
 	}
+	// The view is deliberately left where it is: where the user was looking is
+	// not part of a session, and a load answers the question it was asked, which
+	// is what the file holds, not which screen shows it.
+	c.pages = pages
+	c.pageIdx = c.firstPageIndex()
+	// The table the file describes may hold no page on the pad a
+	// double tap was watching, so nothing is watched any more.
+	c.pagePad = -1
+	c.loadPage(c.pages[c.pageIdx])
+	c.updatePageIndicator()
 	setBPM(clampIndex(state.BPM, stateTempoMin, stateTempoMax))
 	setSwingPct(swingPctFrom(state.SwingPct))
 	return report, nil
 }
 
 // resolvePatterns builds one pattern per index the file names. The same map goes to the
-// bank and to the songs, which is what keeps a measure and the pattern pad pointing at
+// page and to its songs, which is what keeps a measure and the pattern pad pointing at
 // one object the way they do while the session is running.
-func resolvePatterns(state stateFile, vb *VoiceBank) (map[int]*Pattern, int) {
-	patterns := make(map[int]*Pattern, len(state.Patterns))
+func resolvePatterns(patterns []statePattern, vb *VoiceBank) (map[int]*Pattern, int) {
+	resolved := make(map[int]*Pattern, len(patterns))
 	dropped := 0
-	for _, saved := range state.Patterns {
+	for _, saved := range patterns {
 		if !validPatternIndex(saved.Index) {
 			logger.Warn("state pattern index out of range", "index", saved.Index)
 			dropped++
@@ -455,9 +506,9 @@ func resolvePatterns(state stateFile, vb *VoiceBank) (map[int]*Pattern, int) {
 		}
 		pattern, lost := patternFromState(saved, vb)
 		dropped += lost
-		patterns[saved.Index] = pattern
+		resolved[saved.Index] = pattern
 	}
-	return patterns, dropped
+	return resolved, dropped
 }
 
 // patternFromState rebuilds one pattern. Every field is clamped rather than rejected,
@@ -512,15 +563,16 @@ func beatFromState(step int, beat float64) float32 {
 	return stepBeat(step)
 }
 
-// resolveSongs rebuilds each song against the resolved patterns and reports how many
-// measures named a pattern the file does not carry. SetPattern is used rather than a
-// direct slice so a song trims its empty tail exactly as it does while running. Making sure
-// the selected slot exists is installSongs' business, not this one's, so that the
-// guarantee lives in the place that owns the selection.
-func resolveSongs(state stateFile, patterns map[int]*Pattern) (map[int]*Song, int) {
-	songs := make(map[int]*Song, len(state.Songs))
+// resolveSongs rebuilds each song against the resolved patterns and reports how
+// many measures named a pattern the file does not carry. SetPattern is used
+// rather than a direct slice so a song trims its empty tail exactly as it does
+// while running. Making sure the selected slot exists is the page installer's
+// business, not this one's, so that the guarantee lives in the place that owns
+// the selection.
+func resolveSongs(songs []stateSong, patterns map[int]*Pattern) (map[int]*Song, int) {
+	resolved := make(map[int]*Song, len(songs))
 	dropped := 0
-	for _, saved := range state.Songs {
+	for _, saved := range songs {
 		if !validPatternIndex(saved.Index) {
 			logger.Warn("state song index out of range", "index", saved.Index)
 			dropped++
@@ -545,9 +597,66 @@ func resolveSongs(state stateFile, patterns map[int]*Pattern) (map[int]*Song, in
 			}
 			song.SetPattern(pattern, measure)
 		}
-		songs[saved.Index] = song
+		resolved[saved.Index] = song
 	}
-	return songs, dropped
+	return resolved, dropped
+}
+
+// resolvePages rebuilds the page table the file describes. An index
+// outside the grid, or one named twice, is refused and counted rather
+// than installed: a page the pads cannot show is a page nobody can
+// reach, and a second entry for a page would leave two of them
+// answering to one pad.
+//
+// A page comes back on the view a run starts on rather than on the
+// view it was saved from, the way a loaded session has always come
+// back on pattern 1: where the user was looking is not part of a
+// session. The selection and the track window are likewise left at
+// their starts, except for the track window's voices, which are the
+// set and are clamped against the kit by the load that installs them.
+// Pattern 1 and song 1 are made to exist, the guarantee the banks'
+// own constructors make, because an arrangement view reads the
+// selected song on every pad press and a pattern press reads the
+// selected pattern.
+func resolvePages(state stateFile, vb *VoiceBank) (map[int]*Page, int) {
+	pages := make(map[int]*Page, len(state.Pages))
+	dropped := 0
+	for _, saved := range state.Pages {
+		if saved.Index < 1 || saved.Index > maxPages {
+			logger.Warn("state page index out of range", "index", saved.Index)
+			dropped++
+			continue
+		}
+		if _, ok := pages[saved.Index]; ok {
+			logger.Warn("state page index is repeated", "index", saved.Index)
+			dropped++
+			continue
+		}
+		patterns, lost := resolvePatterns(saved.Patterns, vb)
+		dropped += lost
+		if _, ok := patterns[1]; !ok {
+			patterns[1] = &Pattern{}
+		}
+		songs, lostMeasures := resolveSongs(saved.Songs, patterns)
+		dropped += lostMeasures
+		if _, ok := songs[1]; !ok {
+			songs[1] = &Song{}
+		}
+		pages[saved.Index] = &Page{
+			pattern: pagePatternState{
+				Patterns:          patterns,
+				SelPatIdx:         1,
+				ChromaticVelocity: defaultStepVelocity,
+				TrackVoices:       saved.TrackVoices,
+			},
+			song: pageSongState{
+				Songs:      songs,
+				SelSongIdx: 1,
+			},
+			on: saved.Enabled,
+		}
+	}
+	return pages, dropped
 }
 
 // stateFailureText keeps a failure readable on the twenty-column readout row. The whole
@@ -596,7 +705,10 @@ func (c *Controller) saveSessionOnExit() {
 	// the state from before the last few edits.
 	c.saves.Wait()
 	c.exitSave.Do(func() {
-		report, err := saveState(c.sessionPath, c.patbank, c.songbank, c.sessionKit)
+		// The banks hold the current page live, so its memento is written here,
+		// on the goroutine that owns the banks, before the table is serialized.
+		c.saveCurrentPage()
+		report, err := saveState(c.sessionPath, c, c.sessionKit)
 		if err != nil {
 			logger.Error("state save on exit failed", "path", c.sessionPath, "error", err)
 			return
