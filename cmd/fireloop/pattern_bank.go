@@ -353,15 +353,21 @@ func (p *PatternBank) ScrollTracks(delta int) error {
 // CurrentPattern is the pattern the bank is showing. The map is guarded by trackMu for a
 // save, which reads it by reference; the read here does not take that lock, because the
 // playback worker reaches this on every drawn column. What makes that safe is that every
-// path which changes the map stops playback first, so the worker has been joined by the
-// time the map moves. A new path that writes the map has to do the same.
+// write goes through claimPattern under the window lock, and the only writes that land
+// while a set plays are song-mode selections, which belong to the other view where this
+// worker is not running. A new path that writes the map has to stop playback first or
+// claim that lock.
 func (p *PatternBank) CurrentPattern() *Pattern {
 	return p.Patterns[p.selPatIdx]
 }
 
 // PatternIdxMap maps each pattern back to the bank index it sits at.
 func (pb *PatternBank) PatternIdxMap() map[*Pattern]int {
-	return patternIndexMap(pb.Patterns)
+	ret := make(map[*Pattern]int)
+	pb.forEachPattern(func(index int, pattern *Pattern) {
+		ret[pattern] = index
+	})
+	return ret
 }
 
 // patternIndexMap does the mapping for a bank the caller has already snapshotted, so a save
@@ -372,6 +378,36 @@ func patternIndexMap(patterns map[int]*Pattern) map[*Pattern]int {
 		ret[p] = i
 	}
 	return ret
+}
+
+// claimPattern makes sure a pattern exists at an index, selects it, and returns it.
+// The slot and the selection move under the window lock, which is also what the song
+// worker reads the map under: a pattern picked while a song plays lands without
+// stopping the set, so the claim and those reads cannot meet unguarded. Every way the
+// map gains a slot goes through here, so this is the map's one write path.
+func (p *PatternBank) claimPattern(n int) *Pattern {
+	p.trackMu.Lock()
+	defer p.trackMu.Unlock()
+	pattern, ok := p.Patterns[n]
+	if !ok || pattern == nil {
+		pattern = &Pattern{}
+		p.Patterns[n] = pattern
+	}
+	p.selPatIdx = n
+	return pattern
+}
+
+// forEachPattern calls fn with each pattern and the index it sits at, under the
+// window lock. The song worker walks the map from its own goroutine, to colour the
+// measures and to name the pattern each one plays, while a pattern selected in song
+// mode claims a slot on the event loop without stopping the set, so a read that can
+// meet that claim goes through here.
+func (p *PatternBank) forEachPattern(fn func(index int, pattern *Pattern)) {
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
+	for index, pattern := range p.Patterns {
+		fn(index, pattern)
+	}
 }
 
 // askStop stops whatever is playing on behalf of an edit that rewrites what the worker
@@ -388,11 +424,7 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 	if err := p.askStop(); err != nil {
 		return err
 	}
-	oldPat, ok := p.Patterns[p.selPatIdx]
-	if !ok || oldPat == nil {
-		oldPat = &Pattern{}
-		p.Patterns[p.selPatIdx] = oldPat
-	}
+	oldPat := p.claimPattern(p.selPatIdx)
 	events, lengthSteps := pat.snapshot()
 	oldPat.install(events, lengthSteps)
 	if err := p.resetEditState(); err != nil {
@@ -412,10 +444,7 @@ func (p *PatternBank) Jump(n int) error {
 			return err
 		}
 	}
-	p.selPatIdx = newIdx
-	if _, ok := p.Patterns[p.selPatIdx]; !ok {
-		p.Patterns[p.selPatIdx] = &Pattern{}
-	}
+	p.claimPattern(newIdx)
 	if changed {
 		if err := p.resetEditState(); err != nil {
 			return err

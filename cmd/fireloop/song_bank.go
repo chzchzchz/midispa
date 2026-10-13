@@ -238,22 +238,18 @@ func (sb *SongBank) ToggleMeasureBrightness(lastMeasure, nextMeasure int) error 
 	return sb.pads.LightPadSlice(pads)
 }
 
+// SelectPattern moves the arrangement's pattern selection. Picking a pattern
+// is a view change rather than an edit: the song plays the measures it holds,
+// which point at their own patterns, so a set keeps playing while the pattern
+// for the next measure is chosen. The slot the selection lands on is claimed
+// under the window lock, which is what the running worker reads the map under.
 func (s *SongBank) SelectPattern(n int) error {
 	if n <= 0 || n > maxPatternIndex {
 		return nil
 	}
-	if err := s.askStop(); err != nil {
-		return err
-	}
 	s.pb.claimMode(false, noteEdit)
 	s.pb.clearPadState()
-	if s.pb.Patterns == nil {
-		s.pb.Patterns = make(map[int]*Pattern)
-	}
-	if _, ok := s.pb.Patterns[n]; !ok {
-		s.pb.Patterns[n] = &Pattern{}
-	}
-	s.pb.selPatIdx = n
+	s.pb.claimPattern(n)
 	s.ensurePatternVisible(n)
 	if err := s.DrawPadPatterns(); err != nil {
 		return err
@@ -334,12 +330,12 @@ func patternColor(index int) [3]int {
 
 func (s *SongBank) patternsToColors() map[*Pattern][3]int {
 	ret := make(map[*Pattern][3]int)
-	for index, pattern := range s.pb.Patterns {
+	s.pb.forEachPattern(func(index int, pattern *Pattern) {
 		if pattern == nil {
-			continue
+			return
 		}
 		ret[pattern] = patternColor(index)
-	}
+	})
 	return ret
 }
 

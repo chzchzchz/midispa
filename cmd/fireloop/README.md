@@ -305,7 +305,7 @@ A song holds up to 1000 measures, so the 48 measure pads only ever show part of 
 #### Controls
 
 - Measure pad: place the selected pattern in that measure. A measure that already holds that pattern is cleared instead, so empty a measure by selecting its pattern first and pressing the pad again. A measure holding any other pattern is replaced.
-- Pattern pad: select the pattern in that slot. The selection is shared with pattern mode, so the pattern you select here is the one you edit there.
+- Pattern pad: select the pattern in that slot. The selection is shared with pattern mode, so the pattern you select here is the one you edit there. A running song keeps playing, because the arrangement reads the measures it holds rather than the selection.
 - Pattern up/down: scroll the pattern window by 16 slots.
 - `Shift` plus pattern up/down: move the selected pattern by one slot.
 - Grid left/right: scroll measures by 16, one 4x4 bank.

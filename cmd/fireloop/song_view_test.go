@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -163,4 +164,100 @@ func TestSongModePatternPadUsesViewport(t *testing.T) {
 
 	require.NoError(t, dispatch(patternBank, arrangementNote(66)))
 	require.Equal(t, 17, patternBank.selPatIdx, "the pad should select the pattern in view")
+}
+
+// Selecting a pattern in song mode is a view change over the arrangement, not
+// an edit of what is playing, so the set keeps running through the press. The
+// stub session counts the stops, which is how a selection that still stopped
+// playback would be heard here.
+func TestSongPatternSelectionKeepsTheSetPlaying(t *testing.T) {
+	_, patternBank := newArrangementTest(t)
+	stopped := 0
+	patternBank.controller.playback = stubSession(&Playback{}, func() error {
+		stopped++
+		return nil
+	})
+
+	// The pad in the first slot of the pattern bank selects the pattern in view.
+	require.NoError(t, dispatch(patternBank, arrangementNote(66)))
+	require.Equal(t, 1, patternBank.selPatIdx, "the pad should select the pattern in view")
+	require.Zero(t, stopped, "selecting a pattern stopped the set")
+	require.NotNil(t, patternBank.controller.playback, "the set was uninstalled")
+
+	// The next slot's pattern does not exist yet, so the press also claims a slot.
+	require.NoError(t, dispatch(patternBank, arrangementNote(67)))
+	require.Equal(t, 2, patternBank.selPatIdx, "the second pad should select the next pattern")
+	require.Zero(t, stopped, "selecting an unused pattern stopped the set")
+	require.NotNil(t, patternBank.controller.playback, "the set was uninstalled")
+
+	// Shift plus pattern up moves the selection the same way.
+	stopped = 0
+	patternBank.controller.shift = true
+	require.NoError(t, dispatch(patternBank, arrangementNote(NotePatternUp)))
+	require.Equal(t, 3, patternBank.selPatIdx, "shift pattern up should move the selection")
+	require.Zero(t, stopped, "moving the selection stopped the set")
+	require.NotNil(t, patternBank.controller.playback, "the set was uninstalled")
+}
+
+// The playback worker reads the pattern map from its own goroutine, to colour
+// the measures and to name the pattern each one plays, while a pattern selected
+// in song mode claims its slot on the event loop without stopping the set. Both
+// sides hold the window lock, which is what this test pins; run under -race to
+// catch a regression.
+func TestSongPatternSelectionIsSafeDuringPlaybackDraws(t *testing.T) {
+	songBank, patternBank := newArrangementTest(t)
+	var painter sync.WaitGroup
+	painter.Add(1)
+	go func() {
+		defer painter.Done()
+		for range 100 {
+			patternBank.PatternIdxMap()
+			songBank.patternsToColors()
+		}
+	}()
+	for index := 1; index <= 50; index++ {
+		require.NoError(t, songBank.SelectPattern(index))
+	}
+	painter.Wait()
+	require.Equal(t, 50, patternBank.selPatIdx, "the selection should be on the last pattern")
+}
+
+// A song whose measures turn over quickly keeps a worker reading the pattern map
+// while the pattern pads are pressed, which is the arrangement the change is
+// for: the selection lands without stopping the set, and the worker keeps
+// writing the song through the presses. The sequencer is started for real here,
+// and the race detector watches the map the selection claims slots in against
+// the worker that reads it.
+func TestSongPatternPadsKeepTheSongPlaying(t *testing.T) {
+	songBank, patternBank := newArrangementTest(t)
+	controller := patternBank.controller
+	kit := patternBank.vb
+	// A one-step pattern turns a measure over every sixteenth of a beat, so
+	// the worker crosses measures, and reads the map on each one, while the
+	// pads below are pressed.
+	pattern := patternBank.CurrentPattern()
+	pattern.SetLengthSteps(1)
+	pattern.ToggleEvent(Event{Voice: kit.voices[0], Beat: stepBeat(0), Velocity: 100})
+	for measure := range 8 {
+		songBank.CurrentSong().SetPattern(pattern, measure)
+	}
+	previousBPM := currentBPM()
+	setBPM(300)
+	t.Cleanup(func() { setBPM(previousBPM) })
+	writer := &captureMidiWriter{}
+	require.NoError(t, controller.startSongPlayback(writer))
+	require.NotNil(t, controller.playback, "the song did not start")
+	writer.waitForEvents(t, 4)
+
+	// Columns 12 to 15 of each pad row hold the pattern slots.
+	for _, note := range []int{66, 67, 68, 69, 82, 83, 84, 85} {
+		require.NoError(t, dispatch(patternBank, arrangementNote(note)))
+		require.NotNil(t, controller.playback, "pressing a pattern pad stopped the song")
+	}
+	require.Equal(t, 8, patternBank.selPatIdx, "the pads should have moved the selection")
+	require.True(t, controller.playing(), "the song stopped during the presses")
+	// The worker is still writing the song after the presses, not just installed.
+	writer.waitForEvents(t, 12)
+	require.NoError(t, controller.stopPlayback())
+	require.Nil(t, controller.playback, "stopping left the sequencer armed")
 }
