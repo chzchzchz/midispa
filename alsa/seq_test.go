@@ -2,6 +2,7 @@ package alsa
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -711,5 +712,141 @@ func TestInvalidSystemEventValues(t *testing.T) {
 				t.Errorf("status %x value %d decoded = %x, error = %v", data[0], value, decoded.Data, err)
 			}
 		}
+	}
+}
+
+// A cancellation with nothing to read has to land within one poll
+// quantum, which is the whole point of a context-driven read: a
+// caller stopping a reader cannot wait for an event that never
+// comes, and it cannot close the sequencer underneath the call
+// either.
+func TestReadContextCancelWithNothingToRead(t *testing.T) {
+	seq := openTestSeq(t, "read context cancel")
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	since := time.Now()
+	if _, err := seq.ReadContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read = %v, want %v", err, context.Canceled)
+	}
+	if elapsed := time.Since(since); elapsed > readPollMax+100*time.Millisecond {
+		t.Fatalf("cancellation took %v, want within %v", elapsed, readPollMax+100*time.Millisecond)
+	}
+}
+
+// A deadline the read outlives is reported as the deadline's own
+// error, and the wait is shortened to it rather than outliving
+// it: a context with no deadline always waits the full quantum,
+// so only a deadline can show that the poll is bounded by the
+// context's clock and not just by the quantum.
+func TestReadContextDeadlineExceeded(t *testing.T) {
+	seq := openTestSeq(t, "read context deadline")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	since := time.Now()
+	if _, err := seq.ReadContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadlined read = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if elapsed := time.Since(since); elapsed > 150*time.Millisecond {
+		t.Fatalf("deadlined read took %v, want the 50ms deadline rather than the full quantum", elapsed)
+	}
+}
+
+// An event that is waiting is delivered through the same call the
+// blocking read takes, which is what makes the poll a gate rather
+// than a second path: the event and its source are the ones Read
+// has always handed back.
+func TestReadContextDeliversWaitingEvent(t *testing.T) {
+	seq := openTestSeq(t, "read context deliver")
+	seqOK(t, seq.OpenPortReadAt(seq.SeqAddr, seq.SeqAddr))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	note := noteOn(0, 60, 100)
+	seqOK(t, seq.Write(MakeEvent(note)))
+	deadline := time.Now().Add(seqTestTimeout)
+	for time.Now().Before(deadline) {
+		event, err := seq.ReadContext(ctx)
+		if err != nil {
+			t.Fatalf("waiting for the note: %v", err)
+		}
+		if slices.Equal(event.Data, note) {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for % x", note)
+}
+
+// announcePort finds the System client's Announce port, the one
+// whose subscribers receive the client and port announcements the
+// decoder drops. Those announcements are the events that can leave
+// a read with nothing to hand back, and the kernel sends them only
+// to this port's subscribers, not to every client.
+func announcePort(t *testing.T, seq *Seq) SeqAddr {
+	t.Helper()
+	devs, err := seq.Devices()
+	seqOK(t, err)
+	for _, dev := range devs {
+		if dev.ClientName == "System" && dev.PortName == "Announce" {
+			return dev.SeqAddr
+		}
+	}
+	t.Fatal("no System Announce port to subscribe to")
+	return SeqAddr{}
+}
+
+// An announcement the decoder drops must not park the read inside
+// libasound: the interleave of pending checks, polls and single
+// event reads is what lets a cancellation land between two of them,
+// which a read that blocked for the next event would swallow.
+func TestReadContextCancellationBetweenAnnouncements(t *testing.T) {
+	seq := openTestSeq(t, "read context announcement")
+	seqOK(t, seq.OpenPortReadAt(seq.SeqAddr, announcePort(t, seq)))
+	// Subscribing announces the connection itself, as a
+	// PORT_SUBSCRIBED event carrying five bytes, queued ahead of
+	// everything the peer will send. Consume it here: an event
+	// carrying bytes would make the read below return before any
+	// cancellation could land.
+	deadline := time.Now().Add(seqTestTimeout)
+	for {
+		event, ready, err := readReady(seq)
+		seqOK(t, err)
+		if ready {
+			if len(event.Data) != 5 || event.Data[0] != EvPortSubscribed {
+				t.Fatalf("first event after subscribing = % x, want the subscription announcement", event.Data)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("subscription event never arrived")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// The peer announces itself with client and port start
+	// events, which decode to no bytes, so the read below has to
+	// step over them on its way to the poll.
+	openTestSeq(t, "read context peer")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := seq.ReadContext(ctx)
+		result <- err
+	}()
+	// Leave the read to consume the announcements before the
+	// cancellation lands, so it is between events rather than at
+	// entry when the context goes done.
+	time.Sleep(readPollMax / 2)
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("read with announcements pending = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(seqTestTimeout):
+		t.Fatal("read did not return after cancellation: an announcement parked it in libasound")
 	}
 }

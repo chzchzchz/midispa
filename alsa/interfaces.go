@@ -1,6 +1,9 @@
 package alsa
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // The sequencer is used through five narrow views rather than through *Seq, so that the
 // logic above it can be driven by a fake. ALSA is the only part of this package that
@@ -25,6 +28,16 @@ import "time"
 // MayRead is deliberately not on this interface because it is not reachable through it.
 type EventReader interface {
 	Read() (SeqEvent, error)
+}
+
+// EventReaderContext is the interruptible read half. ReadContext
+// returns once an event arrives or the context is done, so a caller
+// can stop a reader without closing the sequencer underneath a call
+// that is inside libasound. It is separate from EventReader because a
+// caller that only needs the blocking read should not be handed a
+// context it has no use for.
+type EventReaderContext interface {
+	ReadContext(ctx context.Context) (SeqEvent, error)
 }
 
 // EventWriter is the write half addressed at the sequencer's default port.
@@ -60,9 +73,10 @@ type Scheduler interface {
 // here means the interface is wrong, not the caller, so these assertions catch a
 // divergence at build time rather than leaving it to a test to find.
 var (
-	_ EventReader = (*Seq)(nil)
-	_ EventWriter = (*Seq)(nil)
-	_ PortWriter  = (*Seq)(nil)
-	_ Closer      = (*Seq)(nil)
-	_ Scheduler   = (*SeqQueue)(nil)
+	_ EventReader        = (*Seq)(nil)
+	_ EventReaderContext = (*Seq)(nil)
+	_ EventWriter        = (*Seq)(nil)
+	_ PortWriter         = (*Seq)(nil)
+	_ Closer             = (*Seq)(nil)
+	_ Scheduler          = (*SeqQueue)(nil)
 )

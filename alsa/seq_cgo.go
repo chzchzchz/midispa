@@ -12,6 +12,8 @@ package alsa
 /*
 #cgo linux LDFLAGS: -lasound
 #include <alsa/asoundlib.h>
+#include <errno.h>
+#include <poll.h>
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -64,10 +66,37 @@ int seq_control_queue(snd_seq_t* seq, int q, int type) {
 		return rc;
 	return snd_seq_drain_output(seq);
 }
+
+// Fill the poll descriptors and wait in one crossing. The descriptors
+// and the wait are one operation for the caller, and splitting them
+// would spend a crossing per wait on nothing the caller can see. The
+// return is one of: 1 when a descriptor shows POLLIN, POLLERR or
+// POLLHUP, which means an event is waiting or the client is gone and
+// the read itself is what reports that, 0 when the timeout passed with
+// nothing to read, -EINTR when a signal cost the wait, and a negative
+// error otherwise.
+int seq_poll_input(snd_seq_t* seq, int timeout_ms) {
+	struct pollfd pfds[8];
+	int n = snd_seq_poll_descriptors(seq, pfds, 8, POLLIN);
+	if (n < 0)
+		return n;
+	int ready = poll(pfds, (nfds_t)n, timeout_ms);
+	if (ready < 0) {
+		if (errno == EINTR)
+			return -EINTR;
+		return -errno;
+	}
+	for (int i = 0; i < n; i++) {
+		if (pfds[i].revents & (POLLIN | POLLERR | POLLHUP))
+			return 1;
+	}
+	return 0;
+}
 */
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"time"
@@ -75,6 +104,11 @@ import (
 
 	"github.com/chzchzchz/midispa/midi"
 )
+
+// readPollMax bounds how long a cancelled context takes to interrupt a
+// read that carries no deadline. poll's timeout is milliseconds, so the
+// wait is quantized to that.
+const readPollMax = 250 * time.Millisecond
 
 // The capability bits are ALSA's, so they are defined here rather than as bare numbers.
 type PortCaps int
@@ -265,19 +299,121 @@ func (a *Seq) ClosePortReadAt(local, remote SeqAddr) error {
 	return snderr2error(C.snd_seq_disconnect_from(a.seq, C.int(local.Port), C.int(remote.Client), C.int(remote.Port)))
 }
 
+// MayRead reports whether an event is waiting. The check pulls
+// events out of the sequencer into libasound's own queue, which
+// poll on the sequencer's descriptors cannot see and only a read
+// drains, so an event it reports stays hidden from poll until
+// read.
 func (a *Seq) MayRead() bool {
 	return C.snd_seq_event_input_pending(a.seq, 1) > 0
 }
 
-func (a *Seq) Read() (ret SeqEvent, err error) {
-	var event *C.snd_seq_event_t
+// pollInput reports whether the sequencer has an event waiting or has
+// gone away, waiting up to timeout for one. A signal costs the wait
+// and restarts it for the full timeout; signals are rare enough here
+// that tracking the time one took is not worth the bookkeeping. It is
+// the one place the package waits on the sequencer's own descriptors
+// rather than inside libasound, so that a wait can be bounded by a
+// caller's context. The timeout is a duration here and milliseconds
+// inside, because poll's unit is the only reason a caller ever sees
+// that quantum.
+func (a *Seq) pollInput(timeout time.Duration) (bool, error) {
 	for {
-		if err := C.snd_seq_event_input(a.seq, &event); err < 0 {
-			return ret, snderr2error(err)
+		switch ready := C.seq_poll_input(a.seq, C.int(timeout/time.Millisecond)); {
+		case ready > 0:
+			return true, nil
+		case ready == 0:
+			return false, nil
+		case ready == -C.EINTR:
+			continue
+		default:
+			return false, snderr2error(ready)
 		}
-		ret, err = decodeSeqEvent(event)
-		if len(ret.Data) != 0 || err != nil {
-			return ret, err
+	}
+}
+
+// readOnce reads one event, decodes it and frees the C memory the
+// library allocated for it, so no caller ever holds a pointer into
+// libasound. The free follows the decode, which copies everything it
+// needs out of the event, and runs on the decode's error path too: an
+// event that fails to decode is still the caller's to dispose of.
+func (a *Seq) readOnce() (SeqEvent, error) {
+	var event *C.snd_seq_event_t
+	if err := C.snd_seq_event_input(a.seq, &event); err < 0 {
+		return SeqEvent{}, snderr2error(err)
+	}
+	defer C.snd_seq_free_event(event)
+	return decodeSeqEvent(event)
+}
+
+// Read blocks until an event carrying data arrives. Events that decode
+// to no bytes are ALSA notifications this package has no message for,
+// so they are skipped rather than handed back: fireloop reads an empty
+// event as its leave request, and a caller looping on Read would
+// otherwise have to filter them itself.
+func (a *Seq) Read() (SeqEvent, error) {
+	for {
+		event, err := a.readOnce()
+		if len(event.Data) != 0 || err != nil {
+			return event, err
+		}
+	}
+}
+
+// pollTimeout bounds one wait by the context's deadline when that
+// is nearer than readPollMax. A deadline that has already passed
+// comes back as zero, so the poll returns at once and the loop
+// reports the deadline instead of waiting out a quantum.
+func pollTimeout(ctx context.Context) time.Duration {
+	timeout := readPollMax
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline))
+	}
+	return max(timeout, 0)
+}
+
+// ReadContext returns once an event arrives or ctx is done, whichever
+// comes first. An event that arrives as the context cancels may still
+// be returned, and the next call observes the cancellation: one more
+// event is played rather than dropped.
+func (a *Seq) ReadContext(ctx context.Context) (SeqEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return SeqEvent{}, err
+	}
+	if !a.isOpen() {
+		return SeqEvent{}, ErrSeqClosed
+	}
+	return a.readWaiting(ctx)
+}
+
+// readWaiting hands back the next event that carries data, waiting for
+// one to arrive for as long as ctx allows. The wait is a poll on the
+// sequencer's own descriptors with a bounded timeout, and nothing in
+// the loop blocks without a bound: the pending check returns at once,
+// the poll returns within readPollMax, and the read runs only once one
+// of them says an event is waiting, so a cancellation is noticed
+// within readPollMax. libasound keeps events it has already pulled
+// from the sequencer in a queue of its own, which poll cannot see, so
+// each pass asks for pending events first: a burst that arrived in one
+// read would otherwise leave every event after the first waiting out
+// the poll.
+func (a *Seq) readWaiting(ctx context.Context) (SeqEvent, error) {
+	for {
+		if !a.MayRead() {
+			ready, err := a.pollInput(pollTimeout(ctx))
+			if err != nil {
+				return SeqEvent{}, err
+			}
+			if !ready {
+				if err := ctx.Err(); err != nil {
+					return SeqEvent{}, err
+				}
+				continue
+			}
+		}
+		event, err := a.readOnce()
+		if len(event.Data) != 0 || err != nil {
+			return event, err
 		}
 	}
 }

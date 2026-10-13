@@ -2,6 +2,7 @@ package fake
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -148,6 +149,46 @@ func TestMayReadTracksTheQueue(t *testing.T) {
 	}
 	if seq.MayRead() {
 		t.Error("MayRead after the last event was read, want false")
+	}
+}
+
+// A cancelled context is reported before anything is read, and
+// the queue it guarded keeps its events: cancellation guards
+// entry, it does not drain what was already on its way.
+func TestReadContextCancelGuardsEntry(t *testing.T) {
+	seq := New()
+	seq.Queue(noteOn(0, 60))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := seq.ReadContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("ReadContext on a cancelled context = %v, want %v", err, context.Canceled)
+	}
+	if !seq.MayRead() {
+		t.Error("cancelled context drained the queue")
+	}
+	ev, err := seq.ReadContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMessage(t, ev.Data, []byte{midi.MakeNoteOn(0), 60, 100})
+}
+
+// A live context reads normally, which is the state a consumer's
+// loop is in for the whole of a run.
+func TestReadContextWithLiveContextReads(t *testing.T) {
+	seq := New()
+	seq.Queue(noteOn(0, 60), noteOn(0, 64))
+
+	for _, want := range []byte{60, 64} {
+		ev, err := seq.ReadContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertMessage(t, ev.Data, []byte{midi.MakeNoteOn(0), want, 100})
+	}
+	if _, err := seq.ReadContext(context.Background()); !errors.Is(err, ErrNoEvents) {
+		t.Errorf("reading a drained queue gave %v, want %v", err, ErrNoEvents)
 	}
 }
 

@@ -14,6 +14,7 @@ package fake
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -134,6 +135,18 @@ func (s *Seq) Read() (alsa.SeqEvent, error) {
 	ev := s.reads[0]
 	s.reads = s.reads[1:]
 	return ev, nil
+}
+
+// ReadContext answers the context the way the real one does at entry: a
+// done context is reported before anything is read, and a live one reads
+// normally. The fake never blocks, so there is no wait for the context to
+// interrupt; a loop driven by a fake still has to tolerate the fake's read
+// errors, as Read documents.
+func (s *Seq) ReadContext(ctx context.Context) (alsa.SeqEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return alsa.SeqEvent{}, err
+	}
+	return s.Read()
 }
 
 // MayRead reports whether an event is waiting, which is the question the real MayRead
@@ -349,9 +362,10 @@ func (q *Queue) schedule(d time.Duration, ev alsa.SeqEvent, port int) error {
 // The stand-in is only worth having where the real sequencer would go, which is the
 // whole reason for the narrow interfaces in alsa.
 var (
-	_ alsa.EventReader = (*Seq)(nil)
-	_ alsa.EventWriter = (*Seq)(nil)
-	_ alsa.PortWriter  = (*Seq)(nil)
-	_ alsa.Closer      = (*Seq)(nil)
-	_ alsa.Scheduler   = (*Queue)(nil)
+	_ alsa.EventReader        = (*Seq)(nil)
+	_ alsa.EventReaderContext = (*Seq)(nil)
+	_ alsa.EventWriter        = (*Seq)(nil)
+	_ alsa.PortWriter         = (*Seq)(nil)
+	_ alsa.Closer             = (*Seq)(nil)
+	_ alsa.Scheduler          = (*Queue)(nil)
 )
