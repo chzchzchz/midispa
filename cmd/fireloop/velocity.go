@@ -62,6 +62,10 @@ var knobNow = time.Now
 // held back until the knob rests; see armAudition. A preview that fails to write reaches
 // the log rather than the caller, because nothing on the event loop is waiting for an
 // audition that has not happened yet.
+//
+// On a voice that declares a range, the chromatic carry is translated into that
+// range, so one detent moves the stored velocity one step and the carry stays
+// absolute, the same one-value rule the knob has always had, translated.
 func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) error {
 	if p.readoutIsOwned() {
 		return nil
@@ -74,12 +78,21 @@ func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) er
 	if !turning {
 		return nil
 	}
-	from := p.velocityBase(voice)
-	value := clampStepVelocity(voice, from+p.velocityIncrement(direction))
-	// The chromatic encoder keeps its own value whether or not the step holds a note,
-	// because a step chosen afterwards is meant to take it rather than its own.
+	var from int
 	if voice.IsChromatic() {
-		p.chromaticVelocity = value
+		// The chromatic encoder carries one absolute MIDI velocity, and a
+		// step chosen afterwards is meant to take it rather than its own.
+		// Translating the carry into the voice's own scale keeps one detent
+		// worth exactly one step of stored velocity, whatever the range's width.
+		from = voice.ScaledPadVelocity(p.chromaticVelocity)
+	} else {
+		from = p.velocityBase(voice)
+	}
+	value := clampStepVelocity(voice, from+p.velocityIncrement(direction))
+	if voice.IsChromatic() {
+		// Written back as the absolute of the result, the carry stays absolute:
+		// the round trip through the two maps is exact, so a detent never stalls.
+		p.chromaticVelocity = voice.AbsolutePadVelocity(value)
 	}
 	event, updated := p.writeStepVelocity(voice, value)
 	// The step is in the log so a velocity change can always be traced to one step rather
@@ -167,12 +180,11 @@ func (p *PatternBank) stopAuditions() {
 	p.auditions.Wait()
 }
 
-// velocityBase is the value a detent starts from: the encoder's carried value for a
-// chromatic voice, and the selected step's own velocity for a percussive one.
+// velocityBase is the velocity a percussive detent starts from: the selected
+// step's own. The chromatic knob starts from the encoder's carried value
+// instead, which AdjustVelocity reads directly, so only the percussive half
+// lives here.
 func (p *PatternBank) velocityBase(voice *Voice) int {
-	if voice.IsChromatic() {
-		return p.chromaticVelocity
-	}
 	if pattern := p.CurrentPattern(); pattern != nil {
 		if event, ok := pattern.EventAtStep(p.stepCursor, voice); ok {
 			return event.Velocity

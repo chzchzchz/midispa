@@ -95,6 +95,16 @@ func validateVoice(dev *Device, index int) error {
 	if resolveChannel(dev.Channel, voice.Channel) == 0 {
 		return fmt.Errorf("device %q voice %d has no MIDI channel", dev.Name, index)
 	}
+	if voice.VelocityMin < 0 || voice.VelocityMin > midiNoteMax {
+		return fmt.Errorf("device %q voice %d has invalid VelocityMin %d", dev.Name, index, voice.VelocityMin)
+	}
+	if voice.VelocityMax < 0 || voice.VelocityMax > midiNoteMax {
+		return fmt.Errorf("device %q voice %d has invalid VelocityMax %d", dev.Name, index, voice.VelocityMax)
+	}
+	if voice.VelocityMax > 0 && voice.VelocityMin > voice.VelocityMax {
+		return fmt.Errorf("device %q voice %d has VelocityMin %d above VelocityMax %d",
+			dev.Name, index, voice.VelocityMin, voice.VelocityMax)
+	}
 	what := fmt.Sprintf("device %q voice %d", dev.Name, index)
 	// resolvePatch rather than voice.EffectivePatch: validation runs before the voice
 	// bank exists, so the voice has no device backpointer to fall back to yet.

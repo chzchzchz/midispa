@@ -52,7 +52,7 @@ A missing file at startup is not an error, because that is what a first run look
 - The write is atomic. A save either lands whole or leaves the previous file untouched, so an interrupted save never costs a set.
 - Voice references are positions in the kit as this run loaded it, so the file records the kit paths and the voice count. A file loaded against a different kit is reported rather than trusted: everything that still resolves is kept, and what did not is counted and shown on the display.
 - The page table is written in index order, one entry per page in use. A page deleted before the save leaves no entry, so it does not come back from the file, and each entry carries the page's track voices and whether the page plays in song mode.
-- Values outside their range are clamped, not refused. A set with one bad number in it is still mostly a set.
+- Values outside their range are clamped, not refused. A set with one bad number in it is still mostly a set. A velocity outside its voice's declared range is folded into the range the same way, and logged.
 - Where you were looking is not saved. The current page, the selected pattern and row, the scroll windows, the step cursor and the palette octave are the display's business, so a load lands on page 1, on pattern 1. Notes, arrangement, tempo, swing, kit layout and each page's enabled flag are what come back.
 - A straight swing is written as no key at all, so a session that has never been swung is the same file the earlier build wrote, and a file with no `swingPct` loads as straight.
 - Editing modes, held pads, the playhead and the clipboard are not saved either. They mean nothing across a restart, and a loaded clipboard would paste on the next accidental Play press.
@@ -86,6 +86,21 @@ A kit file is a top-level array of device objects, so each device can use a diff
 ```
 
 Percussion MIDI notes are in the range 0 through 127. Chromatic events store their own pitch in the pattern editor. Both kinds of event store a velocity of 0 through 127, and it is what the step plays at.
+
+A voice can also declare the range it plays at, with `VelocityMin` and `VelocityMax`:
+
+```json
+{
+  "Name": "Strings",
+  "MidiPort": "MIDI4x4 MIDI 4",
+  "Channel": 1,
+  "Voices": [
+    { "Name": "Pad", "Channel": 2, "VelocityMin": 32, "VelocityMax": 96 }
+  ]
+}
+```
+
+Both fields are optional and each is 0 to 127; an omitted or zero field leaves the data range on its side. A declared range bounds every velocity the voice is given: a pad press, a Volume knob detent and a velocity read back from a session are all folded into the range before they reach the wire, so an instrument that only answers 32 through 96 is never handed a velocity outside it. Velocity zero is never stored, because it is a note-off rather than a quiet note, so the floor a voice actually plays at is 1 unless the kit asks higher. An inverted range is refused at startup, and a session saved against a rangeless kit folds its velocities into the range on load, saying so in the log rather than counting anything lost.
 
 #### Patches
 
@@ -136,10 +151,10 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Encoder in swing entry: move the swing by one percent of a beat per detent. It takes effect from the next step, so turning it while a pattern runs moves the groove under the music.
 - Pads in swing entry: type the swing outright, without `Shift`. The readout fills in as you press, and the number is applied when Snap is pressed again. A single digit is discarded rather than becoming a tenth of a percent, so a mis-hit does not answer with a number nobody meant.
 - Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback. Note editing follows the selection, so a mute button moves the palette to another voice rather than closing it; press Mode to leave.
-- Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step. The knob is not re-read from the step you select, so its value carries over to the next step. A detent counts further the faster the knob is turned, capped at eight steps a detent, and the step is auditioned once the knob has rested for 20ms rather than on every detent.
-- Volume knob with a selected percussive voice: each detent moves the selected step's velocity by one from the value it already holds, so the knob trims the hit rather than replacing it. Detents count further the faster the knob is turned, and the step is auditioned once the knob has rested for 20ms. See [Percussion dynamics](#percussion-dynamics).
+- Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step, translated into the voice's declared range so a careful detent still moves the stored velocity by one step whatever the range is. The knob is not re-read from the step you select, so its value carries over to the next step. A detent counts further the faster the knob is turned, capped at eight steps a detent, and the step is auditioned once the knob has rested for 20ms rather than on every detent.
+- Volume knob with a selected percussive voice: each detent moves the selected step's velocity by one from the value it already holds, so the knob trims the hit rather than replacing it, and the trim stops at the voice's declared range. Detents count further the faster the knob is turned, and the step is auditioned once the knob has rested for 20ms. See [Percussion dynamics](#percussion-dynamics).
 - Encoder in note-edit mode: transpose the palette by an octave. Left turns it down, right turns it up, and every palette pad's colour shifts with it, so the octave on screen is visible without reading anything. Only the pitches a pad press can choose change; notes already written into a pattern keep their pitch and their colour. The palette stops at the ends of the MIDI range, two octaves below A1 and three above.
-- Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
+- Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with, scaled into the voice's declared range. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
 - Two held step cells while choosing notes: the same tie, on the step strip where the steps live while the palette owns the grid. Both steps need a note, and nothing may sit between them; if the tie cannot be made the edit stays where it was rather than jumping to a step whose note has nothing to hold.
 - `Alt` plus a pad: toggle a triplet group on the beat the pressed cell falls in, editing the row the press came from rather than the selected row. The three notes on the beat's first three cells are re-timed to the thirds of the beat, and the fourth cell stops being a step: it holds no note while the group lasts, and a note placed there afterwards takes the group apart, putting every note back on the grid. The gesture needs one note on each of the beat's first three cells and nothing on the fourth, works on a percussive row with no row selected, and does not stop playback. The readout names the span and the answer, for example `S01-04 x3`, `S01-04 off`, `S05-08 need 3`, `S04 busy`, `S01-04 past end`, `S01-04 overlap` or `S01-02 overlap`. The gesture declines silently while a length or a swing is being entered.
@@ -170,10 +185,10 @@ A track is a voice from the kit, and any voice can go on any track.
 
 #### Percussion dynamics
 
-A percussive step stores the velocity of the pad press that placed it, and plays at that velocity. A pattern is therefore hit-sensitive: hit the pad harder and the step is louder. The step's pad shows the same dynamics: green at the brightness of its velocity, so a hard hit is a bright pad and a soft one dark.
+A percussive step stores the velocity of the pad press that placed it, and plays at that velocity. A pattern is therefore hit-sensitive: hit the pad harder and the step is louder. A voice that declares a range takes the press scaled into it, so a soft hit on a quiet-only instrument is still soft relative to what it can play. The step's pad shows the same dynamics: green at the brightness of its velocity, so a hard hit is a bright pad and a soft one dark. A voice with a declared range reads that range as the whole brightness scale, so a soft press still reaches full dark and a hard one full green; a voice without one keeps the stored velocity as its brightness, which is what a rangeless kit has always shown.
 
 1. Select a percussive voice with Mute 1 through 4 and the Encoder if needed.
-2. Press a pad to toggle the step. It lands with the velocity of that press, and the step cursor moves onto it, so the readout names the step just placed and the knob below has something to trim without the grid buttons.
+2. Press a pad to toggle the step. It lands with the velocity of that press, scaled into the voice's declared range, and the step cursor moves onto it, so the readout names the step just placed and the knob below has something to trim without the grid buttons.
 3. Turn the Volume knob. Each detent moves the step's velocity by one from the value it already holds, so the first detent trims the hit instead of jumping to whatever value the knob was last left at. Detents that arrive close together count further than one, up to eight steps a detent, so a fast sweep reaches a new value quickly while a careful turn still moves one step at a time.
 4. The step's pad dims or brightens with the trim, and the step is auditioned once the knob has rested for 20ms, so the velocity is heard while it is being set: a fast turn is heard as one note at the value it landed on rather than a note per detent, and a slow turn hears each detent.
 
@@ -181,7 +196,7 @@ The knob works differently from the chromatic one on purpose. A chromatic step c
 
 Two limits are worth knowing:
 
-- The knob stops at 1. Velocity zero is a note-off rather than a quiet note, so a step allowed to reach it would stop sounding instead of playing softly. The readout reports the same floor, so the display never claims a velocity nothing would play.
+- The knob stops at the voice's floor, which is 1 unless the kit declares a higher `VelocityMin`. Velocity zero is a note-off rather than a quiet note, so a step allowed to reach it would stop sounding instead of playing softly. The readout reports the same floor, so the display never claims a velocity nothing would play.
 - The knob edits the step under the cursor. On a step holding no note it does nothing, so a step has to be placed before its velocity can be set.
 
 The readout follows the cursor for a percussive track as well: `S<STEP> @<VELOCITY>`, or `S<STEP> --` on a step with no note. A percussive voice has no pitch to name, so only the step and its dynamics are shown.
@@ -193,7 +208,7 @@ The readout follows the cursor for a percussive track as well: `S<STEP> @<VELOCI
 - Rows 2 to 5: the voice on each visible track row, inverted for the selected row.
 - Row 6 is the readout row and carries one of: `Length NN steps` in length mode, `S<STEP> <NOTE>@<VELOCITY>` for a selected chromatic track, `S<STEP> @<VELOCITY>` for a selected percussive track, `S<STEP> --` for a step with no note, or `Tempo: NNN` while a tempo is being entered. It is blank otherwise.
 
-The pad grid shows the notes of the four visible tracks and the editing step is lit slightly brighter. A chromatic step is coloured by pitch, using the same colour as that pitch's palette pad, and a percussive step is green at the brightness of its velocity: 127 is full green and 0 is dark, so a hard hit is a bright pad and a soft one dark.
+The pad grid shows the notes of the four visible tracks and the editing step is lit slightly brighter. A chromatic step is coloured by pitch, using the same colour as that pitch's palette pad, and a percussive step is green at the brightness of its velocity: on a voice with no declared range 127 is full green and 0 is dark, so a hard hit is a bright pad and a soft one dark, while a voice that declares a range reads that range as the full scale.
 
 During playback the playing column is inverted while the others are redrawn dimmer. Inversion is per channel, so a chromatic step keeps its pitch colour while being played and returns to it exactly when the playhead moves on. A tied step is marked by pushing its colour away from the playhead, lifted normally and lowered when inverted.
 
@@ -225,7 +240,7 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 7. The step strip reads four steps per row, in the same order as the step grid. Each cell is dark when the step holds no note and otherwise shows that note's colour, with the step being edited brightened. Press a cell to move the edit there. While a pattern plays, the cell the playhead is on goes white.
 8. Hold one cell and press another to tie those two steps, which is how a note is held past its step. Both steps need a note and no other note may sit between them; otherwise nothing is tied and the edit stays put.
 9. The palette's first pad means "no note", so pressing it clears the current step. It is A1 until the palette is turned, and moves with the palette afterwards. `Alt` plus any palette pad does the same.
-10. How hard a palette pad is pressed sets the step's velocity, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it, clamped to 0..127: one step per detent when the knob turns slowly, and more the faster it turns. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
+10. How hard a palette pad is pressed sets the step's velocity, scaled into the voice's declared range, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it, clamped to the voice's range: one step per detent when the knob turns slowly, and more the faster it turns. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
 11. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note. A tied step shows the step it is tied to as well, for example `S01 C4@100->04`. A step a group covers carries the group's `x3`, and the cell a group draws shows the notes it belongs to instead of a velocity, for example `S04 x3 01-03`.
 12. Press Mode again to return to step mode.
 

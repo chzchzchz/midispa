@@ -39,6 +39,20 @@ func percussionStepBank(t *testing.T, step, hit int) (*PatternBank, *Voice, int)
 	return bank, voice, note
 }
 
+// rangedPercussionBank is the bank a test about a percussive voice
+// with a declared range starts from: one percussive voice bounded
+// to [32,96], with the first track selected, so the bank has a
+// voice to edit.
+func rangedPercussionBank(t *testing.T) (*PatternBank, *Voice) {
+	t.Helper()
+	kit := trackWindowKit(8, -1)
+	voice := kit.voices[0]
+	voice.VelocityMin, voice.VelocityMax = 32, 96
+	bank := useController(t, NewFire(func([]byte) error { return nil }), kit).patbank
+	require.NoError(t, bank.SelectTrackRow(1))
+	return bank, voice
+}
+
 func TestChromaticVelocityControl(t *testing.T) {
 	bank, voice := chromaBank(t)
 	require.NoError(t, bank.SelectTrackRow(1))
@@ -144,10 +158,10 @@ func TestPercussionVelocityKnobStopsAtOne(t *testing.T) {
 	}
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
 	require.True(t, ok, "turning the knob past the floor removed the step")
-	require.Equal(t, minPercussionVelocity, event.Velocity)
+	require.Equal(t, minStepVelocity, event.Velocity)
 	// The readout reports the floor, so the display never claims a velocity nothing plays.
 	require.Equal(t, "S01 @001", recorder.row(readoutRow))
-	assertMidiData(t, alsa.SeqEvent{Data: event.NoteOnMidi()}, []byte{midi.MakeNoteOn(0), byte(note), minPercussionVelocity})
+	assertMidiData(t, alsa.SeqEvent{Data: event.NoteOnMidi()}, []byte{midi.MakeNoteOn(0), byte(note), minStepVelocity})
 }
 
 // A detent counts further the faster the knob turns: detents that arrive
@@ -247,4 +261,149 @@ func TestVolumeKnobAuditionsASlowTurnPerDetent(t *testing.T) {
 	assertMidiData(t, audition[1], []byte{midi.MakeNoteOff(0), byte(note), byte(hit - velocityStep)})
 	assertMidiData(t, audition[2], []byte{midi.MakeNoteOn(0), byte(note), byte(hit - 2*velocityStep)})
 	assertMidiData(t, audition[3], []byte{midi.MakeNoteOff(0), byte(note), byte(hit - 2*velocityStep)})
+}
+
+// The percussive knob trims the hit the step holds, so on a voice
+// with a declared range it stops at the range's own ends: the floor
+// is as quiet as the instrument can play and the cap as loud.
+func TestPercussionVelocityKnobStopsAtTheVoiceRange(t *testing.T) {
+	const step = 3
+	bank, voice := rangedPercussionBank(t)
+	// The press scales into the range, so the hardest press starts
+	// at the cap rather than above it.
+	require.NoError(t, bank.controller.handlePatternGrid(nil, step, 0, midiNoteMax))
+	event, ok := bank.CurrentPattern().EventAtStep(step, voice)
+	require.True(t, ok, "the press placed no step")
+	require.Equal(t, voice.VelocityMax, event.Velocity, "a hardest press should land on the cap")
+
+	advance := knobTestClock(t)
+	// A careful turn walks down one step at a time, to the floor.
+	for want := voice.VelocityMax - 1; want >= voice.VelocityMin; want-- {
+		advance(velocityFastWindow + time.Millisecond)
+		require.NoError(t, dispatch(bank, encoderCC(EncoderLeft)))
+		event, _ = bank.CurrentPattern().EventAtStep(step, voice)
+		require.Equalf(t, want, event.Velocity, "the detent down to %d", want)
+	}
+	// The floor holds against a further detent.
+	advance(velocityFastWindow + time.Millisecond)
+	require.NoError(t, dispatch(bank, encoderCC(EncoderLeft)))
+	event, _ = bank.CurrentPattern().EventAtStep(step, voice)
+	require.Equal(t, voice.VelocityMin, event.Velocity, "the floor should hold")
+
+	// A careful turn back up reaches the cap one step at a time.
+	for want := voice.VelocityMin + 1; want <= voice.VelocityMax; want++ {
+		advance(velocityFastWindow + time.Millisecond)
+		require.NoError(t, dispatch(bank, encoderCC(EncoderRight)))
+		event, _ = bank.CurrentPattern().EventAtStep(step, voice)
+		require.Equalf(t, want, event.Velocity, "the detent up to %d", want)
+	}
+	// The cap holds against a further detent.
+	advance(velocityFastWindow + time.Millisecond)
+	require.NoError(t, dispatch(bank, encoderCC(EncoderRight)))
+	event, _ = bank.CurrentPattern().EventAtStep(step, voice)
+	require.Equal(t, voice.VelocityMax, event.Velocity, "the cap should hold")
+}
+
+// A percussive press is a pad press, so on a ranged voice it lands
+// scaled into the range: the pad scale's top is the cap, its midpoint
+// the range's midpoint, and its bottom the floor.
+func TestPercussionPadPressIsScaledIntoTheVoiceRange(t *testing.T) {
+	bank, voice := rangedPercussionBank(t)
+	tests := []struct {
+		step, press, want int
+	}{
+		{step: 0, press: midiNoteMax, want: 96},
+		{step: 1, press: 64, want: 64},
+		{step: 2, press: 1, want: 32},
+	}
+	for _, tt := range tests {
+		require.NoErrorf(t, bank.controller.handlePatternGrid(nil, tt.step, 0, tt.press),
+			"a press of %d", tt.press)
+		event, ok := bank.CurrentPattern().EventAtStep(tt.step, voice)
+		require.Truef(t, ok, "the press on step %d placed no step", tt.step)
+		require.Equalf(t, tt.want, event.Velocity, "a press of %d", tt.press)
+	}
+}
+
+// The chromatic carry is one absolute MIDI velocity, so on a ranged
+// voice it is translated into the voice's own scale before the detent
+// counts from it: the pad scale's top is the range's cap, and its
+// midpoint the range's midpoint.
+func TestChromaticVelocityKnobTranslatesTheCarryIntoTheRange(t *testing.T) {
+	bank, voice := rangedChromaBank(t)
+	require.NoError(t, bank.SelectTrackRow(1))
+	// The step holds a velocity of its own, which the chromatic knob
+	// does not count from: it counts from the carry.
+	bank.CurrentPattern().SetChromaticNote(0, voice, 60, 100)
+	advance := knobTestClock(t)
+	tests := []struct {
+		carry, want, carryAfter int
+	}{
+		// A detent at the cap cannot move past it: the increment is
+		// absorbed by the clamp and the carry stays at the top.
+		{carry: midiNoteMax, want: 96, carryAfter: midiNoteMax},
+		// The midpoint of the pad scale is the midpoint of the range, so
+		// a detent counts one step from it, and the carry tracks the
+		// stored value through the exact round trip.
+		{carry: 64, want: 65, carryAfter: 66},
+	}
+	for _, tt := range tests {
+		bank.chromaticVelocity = tt.carry
+		advance(velocityFastWindow + time.Millisecond)
+		require.NoError(t, dispatch(bank, encoderCC(EncoderRight)))
+		event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+		require.Truef(t, ok, "a carry of %d lost the note", tt.carry)
+		require.Equalf(t, tt.want, event.Velocity, "the carried %d", tt.carry)
+		require.Equalf(t, tt.carryAfter, bank.chromaticVelocity,
+			"the carry after a detent from %d", tt.carry)
+	}
+}
+
+// One detent of a careful turn is worth one step of stored velocity
+// however narrow the range is: the carry is translated into the range
+// before the detent counts, so the detent cannot stall on a short
+// span the way a raw fraction of it would.
+func TestChromaticVelocityKnobCountsOneStepPerDetentOnARangedVoice(t *testing.T) {
+	bank, voice := rangedChromaBank(t)
+	require.NoError(t, bank.SelectTrackRow(1))
+	bank.CurrentPattern().SetChromaticNote(0, voice, 60, 64)
+	bank.chromaticVelocity = 64
+	advance := knobTestClock(t)
+	for i := 1; i <= 10; i++ {
+		advance(velocityFastWindow + time.Millisecond)
+		require.NoError(t, dispatch(bank, encoderCC(EncoderRight)))
+		event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+		require.Truef(t, ok, "detent %d lost the note", i)
+		require.Equalf(t, 64+i, event.Velocity, "detent %d of the turn", i)
+	}
+}
+
+// The carry belongs to the bank rather than the track, so a value
+// carried on a voice with no range lands scaled on the ranged voice
+// the knob moves to next: the carry is absolute, and the range is
+// the voice's own.
+func TestChromaticVelocityCarryCrossesIntoARangedVoice(t *testing.T) {
+	kit := trackWindowKit(8, -1)
+	plain, ranged := kit.voices[0], kit.voices[1]
+	plain.Note, ranged.Note = nil, nil
+	ranged.VelocityMin, ranged.VelocityMax = 32, 96
+	bank := useController(t, NewFire(func([]byte) error { return nil }), kit).patbank
+	require.NoError(t, bank.SelectTrackRow(1))
+	bank.CurrentPattern().SetChromaticNote(0, plain, 60, 100)
+
+	// One detent on the unranged voice leaves the carry at the top of
+	// the pad scale.
+	advance := knobTestClock(t)
+	advance(velocityFastWindow + time.Millisecond)
+	require.NoError(t, dispatch(bank, encoderCC(EncoderRight)))
+	require.Equal(t, 127, bank.chromaticVelocity, "the carry on a rangeless voice")
+
+	// The same carry, on the ranged voice, lands inside its range.
+	require.NoError(t, bank.SelectTrackRow(2))
+	bank.CurrentPattern().SetChromaticNote(0, ranged, 60, 64)
+	advance(velocityFastWindow + time.Millisecond)
+	require.NoError(t, dispatch(bank, encoderCC(EncoderRight)))
+	event, ok := bank.CurrentPattern().EventAtStep(0, ranged)
+	require.True(t, ok, "the ranged voice's step lost its note")
+	require.Equal(t, 96, event.Velocity, "the carried 127 should land on the ranged voice's cap")
 }

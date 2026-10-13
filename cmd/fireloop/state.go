@@ -530,11 +530,17 @@ func patternFromState(saved statePattern, vb *VoiceBank) (*Pattern, int) {
 			dropped++
 			continue
 		}
+		velocity := clampStepVelocity(voice, event.Velocity)
+		if velocity != event.Velocity {
+			logger.Warn("state event velocity outside voice range",
+				"pattern", saved.Index, "step", event.Step,
+				"voice", event.Voice, "from", event.Velocity, "to", velocity)
+		}
 		events = append(events, Event{
 			Voice:         voice,
 			Beat:          beatFromState(event.Step, event.Beat),
 			ChromaticNote: clampMidiDataValue(event.Note),
-			Velocity:      clampMidiDataValue(event.Velocity),
+			Velocity:      velocity,
 			Tie:           event.Tie,
 			Triplet:       event.Triplet,
 		})

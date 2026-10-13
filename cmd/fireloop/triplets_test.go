@@ -651,7 +651,7 @@ func TestPlacingANoteOnAConsumedCellRepaintsTheRow(t *testing.T) {
 		assert.Equalf(t, stepBeat(i), event.Beat, "note %d is off the grid", i)
 	}
 	for col := 0; col < 4; col++ {
-		require.Equalf(t, percussionStepColor(pressVelocity), recorder.pad(col, 0),
+		require.Equalf(t, percussionStepColor(voice, pressVelocity), recorder.pad(col, 0),
 			"cell %d did not go back to its note colour", col)
 	}
 }
@@ -825,7 +825,7 @@ func TestTripletShadeIsDimmerThanItsNote(t *testing.T) {
 	require.NoError(t, bank.setStepCursor(8))
 	require.NoError(t, bank.redrawTrackPads(1))
 
-	note := percussionStepColor(pressVelocity)
+	note := percussionStepColor(voice, pressVelocity)
 	require.Equal(t, tripletShadeColor(note, false), sim.pads[3],
 		"the cell the group draws")
 	dimmed := Dim(note, tripletShadeDivisor)
@@ -1245,7 +1245,7 @@ func TestSixteenthGroupPlaysThreeNotesInsideHalfABeat(t *testing.T) {
 // share the first cell's pad, and the third
 // cell the packing freed stays dark.
 func TestSixteenthGroupHasNoPadMark(t *testing.T) {
-	bank, _, sim := recordedBank(t, trackWindowKit(8, -1))
+	bank, kit, sim := recordedBank(t, trackWindowKit(8, -1))
 	require.NoError(t, bank.SelectTrackRow(1))
 	for _, note := range []int{54, 55, 56} {
 		pressPad(t, bank, note)
@@ -1260,8 +1260,8 @@ func TestSixteenthGroupHasNoPadMark(t *testing.T) {
 	pressButton(t, bank, NoteAlt)
 	require.NoError(t, bank.redrawTrackPads(1))
 
-	require.Equal(t, percussionStepColor(pressVelocity), sim.pads[0], "the group's first cell")
-	require.Equal(t, percussionStepColor(pressVelocity), sim.pads[1], "the group's second cell")
+	require.Equal(t, percussionStepColor(kit.voices[0], pressVelocity), sim.pads[0], "the group's first cell")
+	require.Equal(t, percussionStepColor(kit.voices[0], pressVelocity), sim.pads[1], "the group's second cell")
 	require.Equal(t, [3]int{}, sim.pads[2], "the freed cell is lit")
 }
 

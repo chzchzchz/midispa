@@ -916,7 +916,7 @@ func (p *PatternBank) ToggleEvent(row, col, v int) (Event, error) {
 	ev := Event{
 		Voice:    voice,
 		Beat:     stepBeat(col),
-		Velocity: clampStepVelocity(voice, v),
+		Velocity: clampStepVelocity(voice, voice.ScaledPadVelocity(v)),
 	}
 	added := pattern.ToggleEvent(ev)
 	if !added {

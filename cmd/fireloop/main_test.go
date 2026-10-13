@@ -621,3 +621,74 @@ func TestLoadKitCarriesValidationFailures(t *testing.T) {
 		})
 	}
 }
+
+// A velocity range is a promise about what a voice can play, so the kit file
+// is where it is checked: both ends inside the data range, and a floor that
+// sits above its cap refused rather than folded, because folding would hide
+// a kit file that has the two ends backwards.
+func TestValidateDevicesVelocityRanges(t *testing.T) {
+	tests := []struct {
+		name    string
+		kit     string
+		wantErr string
+	}{
+		{
+			name: "no range",
+			kit:  `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v"}]}]`,
+		},
+		{
+			name: "a floor only",
+			kit:  `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMin":32}]}]`,
+		},
+		{
+			name: "a cap only",
+			kit:  `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMax":96}]}]`,
+		},
+		{
+			name: "a floor and a cap",
+			kit:  `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMin":32,"VelocityMax":96}]}]`,
+		},
+		{
+			name: "the whole range",
+			kit:  `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMin":1,"VelocityMax":127}]}]`,
+		},
+		{
+			name:    "a floor below zero",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMin":-1}]}]`,
+			wantErr: "invalid VelocityMin -1",
+		},
+		{
+			name:    "a floor above the top",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMin":128}]}]`,
+			wantErr: "invalid VelocityMin 128",
+		},
+		{
+			name:    "a cap below zero",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMax":-1}]}]`,
+			wantErr: "invalid VelocityMax -1",
+		},
+		{
+			name:    "a cap above the top",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMax":128}]}]`,
+			wantErr: "invalid VelocityMax 128",
+		},
+		{
+			name:    "a floor above its cap",
+			kit:     `[{"Name":"x","MidiPort":"p","Channel":1,"Voices":[{"Name":"v","VelocityMin":96,"VelocityMax":32}]}]`,
+			wantErr: "VelocityMin 96 above VelocityMax 32",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKitFile(t, dir, "kit.json", tt.kit)
+			devices, err := loadKit([]string{filepath.Join(dir, "kit.json")})
+			require.NoError(t, err, "the file should be readable even when the kit is not usable")
+			if tt.wantErr == "" {
+				require.NoError(t, validateDevices(devices))
+				return
+			}
+			require.ErrorContains(t, validateDevices(devices), tt.wantErr)
+		})
+	}
+}

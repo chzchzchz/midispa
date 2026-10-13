@@ -1019,3 +1019,45 @@ func TestStateOmitsUntouchedPatternsButKeepsShortenedOnes(t *testing.T) {
 	// business, and the file does not carry it.
 	require.NotEqualf(t, shortened, loaded.selPatIdx, "the selection should be left where it was")
 }
+
+// A session saved against a rangeless kit may carry velocities a ranged kit of
+// the same shape cannot play. The load folds them into the voice's range and
+// says so in the log, rather than refusing a set that is mostly fine.
+func TestStateLoadClampsAVelocityOutsideTheVoiceRange(t *testing.T) {
+	kit := trackWindowKit(2, 0)
+	kit.voices[0].VelocityMin, kit.voices[0].VelocityMax = 32, 96
+	capture := useCaptureLog(t)
+	bank, report, err := loadCrafted(t, stateFile{
+		App:        stateApp,
+		Version:    stateVersion,
+		VoiceCount: 2,
+		Pages: []statePage{{
+			Index: 1,
+			Patterns: []statePattern{{
+				Index: 1,
+				Events: []stateEvent{
+					{Voice: 0, Step: 0, Velocity: 127},
+					{Voice: 0, Step: 1, Velocity: 10},
+					{Voice: 0, Step: 2, Velocity: 64},
+				},
+			}},
+		}},
+	}, kit)
+	require.NoError(t, err)
+	pattern := bank.Patterns[1]
+	for _, tt := range []struct {
+		step int
+		want int
+	}{
+		{step: 0, want: 96},
+		{step: 1, want: 32},
+		{step: 2, want: 64},
+	} {
+		event, ok := pattern.EventAtStep(tt.step, kit.voices[0])
+		require.Truef(t, ok, "the event on step %d did not survive", tt.step)
+		require.Equalf(t, tt.want, event.Velocity, "the velocity on step %d", tt.step)
+	}
+	require.Zero(t, report.Dropped, "a velocity outside the range is folded, not dropped")
+	require.Contains(t, strings.Join(capture.messages(), "\n"),
+		"state event velocity outside voice range")
+}

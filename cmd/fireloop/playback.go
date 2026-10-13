@@ -247,7 +247,10 @@ func (p *Playback) playChromaticEvent(aseq alsa.EventWriter, event Event) error 
 	if previous, hasPrevious := p.active[event.Voice]; hasPrevious {
 		previousNote = &previous
 	}
-	messages = chromaticOutboundMessages(previousNote, current, event.Velocity)
+	// A session written before the kit gained a range can hold a velocity the
+	// voice cannot play, so the transition is clamped into the voice's range
+	// before it reaches the wire; the log below keeps reporting the stored value.
+	messages = chromaticOutboundMessages(previousNote, current, clampStepVelocity(event.Voice, event.Velocity))
 	// The sounding note is recorded before anything is written. A write that fails part
 	// way through would otherwise leave a note on with nothing tracking it to release.
 	if p.active == nil {

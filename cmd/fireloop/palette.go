@@ -234,11 +234,12 @@ func (p *PatternBank) removeNoteAtStep(pattern *Pattern, voice *Voice, step int,
 }
 
 // placeNoteOnStep writes a pitch onto a step and repaints. How hard the pad was pressed is
-// the step's dynamics, whether the note is new or its pitch is being changed, and the step
-// is auditioned so the user hears the pitch they just picked. The Volume encoder still
-// adjusts the value afterwards.
+// the step's dynamics, scaled into the voice's range so a soft press on a ranged voice stays
+// soft relative to what it can play, whether the note is new or its pitch is being changed,
+// and the step is auditioned so the user hears the pitch they just picked. The Volume encoder
+// still adjusts the value afterwards.
 func (p *PatternBank) placeNoteOnStep(aseq alsa.EventWriter, pattern *Pattern, voice *Voice, step, note, pressed int) error {
-	event, ok := pattern.SetChromaticNote(step, voice, note, clampMidiDataValue(pressed))
+	event, ok := pattern.SetChromaticNote(step, voice, note, voice.ScaledPadVelocity(pressed))
 	if !ok {
 		return nil
 	}
@@ -335,13 +336,27 @@ func chromaticPaletteColor(note int) [3]int {
 	return Dim(oledColorTable[chromaticColorIndex(note)], chromaticPaletteDim)
 }
 
-// percussionStepColor is how a percussive step reads on the grid: green at the
-// brightness of the step's velocity, so a hard hit is a bright pad and a soft
-// one is dark. It has no pitch to colour by, so it is held apart from the
-// chromatic colour rule rather than borrowing one, which is what tells the two
-// kinds of step apart at a glance.
-func percussionStepColor(velocity int) [3]int {
-	return [3]int{0, clampMidiDataValue(velocity), 0}
+// percussionStepColor is how a percussive step reads on the grid: green at
+// the brightness of the step's velocity, so a hard hit is a bright pad and a
+// soft one is dark. A voice that declares a range reads its own span as the
+// full brightness, so a soft press on a ranged voice still reaches full dark
+// and a hard one full green; a voice without one keeps the stored velocity as
+// its brightness, which is what a rangeless kit has always shown. It has no
+// pitch to colour by, so it is held apart from the chromatic colour rule
+// rather than borrowing one, which is what tells the two kinds of step apart
+// at a glance.
+func percussionStepColor(voice *Voice, velocity int) [3]int {
+	if voice.VelocityMin == 0 && voice.VelocityMax == 0 {
+		return [3]int{0, clampMidiDataValue(velocity), 0}
+	}
+	floor, ceiling := voice.VelocityBounds()
+	span := ceiling - floor
+	if span <= 0 {
+		// A point range has no dynamics to show; read it as a full hit.
+		return [3]int{0, 127, 0}
+	}
+	brightness := (clampStepVelocity(voice, velocity) - floor) * 127 / span
+	return [3]int{0, brightness, 0}
 }
 
 // stepColor is how a step reads on the grid. A chromatic step carries its pitch,
@@ -349,7 +364,7 @@ func percussionStepColor(velocity int) [3]int {
 // the step's velocity.
 func stepColor(event Event) [3]int {
 	if !event.IsChromatic() {
-		return percussionStepColor(event.Velocity)
+		return percussionStepColor(event.Voice, event.Velocity)
 	}
 	return chromaticPaletteColor(event.ChromaticNote)
 }

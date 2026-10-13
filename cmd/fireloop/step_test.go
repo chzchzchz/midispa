@@ -112,8 +112,8 @@ func TestPercussionPadBrightnessFollowsTheStepVelocity(t *testing.T) {
 	// brightness rather than the cursor's mark.
 	require.NoError(t, bank.setStepCursor(2))
 	require.NoError(t, bank.redrawTrackPads(1))
-	require.Equal(t, percussionStepColor(soft), pads.pad(0, 0), "a soft hit is a dark pad")
-	require.Equal(t, percussionStepColor(hard), pads.pad(1, 0), "a hard hit is a bright pad")
+	require.Equal(t, percussionStepColor(voiceBank.voices[0], soft), pads.pad(0, 0), "a soft hit is a dark pad")
+	require.Equal(t, percussionStepColor(voiceBank.voices[0], hard), pads.pad(1, 0), "a hard hit is a bright pad")
 	require.NotEqual(t, pads.pad(0, 0), pads.pad(1, 0), "hits of different strengths read the same")
 
 	// The knob trims the step under the cursor, and the pad follows the trim.
@@ -122,11 +122,11 @@ func TestPercussionPadBrightnessFollowsTheStepVelocity(t *testing.T) {
 	event, ok := bank.CurrentPattern().EventAtStep(0, voiceBank.voices[0])
 	require.True(t, ok, "the knob removed the step")
 	require.Equal(t, soft-velocityStep, event.Velocity, "the knob did not trim the hit")
-	require.Equal(t, markCursorColor(percussionStepColor(event.Velocity)), pads.pad(0, 0),
+	require.Equal(t, markCursorColor(percussionStepColor(voiceBank.voices[0], event.Velocity)), pads.pad(0, 0),
 		"the pad kept the hit's brightness after the trim")
-	require.NotEqual(t, markCursorColor(percussionStepColor(soft)), pads.pad(0, 0),
+	require.NotEqual(t, markCursorColor(percussionStepColor(voiceBank.voices[0], soft)), pads.pad(0, 0),
 		"the pad did not dim after the trim")
-	require.Equal(t, percussionStepColor(hard), pads.pad(1, 0),
+	require.Equal(t, percussionStepColor(voiceBank.voices[0], hard), pads.pad(1, 0),
 		"the trim dimmed a step it did not touch")
 
 	// A press on an unselected row paints its own pad straight
@@ -135,7 +135,7 @@ func TestPercussionPadBrightnessFollowsTheStepVelocity(t *testing.T) {
 	// by the cursor move, so this is the one press the feedback is
 	// left showing on.
 	require.NoError(t, dispatch(bank, padMessage(54+padColumns, soft)))
-	require.Equal(t, percussionStepColor(soft), pads.pad(0, 1),
+	require.Equal(t, percussionStepColor(voiceBank.voices[0], soft), pads.pad(0, 1),
 		"an unselected row's press did not show its own velocity")
 }
 

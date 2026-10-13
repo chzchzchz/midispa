@@ -524,3 +524,51 @@ func TestPlayheadMarksTiesBothWays(t *testing.T) {
 	require.NotEqual(t, invertColor(chromaticPaletteColor(40)), lowered,
 		"a tie under the playhead is not distinguishable")
 }
+
+// A palette pad press is the dynamics of the note it places, so a ranged
+// chromatic voice takes the press scaled into its range: hardest is the
+// cap, a press softer than the floor lands on the floor.
+func TestPalettePadPressIsScaledIntoTheVoiceRange(t *testing.T) {
+	bank, voice := rangedChromaBank(t)
+	require.NoError(t, bank.SelectTrackRow(1))
+	require.NoError(t, bank.ToggleNoteMode())
+	tests := []struct {
+		step, press, want int
+	}{
+		{step: 0, press: midiNoteMax, want: 96},
+		{step: 1, press: 1, want: 32},
+	}
+	for _, tt := range tests {
+		require.NoErrorf(t, bank.setStepCursor(tt.step), "moving to step %d", tt.step)
+		require.NoErrorf(t, bank.handleNoteEditPad(nil, 0, 1, tt.press, false, false),
+			"a press of %d", tt.press)
+		event, ok := bank.CurrentPattern().EventAtStep(tt.step, voice)
+		require.Truef(t, ok, "the press on step %d placed no note", tt.step)
+		require.Equalf(t, tt.want, event.Velocity, "a press of %d", tt.press)
+	}
+}
+
+// The brightness of a percussive step reads the step's velocity across the
+// voice's declared range, so a soft hit on a ranged voice still reaches full
+// dark and a hard one full green. A voice without a range keeps the stored
+// velocity as its brightness, which is what a rangeless kit has always shown.
+func TestPercussionBrightnessIsNormalizedAcrossTheDeclaredRange(t *testing.T) {
+	ranged := trackWindowKit(8, -1).voices[0]
+	ranged.VelocityMin, ranged.VelocityMax = 32, 96
+	plain := trackWindowKit(8, -1).voices[0]
+
+	tests := []struct {
+		stored int
+		want   [3]int
+	}{
+		{stored: 32, want: [3]int{0, 0, 0}},
+		{stored: 64, want: [3]int{0, 63, 0}},
+		{stored: 96, want: [3]int{0, 127, 0}},
+	}
+	for _, tt := range tests {
+		require.Equalf(t, tt.want, percussionStepColor(ranged, tt.stored),
+			"a stored velocity of %d", tt.stored)
+	}
+	require.Equal(t, [3]int{0, 64, 0}, percussionStepColor(plain, 64),
+		"a rangeless voice should keep the raw velocity as brightness")
+}

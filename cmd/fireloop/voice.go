@@ -9,6 +9,12 @@ type Voice struct {
 	// channel. The file is read as a Standard MIDI File, or as a raw MIDI
 	// stream when it is not one.
 	Patch string
+	// VelocityMin and VelocityMax bound the velocities this voice plays,
+	// written in the kit file as bare field names the way the rest of the
+	// voice is. Zero means unset: no floor beyond the note-off rule and no
+	// cap, so the voice plays the whole data range.
+	VelocityMin int
+	VelocityMax int
 
 	device *Device // backpointer
 }
@@ -24,6 +30,59 @@ func (v *Voice) PercussionNote() (int, bool) {
 		return 0, false
 	}
 	return *v.Note, true
+}
+
+// VelocityBounds resolves the voice's effective velocity range. A zero
+// VelocityMax means no cap; a zero VelocityMin means no floor beyond the
+// note-off rule, which keeps any voice off the note-off at velocity zero: a
+// note-on with velocity zero is a note-off on the wire, for a drum as for a
+// synth.
+func (v *Voice) VelocityBounds() (int, int) {
+	floor := max(clampMidiDataValue(v.VelocityMin), minStepVelocity)
+	ceiling := midiNoteMax
+	if v.VelocityMax > 0 {
+		ceiling = clampMidiDataValue(v.VelocityMax)
+	}
+	if floor > ceiling {
+		// Validation refuses an inverted range at kit load, so this only
+		// guards a hand-built bank: folding rather than refusing keeps a
+		// clamp from preferring a floor the voice cannot reach.
+		floor = ceiling
+	}
+	return floor, ceiling
+}
+
+// ScaledPadVelocity maps a pad press onto the voice's range, so a soft press
+// on a ranged voice stays soft relative to what that instrument can play. Pure
+// integer arithmetic with truncating division: the fastest form, and exact at
+// both endpoints, a press of 127 landing on the cap and a press of zero on
+// the floor. With no declared range the map is the identity for every press a
+// pad can send, which is what keeps a kit without ranges behaving exactly as
+// before.
+func (v *Voice) ScaledPadVelocity(padVelocity int) int {
+	floor, ceiling := v.VelocityBounds()
+	return floor + (ceiling-floor)*clampMidiDataValue(padVelocity)/midiNoteMax
+}
+
+// AbsolutePadVelocity is the inverse of ScaledPadVelocity: the absolute MIDI
+// velocity that scales to the given one. Ceiling division makes the round trip
+// exact, so a knob carry never stalls on a narrow range. Only the chromatic
+// knob's carry is absolute, so only it calls this. A point range returns zero:
+// every absolute lands on the one velocity anyway, and zero keeps the carry at
+// the bottom of the scale.
+func (v *Voice) AbsolutePadVelocity(velocity int) int {
+	floor, ceiling := v.VelocityBounds()
+	span := ceiling - floor
+	if span <= 0 {
+		return 0
+	}
+	return ((clampStepVelocity(v, velocity)-floor)*midiNoteMax + span - 1) / span
+}
+
+// clampVelocity keeps a velocity inside the voice's bounds.
+func (v *Voice) clampVelocity(velocity int) int {
+	floor, ceiling := v.VelocityBounds()
+	return min(max(velocity, floor), ceiling)
 }
 
 // resolveChannel centralizes the voice-over-device precedence used by validation and playback.

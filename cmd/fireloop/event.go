@@ -63,20 +63,23 @@ func clampMidiDataValue(value int) int {
 	return min(max(value, 0), midi.DataMax)
 }
 
-// minPercussionVelocity is how quiet a percussive step may be turned down. Velocity zero is
+// minStepVelocity is how quiet any step may be turned down. Velocity zero is
 // not a silent note but a note-off on the wire, so a step allowed to reach it would stop
 // sounding altogether while the readout still claimed a velocity, and a note that never
-// starts cannot be softened any further.
-const minPercussionVelocity = 1
+// starts cannot be softened any further. The rule holds for chromatic voices too: their
+// releases are sent as explicit note-offs, so a stored zero would be a silent note-on
+// rather than a release.
+const minStepVelocity = 1
 
 // clampStepVelocity keeps a velocity inside the range its voice can send: the MIDI data
-// range for every voice, and never zero for a percussive one.
+// range for every voice, and never zero, because a note-on with velocity zero is a
+// note-off on the wire for a drum as much as for a synth.
 func clampStepVelocity(voice *Voice, velocity int) int {
 	velocity = clampMidiDataValue(velocity)
-	if voice != nil && !voice.IsChromatic() {
-		return max(velocity, minPercussionVelocity)
+	if voice == nil {
+		return velocity
 	}
-	return velocity
+	return voice.clampVelocity(velocity)
 }
 
 // NoteOnMidi sends the velocity the event carries, so a percussive step sounds with the
