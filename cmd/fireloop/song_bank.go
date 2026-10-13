@@ -287,8 +287,7 @@ func (s *SongBank) DrawPadMeasures() error {
 	start, _ := s.measureWindow()
 	pads := make([]akai.Pad, measureViewSize)
 	for i := range pads {
-		col := i%4 + 4*(i/16)
-		row := (i / 4) % 4
+		col, row := measurePad(i)
 		color := oledBlack
 		if pattern := song.GetPattern(start + i); pattern != nil {
 			color = dimColor(p2c[pattern])

@@ -104,21 +104,39 @@ func (sb *SongBank) ScrollMeasures(delta int) error {
 	return sb.printView()
 }
 
+// measurePad is the pad the measure at offset local of the window sits on,
+// and measureAt is the offset of the measure the pad at (x, y) shows: the
+// two are inverses. The measure area is three 4x4 banks, each filled left
+// to right and top to bottom, so a pad's column counts banks of sixteen
+// measures and its row counts groups of four. Both directions live beside
+// each other so a pad press and the pad that lights for a measure cannot
+// drift apart, which TestMeasurePadPositionInvertsMeasureIndex pins.
+func measurePad(local int) (int, int) {
+	return (local % 4) + 4*(local/16), (local / 4) % 4
+}
+
+func measureAt(x, y int) int {
+	return y*4 + x%4 + 16*(x/4)
+}
+
+// measureIndex reads a pad press back to the measure it addresses.
 func (sb *SongBank) measureIndex(x, y int) (int, bool) {
 	if x < 0 || x >= 12 || y < 0 || y >= 4 {
 		return 0, false
 	}
 	start, _ := sb.measureWindow()
-	return start + (y * 4) + (x % 4) + (16 * (x / 4)), true
+	return start + measureAt(x, y), true
 }
 
+// measurePadPosition is the pad a measure is drawn on, which is the pad a
+// press edits that measure with.
 func (sb *SongBank) measurePadPosition(measure int) (int, int, bool) {
 	start, end := sb.measureWindow()
 	if measure < start || measure > end {
 		return 0, 0, false
 	}
-	local := measure - start
-	return (local % 4) + 4*(local/16), (local / 16) % 4, true
+	x, y := measurePad(measure - start)
+	return x, y, true
 }
 
 func (sb *SongBank) printView() error {

@@ -30,6 +30,16 @@ func arrangementNote(note int) alsa.SeqEvent {
 	return alsa.SeqEvent{Data: []byte{midi.MakeNoteOn(0), byte(note), 1}}
 }
 
+// fillMeasures places a distinct pattern in each of the first count
+// measures, so a test can tell by colour which measure a pad is showing.
+func fillMeasures(songBank *SongBank, patternBank *PatternBank, count int) {
+	for measure := range count {
+		pattern := &Pattern{}
+		patternBank.Patterns[measure+1] = pattern
+		songBank.CurrentSong().SetPattern(pattern, measure)
+	}
+}
+
 func TestArrangementPatternViewport(t *testing.T) {
 	songBank, patternBank := newArrangementTest(t)
 	for index := 1; index <= 40; index++ {
@@ -260,4 +270,69 @@ func TestSongPatternPadsKeepTheSongPlaying(t *testing.T) {
 	writer.waitForEvents(t, 12)
 	require.NoError(t, controller.stopPlayback())
 	require.Nil(t, controller.playback, "stopping left the sequencer armed")
+}
+
+// The pad a measure is drawn on has to be the pad a press edits it with:
+// measureIndex reads a press back to a measure, so measurePadPosition has to
+// return that same pad for every measure the window holds. The window moves in
+// pages, so the round trip is checked at the top of the song, one page in, and
+// at the end, where the clamp keeps the last measures reachable.
+func TestMeasurePadPositionInvertsMeasureIndex(t *testing.T) {
+	songBank, _ := newArrangementTest(t)
+	for _, windowStart := range []int{0, measurePageSize, maxMeasureIndex - measureViewSize + 1} {
+		songBank.measureStart = windowStart
+		start, end := songBank.measureWindow()
+		for measure := start; measure <= end; measure++ {
+			x, y, ok := songBank.measurePadPosition(measure)
+			require.Truef(t, ok, "measure %d in the window should sit on a pad", measure)
+			idx, ok := songBank.measureIndex(x, y)
+			require.True(t, ok)
+			require.Equalf(t, measure, idx, "pad (%d,%d) should address the measure it shows", x, y)
+		}
+	}
+}
+
+// The playhead lights the measure it reached at full brightness and the measure
+// it left dimmed, each on the pad that measure is drawn on. Five measures hold
+// one pattern each here: the first four sit across the top row and the fifth
+// below the first, because a bank of sixteen measures fills its four columns
+// before it fills a row.
+func TestToggleMeasureBrightnessLightsTheMeasureItReached(t *testing.T) {
+	songBank, patternBank := newArrangementTest(t)
+	recorder := usePadRecorder(t, &songBank.pads)
+	fillMeasures(songBank, patternBank, 5)
+
+	// The playhead crosses from the fourth measure to the fifth.
+	require.NoError(t, songBank.ToggleMeasureBrightness(3, 4))
+	require.Equal(t, dimColor(patternColor(4)), recorder.pad(3, 0),
+		"the measure left is dimmed on its own pad")
+	require.Equal(t, patternColor(5), recorder.pad(0, 1),
+		"the measure reached lights bright on its own pad")
+
+	// A measure outside the window is playing nowhere the view shows.
+	require.NoError(t, songBank.ToggleMeasureBrightness(measureViewSize, measureViewSize+1))
+	require.Equal(t, patternColor(5), recorder.pad(0, 1),
+		"a measure past the window lights no pad")
+}
+
+// The arrangement view draws its whole window on the pads measureIndex reads a
+// press from. The corners and the bank boundaries pin the fill order the view
+// documents: three banks of sixteen measures, each filled left to right and top
+// to bottom, so the fifth measure sits below the first rather than beside it.
+func TestDrawPadMeasuresFillsEachBankLeftToRight(t *testing.T) {
+	songBank, patternBank := newArrangementTest(t)
+	recorder := usePadRecorder(t, &songBank.pads)
+	fillMeasures(songBank, patternBank, measureViewSize)
+	require.NoError(t, songBank.DrawPadMeasures())
+	for _, corner := range []struct {
+		measure int
+		pad     [2]int
+	}{
+		{0, [2]int{0, 0}}, {3, [2]int{3, 0}}, {4, [2]int{0, 1}}, {15, [2]int{3, 3}},
+		{16, [2]int{4, 0}}, {31, [2]int{7, 3}}, {32, [2]int{8, 0}}, {47, [2]int{11, 3}},
+	} {
+		require.Equalf(t, dimColor(patternColor(corner.measure+1)), recorder.pad(corner.pad[0], corner.pad[1]),
+			"measure %d should be drawn on pad (%d,%d)", corner.measure+1, corner.pad[0], corner.pad[1])
+	}
+	require.Equal(t, [3]int{}, recorder.pad(12, 0), "the measure area ends at the twelfth column")
 }
