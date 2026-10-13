@@ -322,7 +322,7 @@ Only song slot 1 is reachable from the controls today; the display names the slo
 
 #### Arranging workflow
 
-1. Write and check your patterns in pattern mode. The Play button loops the selected pattern on its own.
+1. Write and check your patterns in pattern mode. The Play button loops the selected pattern, alongside whatever the other enabled pages play.
 2. Press Pattern/Song to enter song mode. The pattern window opens on the pattern that was selected, and its pattern pad is already lit.
 3. Choose the pattern for a measure with the pattern pads, then place it with measure pads. To repeat a pattern, leave the selection alone and fill the following measures.
 4. Use `Shift` plus grid left/right to move in steps of four measures when filling in a dense arrangement.
@@ -358,7 +358,7 @@ A jump commits the live banks into the page being left and restores the target p
 
 #### Playing several pages
 
-In song mode, Play plays every enabled page's song at the current page's selected song index, all starting on the same beat. The current page's session draws the visible arrangement; every other enabled page plays its own song with nothing drawn. A page with no song at that index plays silence, and a disabled page plays nothing. The Play press enables the current page before building the set, so the page on screen always belongs in the mix, and `Shift` plus a measure pad seeks every playing page to that measure, which keeps the pages in step.
+Play starts every enabled page's playback, whatever view that page was left on: a page left on the pattern view plays its selected pattern, a page left on the arrangement plays its selected song, all starting on the same beat. The current page's session draws the visible view; every other enabled page plays what its own view points at with nothing drawn, from its own selection rather than the current page's. A page with no song at its own selected index, or an empty pattern, plays silence, and a disabled page plays nothing. The Play press enables the current page before building the set, so the page on screen always belongs in the mix, and a second Play press while a set runs changes nothing. `Shift` plus a measure pad seeks every playing page to that measure, which keeps the pages in step; a page left on the pattern view is carried back to its own start instead, because its source answers only beat zero. Switching the view stops the set, and Play is not bound in page mode.
 
 #### Pages and the session file
 

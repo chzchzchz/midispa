@@ -325,8 +325,10 @@ func TestShiftPadDeletesPage(t *testing.T) {
 	require.Equal(t, 1, controller.pageIdx)
 }
 
-// A seek lands every installed session on the same beat, so all the pages a
-// set plays stay in sync after a jump within the song.
+// A seek lands every installed session where its own source sends it: the
+// song-mode pages of a set stay in sync after a jump within the song, while
+// a page left on the pattern view is carried back to its own start, its
+// source answering only beat zero.
 func TestSeekAppliesToAllPages(t *testing.T) {
 	controller, _, _ := usePageController(t)
 	bank := controller.patbank
@@ -335,38 +337,50 @@ func TestSeekAppliesToAllPages(t *testing.T) {
 	// the test allows itself.
 	setBPM(300)
 
-	// Two pages, each with a two-measure song of its own at the same index.
+	// Page 1, on the arrangement: a two-measure song holding one note.
 	first := bank.CurrentPattern()
 	first.SetChromaticNote(0, bank.vb.voices[2], 60, 100)
 	songs.CurrentSong().SetPattern(first, 0)
 	songs.CurrentSong().SetPattern(first, 1)
 
+	// Page 2 is left on the pattern view: its session plays its pattern,
+	// whose source answers only beat zero.
 	doubleTapPage(t, controller, 2) // create page 2 and jump to it
 	second := bank.CurrentPattern()
 	second.SetChromaticNote(0, bank.vb.voices[2], 62, 100)
-	songs.CurrentSong().SetPattern(second, 0)
-	songs.CurrentSong().SetPattern(second, 1)
+	doubleTapPage(t, controller, 1) // back to page 1, on the arrangement
 
-	doubleTapPage(t, controller, 1) // back to page 1
+	// Page 3, on the arrangement: another two-measure song.
+	doubleTapPage(t, controller, 3) // create page 3 and jump to it
+	pressButton(t, bank, NotePatternSong)
+	require.Equal(t, songView, controller.mode)
+	third := bank.CurrentPattern()
+	third.SetChromaticNote(0, bank.vb.voices[2], 64, 100)
+	songs.CurrentSong().SetPattern(third, 0)
+	songs.CurrentSong().SetPattern(third, 1)
+	doubleTapPage(t, controller, 1) // back to page 1, on the arrangement
 	pressButton(t, bank, NotePatternSong)
 	require.Equal(t, songView, controller.mode)
 
 	writer := &captureMidiWriter{}
 	require.NoError(t, controller.Handle(writer, padMessage(NotePlay, 100)))
 	require.True(t, controller.playing())
-	require.Len(t, controller.extra, 1, "one other enabled page should play")
+	require.Len(t, controller.extra, 2, "pages 2 and 3 should play beside page 1")
 
 	// Shift plus a measure pad seeks to that measure: measure 1 starts at beat 4.
 	pressButton(t, bank, NoteShift)
 	pressButton(t, bank, pagePadNote(1)) // the measure pad at (1, 0)
 	pressButton(t, bank, NoteShift)
 
+	// extraSessions walks the table in index order, so the extras are page
+	// 2, left on the pattern view, then page 3, left on the arrangement.
+	wantBeats := []float32{0, 4}
 	waitFor(t, "every session to seek", func() bool {
 		if beat, _, _ := controller.playback.playback.position(); beat != 4 {
 			return false
 		}
-		for _, session := range controller.extra {
-			if beat, _, _ := session.playback.position(); beat != 4 {
+		for i, session := range controller.extra {
+			if beat, _, _ := session.playback.position(); beat != wantBeats[i] {
 				return false
 			}
 		}
@@ -375,10 +389,12 @@ func TestSeekAppliesToAllPages(t *testing.T) {
 	require.NoError(t, controller.stopPlayback())
 }
 
-// In song mode Play plays every enabled page's song at the current page's
-// selected index, all starting on the same beat. A page with no song at that
-// index plays silence, a disabled page plays nothing, and a Play press enables
-// the current page before building the set.
+// In song mode Play plays every enabled page's own selection,
+// all starting on the same beat: a page plays the song its
+// arrangement has selected, not the current page's. A page with
+// no song at its own selected index plays silence, a disabled
+// page plays nothing, and a Play press enables the current page
+// before building the set.
 func TestSongModePlaysEnabledPages(t *testing.T) {
 	controller, _, _ := usePageController(t)
 	bank := controller.patbank
@@ -390,17 +406,27 @@ func TestSongModePlaysEnabledPages(t *testing.T) {
 	pattern.SetChromaticNote(0, bank.vb.voices[2], 60, 100)
 	songs.CurrentSong().SetPattern(pattern, 0)
 
-	// Page 2: the same song index, its own pattern holding another note.
+	// Page 2: its own selection, song 2, holding another note. The
+	// page is left on the arrangement, which is what makes the song
+	// its playback's source, and the pattern bank jumps with the
+	// song so song 2's measure is a pattern of its own.
 	doubleTapPage(t, controller, 2) // create page 2 and jump to it
 	require.Equal(t, 2, controller.pageIdx)
+	pressButton(t, bank, NotePatternSong)
+	require.Equal(t, songView, controller.mode)
+	require.NoError(t, songs.Jump(1))
+	require.NoError(t, bank.Jump(1))
 	second := bank.CurrentPattern()
 	second.SetChromaticNote(0, bank.vb.voices[2], 62, 100)
 	songs.CurrentSong().SetPattern(second, 0)
 
-	// Page 3: enabled, but with no song at the index the set plays.
+	// Page 3: enabled and left on the arrangement, but with no song
+	// at its own selected index, so it plays silence.
 	doubleTapPage(t, controller, 1) // back to page 1
 	doubleTapPage(t, controller, 3) // create page 3 and jump to it
 	require.Equal(t, 3, controller.pageIdx)
+	pressButton(t, bank, NotePatternSong)
+	require.Equal(t, songView, controller.mode)
 	delete(songs.Songs, songs.selSongIdx)
 
 	// Page 4: its own note, disabled so it must not sound.
@@ -426,7 +452,7 @@ func TestSongModePlaysEnabledPages(t *testing.T) {
 
 	events := capture.waitForEvents(t, 5)
 	require.True(t, carriesNoteOn(events, 60), "page 1's note should sound")
-	require.True(t, carriesNoteOn(events, 62), "page 2's note should sound")
+	require.True(t, carriesNoteOn(events, 62), "page 2's own song should sound")
 	require.False(t, carriesNoteOn(events, 64), "a disabled page's note should not sound")
 	require.NoError(t, controller.stopPlayback())
 	require.Empty(t, instrument.stillSounding(), "stopping should release every note")
@@ -442,6 +468,118 @@ func TestSongModePlaysEnabledPages(t *testing.T) {
 	require.True(t, controller.pages[1].on, "Play should enable the current page")
 	events = capture.waitForEvents(t, before+5)[before:]
 	require.True(t, carriesNoteOn(events, 60), "the enabled page's note should sound")
+	require.NoError(t, controller.stopPlayback())
+	require.Empty(t, instrument.stillSounding(), "stopping should release every note")
+}
+
+// Play starts a set over every enabled page, whatever view that
+// page was left on: the current page's session plays the view on
+// screen and draws it, every other enabled page plays what its own
+// view points at, and a disabled page plays nothing. A Play press
+// while a set runs changes nothing.
+func TestSetPlaybackPlaysEveryPage(t *testing.T) {
+	controller, _, _ := usePageController(t)
+	bank := controller.patbank
+	songs := controller.songbank
+	usePageClock(t)
+
+	// Page 1 stays on the pattern view: its session plays its
+	// selected pattern and draws the visible grid.
+	first := bank.CurrentPattern()
+	first.SetChromaticNote(0, bank.vb.voices[2], 60, 100)
+
+	// Page 2 is left on the arrangement, with song 2 selected and
+	// its measure 0 a pattern of its own.
+	doubleTapPage(t, controller, 2) // create page 2 and jump to it
+	pressButton(t, bank, NotePatternSong)
+	require.Equal(t, songView, controller.mode)
+	require.NoError(t, songs.Jump(1))
+	require.NoError(t, bank.Jump(1))
+	second := bank.CurrentPattern()
+	second.SetChromaticNote(0, bank.vb.voices[2], 62, 100)
+	songs.CurrentSong().SetPattern(second, 0)
+
+	// Page 3 is disabled before the set, so it plays nothing.
+	doubleTapPage(t, controller, 1) // back to page 1
+	doubleTapPage(t, controller, 3) // create page 3 and jump to it
+	doubleTapPage(t, controller, 1) // back to page 1
+	pressButton(t, bank, NoteBrowser)
+	pressButton(t, bank, pagePadNote(3)) // disable page 3
+	require.False(t, controller.pages[3].on)
+	pressButton(t, bank, NoteBrowser)
+	require.Equal(t, patternView, controller.mode)
+
+	instrument := newSoundingInstrument()
+	capture := &captureMidiWriter{}
+	fanout := &fanoutWriter{writers: []sequencerWriter{capture, instrument}}
+	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
+	require.True(t, controller.playing())
+	require.Len(t, controller.extra, 1, "page 2 should play beside page 1")
+
+	// Two sessions, each writing a MIDI Start before its note.
+	events := capture.waitForEvents(t, 4)
+	require.True(t, carriesNoteOn(events, 60), "page 1's pattern should sound")
+	require.True(t, carriesNoteOn(events, 62), "page 2's song should sound")
+
+	// A Play press while a set runs is a no-op: the same sessions
+	// stay installed and the wire stays quiet.
+	primary, extras := controller.playback, controller.extra
+	before := len(capture.snapshot())
+	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
+	require.Same(t, primary, controller.playback)
+	require.Equal(t, extras, controller.extra)
+	require.Len(t, capture.snapshot(), before)
+
+	require.NoError(t, controller.stopPlayback())
+	require.Empty(t, instrument.stillSounding(), "stopping should release every note")
+}
+
+// Each page's session plays the page's own selection, not the
+// current page's: page 2 plays the song its arrangement has
+// selected even while page 1 shows another, and the song page 2
+// left behind stays silent.
+func TestSetPlaybackUsesEachPagesOwnSelection(t *testing.T) {
+	controller, _, _ := usePageController(t)
+	bank := controller.patbank
+	songs := controller.songbank
+	usePageClock(t)
+
+	// Page 1, on the arrangement: song 1, its measure 0 holding
+	// one note.
+	pressButton(t, bank, NotePatternSong)
+	require.Equal(t, songView, controller.mode)
+	first := bank.CurrentPattern()
+	first.SetChromaticNote(0, bank.vb.voices[2], 60, 100)
+	songs.CurrentSong().SetPattern(first, 0)
+
+	// Page 2, also on the arrangement: its song 1 holds a decoy
+	// note, then its selection moves to song 2, whose measure 0
+	// holds the note that should sound.
+	doubleTapPage(t, controller, 2) // create page 2 and jump to it
+	pressButton(t, bank, NotePatternSong)
+	require.Equal(t, songView, controller.mode)
+	decoy := bank.CurrentPattern()
+	decoy.SetChromaticNote(0, bank.vb.voices[2], 61, 100)
+	songs.CurrentSong().SetPattern(decoy, 0)
+	require.NoError(t, songs.Jump(1))
+	require.NoError(t, bank.Jump(1))
+	second := bank.CurrentPattern()
+	second.SetChromaticNote(0, bank.vb.voices[2], 62, 100)
+	songs.CurrentSong().SetPattern(second, 0)
+
+	doubleTapPage(t, controller, 1) // back to page 1, on the arrangement
+	instrument := newSoundingInstrument()
+	capture := &captureMidiWriter{}
+	fanout := &fanoutWriter{writers: []sequencerWriter{capture, instrument}}
+	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
+	require.True(t, controller.playing())
+	require.Len(t, controller.extra, 1, "page 2 should play beside page 1")
+
+	events := capture.waitForEvents(t, 4)
+	require.True(t, carriesNoteOn(events, 60), "page 1's song should sound")
+	require.True(t, carriesNoteOn(events, 62), "page 2's own selection should sound")
+	require.False(t, carriesNoteOn(events, 61), "page 2's unselected song should stay silent")
+
 	require.NoError(t, controller.stopPlayback())
 	require.Empty(t, instrument.stillSounding(), "stopping should release every note")
 }

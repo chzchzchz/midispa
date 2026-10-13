@@ -420,38 +420,52 @@ func (c *Controller) processPageEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 	return nil
 }
 
-// startSongPlayback starts a set over every enabled page's
-// song at the current page's selected song index. The Play
-// press first enables the current page, because it is a
-// claim that the page on screen belongs in the mix. The
-// current page's session is the primary and draws the
-// visible arrangement; the other enabled pages play
-// through extraSessions. All the workers launch together,
-// so every page starts on the same beat.
-func (c *Controller) startSongPlayback(aseq sequencerWriter) error {
-	c.currentPage().on = true
-	c.updatePageIndicator()
-	songIdx := c.songbank.selSongIdx
-	c.playback = newPlaybackSession(c.songbank.newPlayback())
-	c.playback.Start(aseq)
-	c.extra = c.extraSessions(aseq, songIdx)
-	// The flag flip shows at once: row 0 carries the page
-	// indicator.
-	return c.songbank.PrintSong()
+// playbackFor builds the playback a Play press starts for a page: the
+// pattern its view points at on the pattern view, the song its view
+// points at on the arrangement. draw is set only for the page on screen,
+// whose playhead and measure the visible view draws.
+func (c *Controller) playbackFor(page *Page, draw bool) *Playback {
+	if page.view == songView {
+		return c.songbank.newPlaybackOf(page.song.Songs, page.song.SelSongIdx, draw)
+	}
+	return c.patbank.newPlaybackOf(page.pattern.Patterns, page.pattern.SelPatIdx, draw)
 }
 
-// extraSessions builds a session for every enabled page
-// but the current one, in index order. Each plays the same
-// song index over its own song map with nothing to draw,
-// because that page is not on screen.
-func (c *Controller) extraSessions(aseq sequencerWriter, songIdx int) []*PlaybackSession {
+// startSetPlayback starts a set over every enabled page, each playing
+// what its own view points at. The Play press first enables the current
+// page, because it is a claim that the page on screen belongs in the
+// mix. The commit that opens it points the current page's memento at
+// the live banks and the live view, so the primary reads the live state
+// through the memento as the same objects; the other enabled pages play
+// from their own mementos through extraSessions. All the workers launch
+// together, so every page starts on the same beat.
+func (c *Controller) startSetPlayback(aseq sequencerWriter) error {
+	page := c.currentPage()
+	page.on = true
+	c.updatePageIndicator()
+	c.saveCurrentPage()
+	c.playback = newPlaybackSession(c.playbackFor(page, true))
+	c.playback.Start(aseq)
+	c.extra = c.extraSessions(aseq)
+	// The flag flip shows at once, but only on the arrangement: row 0
+	// belongs to the pattern header on the pattern view.
+	if c.mode == songView {
+		return c.songbank.PrintSong()
+	}
+	return nil
+}
+
+// extraSessions builds a session for every enabled page but the current
+// one, in index order. Each plays what its own view points at with
+// nothing to draw, because that page is not on screen.
+func (c *Controller) extraSessions(aseq sequencerWriter) []*PlaybackSession {
 	var sessions []*PlaybackSession
 	for _, idx := range slices.Sorted(maps.Keys(c.pages)) {
 		other := c.pages[idx]
 		if idx == c.pageIdx || !other.on {
 			continue
 		}
-		session := newPlaybackSession(c.songbank.newPlaybackOf(other.song.Songs, songIdx, false))
+		session := newPlaybackSession(c.playbackFor(other, false))
 		session.Start(aseq)
 		sessions = append(sessions, session)
 	}

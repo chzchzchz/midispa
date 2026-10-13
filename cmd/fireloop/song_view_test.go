@@ -255,7 +255,7 @@ func TestSongPatternPadsKeepTheSongPlaying(t *testing.T) {
 	setBPM(300)
 	t.Cleanup(func() { setBPM(previousBPM) })
 	writer := &captureMidiWriter{}
-	require.NoError(t, controller.startSongPlayback(writer))
+	require.NoError(t, controller.startSetPlayback(writer))
 	require.NotNil(t, controller.playback, "the song did not start")
 	writer.waitForEvents(t, 4)
 

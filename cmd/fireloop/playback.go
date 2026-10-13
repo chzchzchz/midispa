@@ -587,20 +587,36 @@ func (p *Playback) patternForBeat(songBeat float32) *Pattern {
 	return p.nextPattern(songBeat)
 }
 
-// newPlayback builds the playback this bank would run: which pattern answers each beat,
-// and how the playhead is drawn as it moves. It starts nothing and claims nothing, because
-// a bank says what it would play and the controller decides that something is. The writer
-// is an interface so a test can drive the real sequencer loop with a stub instead of a
-// port.
+// newPlayback is the pattern bank's own playback: the pattern it is
+// showing, with the playhead drawn as it moves.
 func (pb *PatternBank) newPlayback() *Playback {
+	return pb.newPlaybackOf(pb.Patterns, pb.selPatIdx, true)
+}
+
+// newPlaybackOf builds a playback over any page's patterns, at any pattern
+// index. It starts nothing and claims nothing, because a bank says what it
+// would play and the controller decides that something is. The next closure
+// answers beat zero with the given map's selected pattern and nil elsewhere,
+// which is pattern mode's one-pattern playback, and the drawing closures
+// exist only for the page on screen: every other enabled page plays its own
+// pattern with nothing to draw, because that page is not on screen. A map
+// with no pattern at the index yields a session with no pattern source,
+// which the playback loop plays as silence. The map and the selection are
+// captured rather than read live, which is safe because a selection cannot
+// change while a set runs: a jump or a load stops playback before the
+// selection or the map moves.
+func (pb *PatternBank) newPlaybackOf(patterns map[int]*Pattern, selPatIdx int, draw bool) *Playback {
 	var lastColumn int
 	// Reset to start of pattern.
 	next := func(beat float32) *Pattern {
 		lastColumn = 15
 		if beat == 0 {
-			return pb.CurrentPattern()
+			return patterns[selPatIdx]
 		}
 		return nil
+	}
+	if !draw {
+		return &Playback{nextPattern: next, vb: pb.vb}
 	}
 	// Light up column if new position.
 	update := func(beat float32) error {

@@ -271,7 +271,7 @@ func (c *Controller) processSongEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 	switch int(ev.Data[1]) {
 	case NotePlay:
 		if !c.playing() {
-			return c.startSongPlayback(aseq)
+			return c.startSetPlayback(aseq)
 		}
 	case NoteStop:
 		return c.stopPlayback()
@@ -699,7 +699,7 @@ func (c *Controller) handleTransport(aseq sequencerWriter, note int) error {
 			return c.patbank.pads.SetLed(NoteRecord, LEDOff)
 		}
 		if !c.playing() {
-			c.startPlayback(aseq, c.patbank.newPlayback())
+			return c.startSetPlayback(aseq)
 		}
 		return nil
 	case NoteStop:
