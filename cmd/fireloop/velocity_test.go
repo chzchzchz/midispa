@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// knobTestClock installs a clock the Volume knob's timing is measured
+// knobTestClock installs a clock the knobs' detent timing is measured
 // against, and hands back the function that advances it. A test advances it
 // by hand to land detents on either side of velocityFastWindow without
 // sleeping.
@@ -164,6 +164,30 @@ func TestPercussionVelocityKnobStopsAtOne(t *testing.T) {
 	assertMidiData(t, alsa.SeqEvent{Data: event.NoteOnMidi()}, []byte{midi.MakeNoteOn(0), byte(note), minStepVelocity})
 }
 
+// fastTurnDetents is a turn spelled out detent by detent: the gap each detent arrives
+// after the one before it, and how far that detent counts. A detent inside the fast
+// window counts one more than the last, a detent after a rest starts again at one, and
+// the count caps so a long sweep cannot cross the whole range in one turn. The first
+// detent has nothing before it, so its gap is unused. Both accelerating knobs are driven
+// against it, because both ride the one counter.
+var fastTurnDetents = []struct {
+	gap       time.Duration
+	increment int
+}{
+	{0, 1},
+	{10 * time.Millisecond, 2},
+	{10 * time.Millisecond, 3},
+	{velocityFastWindow + time.Millisecond, 1},
+	{10 * time.Millisecond, 2},
+	{10 * time.Millisecond, 3},
+	{10 * time.Millisecond, 4},
+	{10 * time.Millisecond, 5},
+	{10 * time.Millisecond, 6},
+	{10 * time.Millisecond, 7},
+	{10 * time.Millisecond, 8},
+	{10 * time.Millisecond, 8}, // the cap, and it holds
+}
+
 // A detent counts further the faster the knob turns: detents that arrive
 // inside the fast window stack one more step each, a detent after a rest
 // starts again at one, and the stack caps so a long sweep cannot throw a
@@ -178,29 +202,8 @@ func TestVolumeKnobCountsFasterWhenTurnedFaster(t *testing.T) {
 		event, _ := bank.CurrentPattern().EventAtStep(0, voice)
 		return event.Velocity
 	}
-	// Each detent's gap after the one before it, and how far that detent
-	// counts: a detent inside the fast window counts one more than the
-	// last, and a detent after a rest starts again at one. The first
-	// detent has nothing before it, so its gap is unused.
-	detents := []struct {
-		gap       time.Duration
-		increment int
-	}{
-		{0, 1},
-		{10 * time.Millisecond, 2},
-		{10 * time.Millisecond, 3},
-		{velocityFastWindow + time.Millisecond, 1},
-		{10 * time.Millisecond, 2},
-		{10 * time.Millisecond, 3},
-		{10 * time.Millisecond, 4},
-		{10 * time.Millisecond, 5},
-		{10 * time.Millisecond, 6},
-		{10 * time.Millisecond, 7},
-		{10 * time.Millisecond, 8},
-		{10 * time.Millisecond, 8}, // the cap, and it holds
-	}
 	want := defaultStepVelocity
-	for i, detent := range detents {
+	for i, detent := range fastTurnDetents {
 		advance(detent.gap)
 		require.NoError(t, dispatch(bank, encoderCC(EncoderLeft)))
 		want -= detent.increment * velocityStep

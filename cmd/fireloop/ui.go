@@ -397,6 +397,8 @@ func (c *Controller) handleDeviceControl(aseq sequencerWriter, controller, value
 		return c.patbank.JogSelect(dir)
 	case CCVolume:
 		return c.patbank.AdjustVelocity(aseq, value)
+	case CCPan:
+		return c.patbank.TransposeSelected(aseq, value)
 	}
 	return nil
 }

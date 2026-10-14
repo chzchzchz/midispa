@@ -107,8 +107,7 @@ func (p *PatternBank) ShiftPaletteOctave(detents int) error {
 	if p.readoutIsOwned() {
 		return nil
 	}
-	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() || !p.noteEditActive() {
+	if p.selectedChromaticVoice() == nil || !p.noteEditActive() {
 		return nil
 	}
 	previous := p.paletteOctave
@@ -146,9 +145,9 @@ func (p *PatternBank) drawStepCell(step int) error {
 	if !ok {
 		return nil
 	}
-	voice := p.SelectedVoice()
+	voice := p.selectedChromaticVoice()
 	pattern := p.CurrentPattern()
-	if voice == nil || !voice.IsChromatic() || pattern == nil {
+	if voice == nil || pattern == nil {
 		return nil
 	}
 	color := p.stepCellPaintColor(pattern, voice, step, pattern.tripletGroups(voice))
@@ -185,8 +184,8 @@ func (p *PatternBank) clearStepPlayhead() error {
 // here". How hard a pad was hit sets the note's velocity, so a new step lands with the
 // dynamics that were played and the display reports that same value.
 func (p *PatternBank) handleNoteEditPad(aseq alsa.EventWriter, row, col, pressed int, alt, shift bool) error {
-	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() || !p.noteEditActive() {
+	voice := p.selectedChromaticVoice()
+	if voice == nil || !p.noteEditActive() {
 		return nil
 	}
 	pattern := p.CurrentPattern()
@@ -274,8 +273,8 @@ func (p *PatternBank) stepCellColor(pattern *Pattern, voice *Voice, step int, gr
 
 // The palette uses a stable color per pitch and highlights the current event's pitch.
 func (p *PatternBank) drawNotePalette() error {
-	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() {
+	voice := p.selectedChromaticVoice()
+	if voice == nil {
 		return nil
 	}
 	pads := make([]akai.Pad, 0, chromaticPaletteRows*padColumns)

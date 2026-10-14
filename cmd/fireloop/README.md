@@ -153,6 +153,7 @@ A device or a voice can name a `Patch`: a `.mid` or `.smf` file played to that d
 - Mode on a selected chromatic voice: enter or leave note-edit mode. The pad grid becomes an editor: the first twelve columns are a pitch palette and the rightmost four are a strip of step indicators. Toggling Mode does not stop playback. Note editing follows the selection, so a mute button moves the palette to another voice rather than closing it; press Mode to leave.
 - Volume knob with a selected chromatic voice: each detent moves the knob's own value by one, clamped to 0..127, and writes that value to the selected step, translated into the voice's declared range so a careful detent still moves the stored velocity by one step whatever the range is. The knob is not re-read from the step you select, so its value carries over to the next step. A detent counts further the faster the knob is turned, capped at eight steps a detent, and the step is auditioned once the knob has rested for 20ms rather than on every detent.
 - Volume knob with a selected percussive voice: each detent moves the selected step's velocity by one from the value it already holds, so the knob trims the hit rather than replacing it, and the trim stops at the voice's declared range. Detents count further the faster the knob is turned, and the step is auditioned once the knob has rested for 20ms. See [Percussion dynamics](#percussion-dynamics).
+- Pan knob with a selected chromatic voice: transpose every note the track holds, one semitone a detent, left down and right up, clamped at the ends of the MIDI range so a note at an end stays there. Detents count further the faster the knob is turned, capped at eight semitones, like the Volume knob. The grid re-colours with the new pitches, the readout names the cursor step's new note, and that note is auditioned once the knob has rested for 20ms, so a fast sweep is heard once at the pitch it landed on. In note-edit mode the palette and its step strip re-colour instead of the rows, and the Encoder's octave shift still moves the palette rather than the notes. A percussive track's notes come from its kit voice, so the knob does nothing there.
 - Encoder in note-edit mode: transpose the palette by an octave. Left turns it down, right turns it up, and every palette pad's colour shifts with it, so the octave on screen is visible without reading anything. Only the pitches a pad press can choose change; notes already written into a pattern keep their pitch and their colour. The palette stops at the ends of the MIDI range, two octaves below A1 and three above.
 - Pad in note-edit mode: assign and audition the selected pitch, at the velocity the pad was pressed with, scaled into the voice's declared range. `Alt` plus a pad clears the event at the current step and leaves `Alt` engaged.
 - Two held pads in the selected chromatic row: tie two existing adjacent events when exactly two pads are held. A tie holds the note past its step. Cross-row and three-or-more-pad gestures are ignored.
@@ -241,8 +242,9 @@ A pattern starts with four tracks, one per pad row, and the four pad rows show f
 8. Hold one cell and press another to tie those two steps, which is how a note is held past its step. Both steps need a note and no other note may sit between them; otherwise nothing is tied and the edit stays put.
 9. The palette's first pad means "no note", so pressing it clears the current step. It is A1 until the palette is turned, and moves with the palette afterwards. `Alt` plus any palette pad does the same.
 10. How hard a palette pad is pressed sets the step's velocity, scaled into the voice's declared range, whether the note is new or its pitch is being changed, so what is heard and what is shown agree. The Volume encoder then adjusts it, clamped to the voice's range: one step per detent when the knob turns slowly, and more the faster it turns. The encoder carries its own value rather than re-reading the selected step, so a step picked after you set it takes the encoder's value on the next detent.
-11. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note. A tied step shows the step it is tied to as well, for example `S01 C4@100->04`. A step a group covers carries the group's `x3`, and the cell a group draws shows the notes it belongs to instead of a velocity, for example `S04 x3 01-03`.
-12. Press Mode again to return to step mode.
+11. Turn the pan knob to transpose the whole track: every note moves a semitone a detent, clamped at the ends of the MIDI range, with a fast turn counting further the way the Volume knob's does. The grid re-colours with the new pitches, the readout names the cursor step's new note, and that note is auditioned once the knob rests. This works in step mode and note-edit mode alike, and a pattern left playing hears the new pitches on its next pass.
+12. The status line shows `S<STEP> <NOTE>@<VELOCITY>`, or `S<STEP> --` with no velocity when the step holds no note. A tied step shows the step it is tied to as well, for example `S01 C4@100->04`. A step a group covers carries the group's `x3`, and the cell a group draws shows the notes it belongs to instead of a velocity, for example `S04 x3 01-03`.
+13. Press Mode again to return to step mode.
 
 #### Chromatic note length
 
@@ -387,7 +389,7 @@ Fireloop's controls and fireloop's own MIDI controls arrive over the same wire, 
 | --- | --- | --- |
 | Select encoder | 118 | yes |
 | Volume knob | 16 | yes |
-| pan knob | 17 | sent, not acted on |
+| pan knob | 17 | yes |
 | filter knob | 18 | sent, not acted on |
 | resonance knob | 19 | sent, not acted on |
 

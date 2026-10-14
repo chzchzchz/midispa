@@ -233,6 +233,32 @@ func (p *Pattern) SetVelocity(step int, v *Voice, velocity int) (Event, bool) {
 	return p.events[index], true
 }
 
+// Transpose shifts every note of one chromatic voice by semitones, clamping each note to
+// the MIDI range rather than refusing the turn, and reports how many notes moved, which is
+// what tells a caller whether anything it shows has changed. A note already at a range end
+// stays there. Beats are not touched, so the beat order the lock protects stays valid and
+// no normalize is owed.
+func (p *Pattern) Transpose(v *Voice, semitones int) int {
+	if v == nil || !v.IsChromatic() || semitones == 0 {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	moved := 0
+	for i := range p.events {
+		if p.events[i].Voice != v {
+			continue
+		}
+		note := clampMidiDataValue(p.events[i].ChromaticNote + semitones)
+		if note == p.events[i].ChromaticNote {
+			continue
+		}
+		p.events[i].ChromaticNote = note
+		moved++
+	}
+	return moved
+}
+
 // TieEventsAtSteps links two existing events only when the earlier event's next event is the later one.
 func (p *Pattern) TieEventsAtSteps(firstStep, secondStep int, v *Voice) bool {
 	return p.setTieBetweenSteps(firstStep, secondStep, v, true)

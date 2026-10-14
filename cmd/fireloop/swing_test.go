@@ -184,6 +184,38 @@ func TestDeviceAndSoftwareControlsNeverCross(t *testing.T) {
 	assert.NotEmpty(t, screen.row(readoutRow), "a honoured control change should say what it did")
 }
 
+// The pan knob and the software's swing share their number, CC 17, and the channel is the
+// whole of the separation: the Fire's knob transposes the selected chromatic track, and
+// the same number on the software's channel still moves the swing.
+func TestPanKnobAndSwingShareTheirNumberAcrossChannels(t *testing.T) {
+	const note = 60
+	bank, voice := panBank(t, 0, note)
+
+	require.NoError(t, sendCC(bank, deviceChannel, CCPan, EncoderRight))
+	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+	require.True(t, ok, "the turn lost the note")
+	require.Equal(t, note+1, event.ChromaticNote, "the pan knob should transpose on the device's channel")
+
+	setSwingPct(straightSwingPct)
+	require.NoError(t, sendCC(bank, softwareChannel, CcSwing, 86))
+	assert.InDelta(t, 67.2, currentSwingPct(), 1e-9, "cc 17 should still swing off the device's channel")
+	event, _ = bank.CurrentPattern().EventAtStep(0, voice)
+	require.Equal(t, note+1, event.ChromaticNote, "the software's swing reached the notes")
+}
+
+// The Fire's knobs mean nothing outside the pattern screen, and the pan knob joins that
+// rule: the arrangement has no track selection to transpose.
+func TestPanKnobDoesNothingInSongMode(t *testing.T) {
+	const note = 60
+	bank, voice := panBank(t, 0, note)
+	require.NoError(t, bank.controller.setMode(songView, 0))
+
+	require.NoError(t, sendCC(bank, deviceChannel, CCPan, EncoderRight))
+	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
+	require.True(t, ok, "the turn lost the note")
+	require.Equal(t, note, event.ChromaticNote, "the pan knob transposed from the song view")
+}
+
 // Note 48 is Shift and CC 48 is the tempo's fine half. One switch on the second byte could
 // not tell them apart, which is why control changes are dispatched on the status byte.
 func TestNoteAndControlChangeShareANumber(t *testing.T) {

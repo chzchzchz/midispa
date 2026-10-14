@@ -215,3 +215,105 @@ func TestChromaticPatternEditingAndTieInvariants(t *testing.T) {
 	firstEvent, _ = pattern.EventAtStep(0, voice)
 	require.False(t, firstEvent.Tie, "shortening left a tie crossing the new end")
 }
+
+// Transpose moves every note of the one voice it is aimed at and leaves every other
+// event alone, so a track can be transposed while the rows around it hold what they held.
+func TestTransposeMovesOneVoicesNotes(t *testing.T) {
+	drum := 36
+	lead, _ := chromaticTestVoice(t, nil)
+	snare, _ := chromaticTestVoice(t, &drum)
+
+	pattern := &Pattern{}
+	pattern.SetChromaticNote(0, lead, 60, 90)
+	pattern.SetChromaticNote(2, lead, 64, 91)
+	require.True(t, pattern.ToggleEvent(Event{Voice: snare, Beat: stepBeat(1), Velocity: 92}),
+		"the snare event was not placed")
+
+	require.Equal(t, 2, pattern.Transpose(lead, 2), "both notes of the voice should count as moved")
+	for _, tt := range []struct{ step, want int }{
+		{0, 62}, {2, 66},
+	} {
+		event, ok := pattern.EventAtStep(tt.step, lead)
+		require.Truef(t, ok, "step %d lost its note", tt.step)
+		require.Equalf(t, tt.want, event.ChromaticNote, "the note on step %d", tt.step)
+	}
+	snareEvent, ok := pattern.EventAtStep(1, snare)
+	require.True(t, ok, "the transpose removed the snare's event")
+	require.Equal(t, 92, snareEvent.Velocity, "the transpose touched another voice's event")
+}
+
+// Clamping is per note: the codebase's rule is clamped rather than refused, so a pattern
+// holding notes at both ends keeps its end notes through a sweep that runs past them.
+func TestTransposeClampsEachNoteAtTheMIDIEnds(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	pattern := &Pattern{}
+	pattern.SetChromaticNote(0, voice, 1, 90)
+	pattern.SetChromaticNote(1, voice, 127, 90)
+
+	// The floor: the bottom note moves down to zero, and a further detent leaves it there.
+	require.Equal(t, 2, pattern.Transpose(voice, -1))
+	require.Equal(t, 1, pattern.Transpose(voice, -1))
+	event, _ := pattern.EventAtStep(0, voice)
+	require.Equal(t, 0, event.ChromaticNote, "a note at the floor should hold")
+
+	// The ceiling: the top note absorbs whatever the sweep asks of it.
+	require.Equal(t, 2, pattern.Transpose(voice, 5))
+	require.Equal(t, 1, pattern.Transpose(voice, 5))
+	event, _ = pattern.EventAtStep(1, voice)
+	require.Equal(t, 127, event.ChromaticNote, "a note at the ceiling should hold")
+	event, _ = pattern.EventAtStep(0, voice)
+	require.Equal(t, 10, event.ChromaticNote)
+}
+
+// A turn with nothing it can move reports zero, which is the count a caller gates its
+// repaint and its audition on: an empty pattern, a percussive voice, a nil voice, and
+// no shift at all.
+func TestTransposeReportsZeroForNothingToMove(t *testing.T) {
+	drum := 36
+	lead, _ := chromaticTestVoice(t, nil)
+	snare, _ := chromaticTestVoice(t, &drum)
+	leadNotes := &Pattern{}
+	leadNotes.SetChromaticNote(0, lead, 60, 90)
+
+	require.Equal(t, 0, (&Pattern{}).Transpose(lead, 1), "an empty pattern has nothing to move")
+	require.Equal(t, 0, leadNotes.Transpose(lead, 0), "a zero shift moves nothing")
+	require.Equal(t, 0, leadNotes.Transpose(nil, 1), "a nil voice moves nothing")
+	require.Equal(t, 0, leadNotes.Transpose(snare, 1), "a percussive voice has no notes of its own")
+}
+
+// A tie and a triplet group are facts about where a note sits in time rather than about
+// its pitch, so a transpose carries them: only ChromaticNote moves, and a uniform shift
+// preserves every pitch relationship the tie and the group were built on.
+func TestTransposeLeavesTiesAndGroupsAlone(t *testing.T) {
+	voice, _ := chromaticTestVoice(t, nil)
+	pattern := &Pattern{}
+	for _, tt := range []struct{ step, note int }{
+		{0, 60}, {1, 62}, {2, 64},
+	} {
+		pattern.SetChromaticNote(tt.step, voice, tt.note, 90)
+	}
+	require.True(t, pattern.SetTripletGroup(0, voice, tripletEighth), "the group was refused")
+	pattern.SetChromaticNote(4, voice, 67, 90)
+	pattern.SetChromaticNote(5, voice, 67, 90)
+	require.True(t, pattern.TieEventsAtSteps(4, 5, voice), "the tie was refused")
+
+	require.Equal(t, 5, pattern.Transpose(voice, 1), "every note of the voice should count as moved")
+
+	// The group's three notes each moved, and its flag still rides the first.
+	for _, tt := range []struct{ step, want int }{
+		{0, 61}, {1, 63}, {2, 65},
+	} {
+		event, ok := pattern.EventAtStep(tt.step, voice)
+		require.Truef(t, ok, "the transpose lost the note on step %d", tt.step)
+		require.Equalf(t, tt.want, event.ChromaticNote, "the note on step %d", tt.step)
+	}
+	event, _ := pattern.EventAtStep(0, voice)
+	require.Equal(t, tripletEighth, event.Triplet, "the transpose lost the group's flag")
+	group, covered := pattern.TripletGroupAt(1, voice)
+	require.True(t, covered, "the transpose lost the group")
+	require.Equal(t, 0, group.start)
+	// The tie survived on the earlier of its two events, at the pitch both now share.
+	event, _ = pattern.EventAtStep(4, voice)
+	require.Equal(t, 68, event.ChromaticNote)
+	require.True(t, event.Tie, "the transpose lost the tie")
+}

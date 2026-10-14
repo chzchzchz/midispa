@@ -74,8 +74,8 @@ func (p *PatternBank) releasePad(row, col int) {
 
 // Only a newly pressed pad can complete a two-pad tie gesture.
 func (p *PatternBank) handleChromaticStepPress(row, col int) (bool, error) {
-	voice := p.SelectedVoice()
-	if voice == nil || !voice.IsChromatic() || p.noteEditActive() {
+	voice := p.selectedChromaticVoice()
+	if voice == nil || p.noteEditActive() {
 		return false, nil
 	}
 	newPad := p.pressPad(row, col)

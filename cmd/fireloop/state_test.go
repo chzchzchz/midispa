@@ -202,6 +202,29 @@ func TestStateKeepsMeasuresSharingOnePattern(t *testing.T) {
 	require.Equal(t, 72, event.ChromaticNote, "editing the measure did not reach the pattern")
 }
 
+// A transpose writes the same field a pad press writes, so a transposed pattern saves and
+// loads with no format change: what comes back is what was played in.
+func TestTransposedPatternSurvivesASaveAndLoad(t *testing.T) {
+	kit := stateKit()
+	session := stateTestBank(t, kit)
+	bank, songs := session.patbank, session.songbank
+	voice := kit.voices[2]
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(0, voice, 60, 100)
+	pattern.SetChromaticNote(1, voice, 64, 90)
+	require.NoError(t, bank.SelectTrackRow(3), "the setup needs the chromatic row selected")
+	require.NoError(t, bank.TransposeSelected(nil, EncoderRight))
+
+	loaded := roundTrip(t, bank, songs, nil)
+	for _, tt := range []struct{ step, want int }{
+		{0, 61}, {1, 65},
+	} {
+		event, ok := loaded.bank.Patterns[1].EventAtStep(tt.step, loaded.kit.voices[2])
+		require.Truef(t, ok, "the load lost the note on step %d", tt.step)
+		require.Equalf(t, tt.want, event.ChromaticNote, "the note on step %d", tt.step)
+	}
+}
+
 // A kit that has lost voices cannot supply the events naming them. Losing one drum must not
 // cost the set, but the loss has to be counted rather than passing unnoticed.
 func TestStateReportsVoicesTheKitNoLongerHas(t *testing.T) {

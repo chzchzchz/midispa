@@ -9,22 +9,25 @@ import (
 
 // The Volume knob, which is the one control that sets a step's dynamics for either kind of
 // voice. It lives apart from the palette because the two do different jobs on a step: the
-// palette decides which pitch a note has, and this decides how hard it is struck.
+// palette decides which pitch a note has, and this decides how hard it is struck. The
+// detent counter and the held-back audition are here as well, because the pan knob
+// borrows both: they were the Volume knob's first.
 
 // defaultStepVelocity is where the Volume knob starts, and what a chromatic step takes
 // when the knob has not been turned yet.
 const defaultStepVelocity = midi.DataMax
 
-// velocityStep is how far one detent of the Volume knob moves a step velocity
-// before the turn's own speed is counted.
+// velocityStep is how far one detent of a careful turn counts, before the turn's own
+// speed is counted: one step of stored velocity for the Volume knob, one semitone for
+// the pan knob. The velocity in the name is the counter's history — it was the Volume
+// knob's before the pan knob shared it.
 const velocityStep = 1
 
-// velocityQuiescence is how long the Volume knob must rest before the step it
-// has been trimming is auditioned. A knob turned quickly sends its detents
-// closer together than a note is worth hearing apart, so the detents of a
-// fast turn are accumulated and the step is heard once, at the value the
-// turn landed on, rather than machine-gunned along the way. A turn slow
-// enough to leave gaps this wide still hears every detent, this long after
+// velocityQuiescence is how long a knob must rest before the step it has been editing
+// is auditioned. A knob turned quickly sends its detents closer together than a note
+// is worth hearing apart, so the detents of a fast turn are accumulated and the step
+// is heard once, at what the turn landed on, rather than machine-gunned along the way.
+// A turn slow enough to leave gaps this wide still hears every detent, this long after
 // each one, which is what keeps a single careful detent audible.
 //
 // It is a variable rather than a constant so a test can widen the window,
@@ -39,10 +42,10 @@ const velocityFastWindow = 50 * time.Millisecond
 
 // velocityStepMax caps how far one detent of a fast turn counts. Acceleration
 // is what makes a long sweep cheap, and the cap is what keeps one flick of
-// the knob from throwing a velocity across the whole range.
+// the knob from throwing a velocity or a pitch across the whole range.
 const velocityStepMax = 8
 
-// knobNow is the clock the Volume knob's timing is measured against. It is a
+// knobNow is the clock the knobs' detent timing is measured against. It is a
 // variable rather than a call to time.Now so a test can set it and land
 // detents on either side of velocityFastWindow without sleeping.
 var knobNow = time.Now
@@ -88,7 +91,7 @@ func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) er
 	} else {
 		from = p.velocityBase(voice)
 	}
-	value := clampStepVelocity(voice, from+p.velocityIncrement(direction))
+	value := clampStepVelocity(voice, from+p.detentIncrement(direction))
 	if voice.IsChromatic() {
 		// Written back as the absolute of the result, the carry stays absolute:
 		// the round trip through the two maps is exact, so a detent never stalls.
@@ -122,16 +125,18 @@ func (p *PatternBank) AdjustVelocity(aseq alsa.EventWriter, encoderValue int) er
 	return p.printStepStatus()
 }
 
-// velocityIncrement is how far one detent counts at the speed the knob is
+// detentIncrement is how far one detent counts at the speed the knob is
 // turning at. A detent that arrives within velocityFastWindow of the one
 // before it is part of a fast turn, and every detent of that turn counts one
 // step more than the last, up to velocityStepMax, so the faster the knob
 // turns the further a detent reaches. A detent after a longer gap starts the
 // count again at one, so a careful turn always moves exactly one step.
 //
-// The state this reads and writes belongs to the event loop, which is the only
-// caller, so it needs no lock of its own.
-func (p *PatternBank) velocityIncrement(direction int) int {
+// The count and the last detent's time are shared by every knob that
+// accelerates, because what they keep is how fast a hand is turning, and one
+// hand turns one knob at a time. Both knob handlers run on the event loop,
+// which is the only writer, so the state needs no lock of its own.
+func (p *PatternBank) detentIncrement(direction int) int {
 	now := knobNow()
 	if now.Sub(p.lastDetent) > velocityFastWindow {
 		p.detentStep = velocityStep
@@ -144,7 +149,7 @@ func (p *PatternBank) velocityIncrement(direction int) int {
 
 // armAudition holds a step's audition back until the knob has rested for
 // velocityQuiescence. Each detent replaces the audition the one before it
-// armed, so a fast turn hears the step once, at the value the sweep landed
+// armed, so a fast turn hears the step once, at what the sweep landed
 // on, instead of once per detent.
 //
 // The event is copied into the callback rather than read back when the timer

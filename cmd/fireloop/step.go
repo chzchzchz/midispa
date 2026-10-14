@@ -22,6 +22,19 @@ func (p *PatternBank) SelectedVoice() *Voice {
 	return p.trackVoice(p.selTrackRow)
 }
 
+// selectedChromaticVoice is the voice the pitch editors aim at: the selected track's
+// voice, or nil when the selection is no chromatic track — no row chosen, or a percussive
+// one whose notes come from its kit. The note-edit toggle, the palette, the tie gesture
+// and the pan knob ask it as one question rather than spelling its two refusals out
+// each time.
+func (p *PatternBank) selectedChromaticVoice() *Voice {
+	voice := p.SelectedVoice()
+	if voice == nil || !voice.IsChromatic() {
+		return nil
+	}
+	return voice
+}
+
 func (p *PatternBank) StepCursor() int {
 	return p.stepCursor
 }
@@ -164,8 +177,7 @@ func (p *PatternBank) auditionEvent(aseq alsa.EventWriter, event Event) error {
 
 // Mode is a state toggle only for the selected chromatic voice.
 func (p *PatternBank) setNoteEdit(active bool) error {
-	voice := p.SelectedVoice()
-	if active && (voice == nil || !voice.IsChromatic()) {
+	if active && p.selectedChromaticVoice() == nil {
 		return nil
 	}
 	p.claimMode(active, noteEdit)
