@@ -22,7 +22,7 @@ func newArrangementTest(t *testing.T) (*SongBank, *PatternBank) {
 	}})
 	controller := useController(t, fire, voiceBank)
 	require.NoError(t, controller.songbank.Jump(0))
-	controller.mode = songView
+	controller.setView(songView)
 	return controller.songbank, controller.patbank
 }
 
@@ -133,7 +133,7 @@ func TestSongModeScrollBindings(t *testing.T) {
 
 func TestPatternLengthControls(t *testing.T) {
 	_, patternBank := newArrangementTest(t)
-	patternBank.controller.mode = patternView
+	patternBank.controller.setView(patternView)
 	patternBank.CurrentPattern().SetLengthSteps(8)
 	event, err := patternBank.ToggleEvent(0, 8, 127)
 	require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestSongModePatternPadUsesViewport(t *testing.T) {
 func TestSongPatternSelectionKeepsTheSetPlaying(t *testing.T) {
 	_, patternBank := newArrangementTest(t)
 	stopped := 0
-	patternBank.controller.playback = stubSession(&Playback{}, func() error {
+	stubRunning(patternBank.controller, nil, func() error {
 		stopped++
 		return nil
 	})
@@ -192,13 +192,13 @@ func TestSongPatternSelectionKeepsTheSetPlaying(t *testing.T) {
 	require.NoError(t, dispatch(patternBank, arrangementNote(66)))
 	require.Equal(t, 1, patternBank.selPatIdx, "the pad should select the pattern in view")
 	require.Zero(t, stopped, "selecting a pattern stopped the set")
-	require.NotNil(t, patternBank.controller.playback, "the set was uninstalled")
+	require.NotNil(t, patternBank.controller.running, "the set was uninstalled")
 
 	// The next slot's pattern does not exist yet, so the press also claims a slot.
 	require.NoError(t, dispatch(patternBank, arrangementNote(67)))
 	require.Equal(t, 2, patternBank.selPatIdx, "the second pad should select the next pattern")
 	require.Zero(t, stopped, "selecting an unused pattern stopped the set")
-	require.NotNil(t, patternBank.controller.playback, "the set was uninstalled")
+	require.NotNil(t, patternBank.controller.running, "the set was uninstalled")
 
 	// Shift plus pattern up moves the selection the same way.
 	stopped = 0
@@ -206,7 +206,7 @@ func TestSongPatternSelectionKeepsTheSetPlaying(t *testing.T) {
 	require.NoError(t, dispatch(patternBank, arrangementNote(NotePatternUp)))
 	require.Equal(t, 3, patternBank.selPatIdx, "shift pattern up should move the selection")
 	require.Zero(t, stopped, "moving the selection stopped the set")
-	require.NotNil(t, patternBank.controller.playback, "the set was uninstalled")
+	require.NotNil(t, patternBank.controller.running, "the set was uninstalled")
 }
 
 // The playback worker reads the pattern map from its own goroutine, to colour
@@ -256,20 +256,20 @@ func TestSongPatternPadsKeepTheSongPlaying(t *testing.T) {
 	t.Cleanup(func() { setBPM(previousBPM) })
 	writer := &captureMidiWriter{}
 	require.NoError(t, controller.startSetPlayback(writer))
-	require.NotNil(t, controller.playback, "the song did not start")
+	require.NotNil(t, controller.running, "the song did not start")
 	writer.waitForEvents(t, 4)
 
 	// Columns 12 to 15 of each pad row hold the pattern slots.
 	for _, note := range []int{66, 67, 68, 69, 82, 83, 84, 85} {
 		require.NoError(t, dispatch(patternBank, arrangementNote(note)))
-		require.NotNil(t, controller.playback, "pressing a pattern pad stopped the song")
+		require.NotNil(t, controller.running, "pressing a pattern pad stopped the song")
 	}
 	require.Equal(t, 8, patternBank.selPatIdx, "the pads should have moved the selection")
 	require.True(t, controller.playing(), "the song stopped during the presses")
 	// The worker is still writing the song after the presses, not just installed.
 	writer.waitForEvents(t, 12)
 	require.NoError(t, controller.stopPlayback())
-	require.Nil(t, controller.playback, "stopping left the sequencer armed")
+	require.Nil(t, controller.running, "stopping left the sequencer armed")
 }
 
 // The pad a measure is drawn on has to be the pad a press edits it with:

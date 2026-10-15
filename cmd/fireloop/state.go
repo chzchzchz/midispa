@@ -481,7 +481,7 @@ func (c *Controller) loadState(path string) (stateReport, error) {
 	// not part of a session, and a load answers the question it was asked, which
 	// is what the file holds, not which screen shows it.
 	c.pages = pages
-	c.pageIdx = c.firstPageIndex()
+	c.setPage(c.firstPageIndex())
 	// The table the file describes may hold no page on the pad a
 	// double tap was watching, so nothing is watched any more.
 	c.pagePad = -1

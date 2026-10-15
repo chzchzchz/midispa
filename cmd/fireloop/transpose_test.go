@@ -249,11 +249,11 @@ func TestPanKnobDoesNothingOnABankWithNoPattern(t *testing.T) {
 // playback because it removes events outright; this moves their pitches and nothing else.
 func TestTransposeDoesNotStopPlayback(t *testing.T) {
 	bank, voice := panBank(t, 0, 60)
-	bank.controller.playback = stubSession(bank.newPlayback(), nil)
+	stubRunning(bank.controller, bank.newPlayback(), nil)
 
 	require.NoError(t, sendCC(bank, deviceChannel, CCPan, EncoderRight))
 
-	require.NotNil(t, bank.controller.playback, "the pan knob stopped the set")
+	require.NotNil(t, bank.controller.running, "the pan knob stopped the set")
 	event, ok := bank.CurrentPattern().EventAtStep(0, voice)
 	require.True(t, ok, "the turn lost the note")
 	require.Equal(t, 61, event.ChromaticNote, "the track did not transpose")

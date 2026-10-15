@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,184 @@ import (
 // the top left of the grid.
 func pagePadNote(idx int) int {
 	return 53 + idx
+}
+
+// The flow the page grid is for: a song is playing and the grid is wanted.
+// Browser enters page mode without ending the set, the measure playhead
+// yields to the grid rather than painting over it, the grid does its work
+// while the set plays, and Browser again returns to the arrangement still
+// playing. The sequencer is started for real here, so a regression that
+// ends the set, or one that lets the playhead paint the page grid, is
+// heard or seen rather than inferred.
+func TestPageModeKeepsASongSetPlaying(t *testing.T) {
+	controller, recorder, _ := usePageController(t)
+	bank := controller.patbank
+	songs := controller.songbank
+	songPads := usePadRecorder(t, &songs.pads)
+	setBPM(300)
+
+	// A two-measure song, so the measure playhead crosses a boundary while
+	// the page grid is being watched.
+	pattern := bank.CurrentPattern()
+	pattern.SetChromaticNote(0, bank.vb.voices[2], 60, 100)
+	songs.CurrentSong().SetPattern(pattern, 0)
+	songs.CurrentSong().SetPattern(pattern, 1)
+
+	instrument := newSoundingInstrument()
+	capture := &captureMidiWriter{}
+	fanout := &fanoutWriter{writers: []sequencerWriter{capture, instrument}}
+
+	// The song plays from the arrangement, which is the view the flow
+	// this test guards starts from.
+	pressButton(t, bank, NotePatternSong)
+	require.Equal(t, songView, controller.mode)
+	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
+	require.True(t, controller.playing())
+
+	pressButton(t, bank, NoteBrowser)
+	require.Equal(t, pageView, controller.mode)
+	require.True(t, controller.playing(), "entering page mode stopped the set")
+
+	// The page grid owns the pads while it shows, so give the playhead the
+	// time to cross its boundary and try: not one pad may move, and the
+	// measure readout may not come back over the grid's rows.
+	grid := songPads.pads
+	waitFor(t, "the set to cross a measure boundary", func() bool {
+		ons := 0
+		for _, event := range capture.snapshot() {
+			if len(event.Data) == 3 && midi.IsNoteOn(event.Data[0]) &&
+				event.Data[2] > 0 && int(event.Data[1]) == 60 {
+				ons++
+			}
+		}
+		return ons >= 2
+	})
+	require.Equal(t, grid, songPads.pads, "the playhead painted over the page grid")
+	require.NotContains(t, recorder.row(4), "Measure", "the playhead wrote over the page grid's rows")
+
+	// The grid does its work while the set plays: a press creates a page.
+	pressButton(t, bank, pagePadNote(2))
+	require.NotNil(t, controller.pages[2], "the grid press created no page")
+	require.True(t, controller.playing(), "a page gesture stopped the set")
+
+	// And leaving returns to the arrangement, still playing.
+	pressButton(t, bank, NoteBrowser)
+	require.Equal(t, songView, controller.mode)
+	require.True(t, controller.playing(), "leaving page mode stopped the set")
+	require.NoError(t, controller.stopPlayback())
+	require.Empty(t, instrument.stillSounding(), "stopping should release every note")
+}
+
+// The flow the page table is for: a song is playing and another page is
+// wanted. A double tap on the page's pad jumps to it without ending the
+// set, every session goes on sounding its own page across the jump, and
+// the jump back leaves the same set running. The sequencer is started for
+// real here, so a regression that ends the set is heard rather than
+// inferred.
+func TestPageJumpKeepsTheSongSetPlaying(t *testing.T) {
+	controller, _, _ := usePageController(t)
+	bank := controller.patbank
+	songs := controller.songbank
+	setBPM(300)
+
+	// Two enabled pages, each left on the arrangement with a song of its
+	// own, so a set over both sounds two notes the wire tells apart.
+	first := bank.CurrentPattern()
+	first.SetChromaticNote(0, bank.vb.voices[2], 60, 100)
+	songs.CurrentSong().SetPattern(first, 0)
+
+	doubleTapPage(t, controller, 2) // create page 2 and jump to it
+	second := bank.CurrentPattern()
+	second.SetChromaticNote(0, bank.vb.voices[2], 62, 100)
+	songs.CurrentSong().SetPattern(second, 0)
+	pressButton(t, bank, NotePatternSong) // page 2 onto the arrangement
+	doubleTapPage(t, controller, 1)       // back to page 1
+	pressButton(t, bank, NotePatternSong) // arrangement
+
+	instrument := newSoundingInstrument()
+	capture := &captureMidiWriter{}
+	fanout := &fanoutWriter{writers: []sequencerWriter{capture, instrument}}
+	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
+	require.True(t, controller.playing())
+	require.Len(t, controller.running.sessions, 2, "both pages should play")
+
+	ons := func(note int) int { return countNoteOns(capture.snapshot(), note) }
+	waitFor(t, "both pages to sound", func() bool {
+		return ons(60) > 0 && ons(62) > 0
+	})
+
+	// The jump runs from page mode: Browser onto the grid, then a double
+	// tap on page 2's pad. Neither press may end the set, and both pages
+	// keep sounding across it.
+	pressButton(t, bank, NoteBrowser)
+	require.Equal(t, pageView, controller.mode)
+	first60, first62 := ons(60), ons(62)
+	pressButton(t, bank, pagePadNote(2))
+	pressButton(t, bank, pagePadNote(2))
+	require.Equal(t, 2, controller.pageIdx, "the double tap should jump")
+	require.True(t, controller.playing(), "the jump stopped the set")
+	waitFor(t, "both pages to sound after the jump", func() bool {
+		return ons(60) > first60 && ons(62) > first62
+	})
+
+	// And back: the same two sessions are still what is playing.
+	pressButton(t, bank, NoteBrowser)
+	pressButton(t, bank, pagePadNote(1))
+	pressButton(t, bank, pagePadNote(1))
+	require.Equal(t, 1, controller.pageIdx)
+	require.True(t, controller.playing(), "the jump back stopped the set")
+	waitFor(t, "both pages to sound after the jump back", func() bool {
+		return ons(60) > first60+1 && ons(62) > first62+1
+	})
+
+	require.NoError(t, controller.stopPlayback())
+	require.Empty(t, instrument.stillSounding(), "stopping should release every note")
+}
+
+// A jump moves the view, not the sound: the pattern set a jump leaves
+// running keeps playing the pattern it was playing, and the page it lands
+// on keeps sounding through its own session. The wire tells the two apart,
+// so a primary that followed the jump — or a set that stopped — is heard.
+func TestPageJumpKeepsThePatternSetPlaying(t *testing.T) {
+	controller, _, _ := usePageController(t)
+	bank := controller.patbank
+	setBPM(300)
+
+	// Page 1 is left on the pattern view with one note; page 2 is left on
+	// the pattern view with another.
+	firstPattern := bank.CurrentPattern()
+	firstPattern.ToggleEvent(Event{Voice: bank.vb.voices[0], Beat: 0, Velocity: 100})
+
+	doubleTapPage(t, controller, 2) // create page 2 and jump to it
+	secondPattern := bank.CurrentPattern()
+	secondPattern.ToggleEvent(Event{Voice: bank.vb.voices[1], Beat: 0, Velocity: 100})
+	doubleTapPage(t, controller, 1) // back to page 1
+
+	capture := &captureMidiWriter{}
+	require.NoError(t, controller.Handle(capture, padMessage(NotePlay, 100)))
+	require.True(t, controller.playing())
+	require.Len(t, controller.running.sessions, 2, "both pages should play")
+
+	ons := func(note int) int { return countNoteOns(capture.snapshot(), note) }
+	waitFor(t, "both pages to sound", func() bool {
+		return ons(36) > 0 && ons(37) > 0
+	})
+
+	pressButton(t, bank, NoteBrowser)
+	pressButton(t, bank, pagePadNote(2))
+	pressButton(t, bank, pagePadNote(2))
+	require.Equal(t, 2, controller.pageIdx)
+	require.True(t, controller.playing(), "the jump stopped the set")
+
+	// Page 1's pattern is still what the set it left behind plays, and
+	// page 2's own session still sounds its note.
+	first36, first37 := ons(36), ons(37)
+	waitFor(t, "both pages to sound after the jump", func() bool {
+		return ons(36) > first36 && ons(37) > first37
+	})
+
+	require.NoError(t, controller.stopPlayback())
+	require.Nil(t, controller.running, "stopping left the sequencer armed")
 }
 
 // usePageController is the setup the page tests start from: a controller on a
@@ -80,15 +259,22 @@ func (w *fanoutWriter) WritePort(event alsa.SeqEvent, port int) error {
 // carriesNoteOn reports whether the events carry a note-on for a pitch, which
 // is how a test tells a note that sounded from one that did not.
 func carriesNoteOn(events []alsa.SeqEvent, note int) bool {
+	return countNoteOns(events, note) > 0
+}
+
+// countNoteOns counts the note-ons for one pitch, which is how a test tells
+// "still sounding" from "sounded once".
+func countNoteOns(events []alsa.SeqEvent, note int) int {
+	n := 0
 	for _, event := range events {
 		if len(event.Data) != 3 {
 			continue
 		}
 		if midi.IsNoteOn(event.Data[0]) && event.Data[2] > 0 && int(event.Data[1]) == note {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // doubleTapPage enters page mode and double-taps the pad of page idx, which
@@ -113,10 +299,10 @@ func shiftPad(t *testing.T, bank *PatternBank, idx int) {
 	pressButton(t, bank, NoteShift)
 }
 
-// Browser alone enters page mode from either view, stops playback, and leaves
-// the edit mode alone; Browser again returns to the view it was entered from.
-// Pattern/Song while page mode shows leaves it and toggles the underlying
-// view, with the mode's light reporting the view landed on.
+// Browser alone enters page mode from either view without ending the set,
+// and leaves the edit mode alone; Browser again returns to the view it was
+// entered from. Pattern/Song while page mode shows leaves it and toggles
+// the underlying view, with the mode's light reporting the view landed on.
 func TestPageModeEntryFromBothViews(t *testing.T) {
 	kit := trackWindowKit(8, 0) // voice 0 is chromatic
 	controller := useController(t, NewFire(func([]byte) error { return nil }), kit)
@@ -127,27 +313,29 @@ func TestPageModeEntryFromBothViews(t *testing.T) {
 	require.NoError(t, bank.ToggleNoteMode())
 	require.True(t, bank.noteEditActive())
 
-	stopped := 0
-	controller.playback = stubSession(&Playback{}, func() error {
-		stopped++
-		return nil
-	})
-
 	// The round trip is the same from either view, so it runs once per
 	// view: Browser enters page mode, Browser again returns to the view
-	// it was entered from, and playback stops on the way in. The edit
-	// mode is page state that survives the round trip; the song view
-	// exits it on the way to its own round trip, so only the pattern
-	// view's survives to be checked.
+	// it was entered from, and the set keeps playing through the round
+	// trip. The edit mode is page state that survives the round trip; the
+	// song view exits it on the way to its own round trip, so only the
+	// pattern view's survives to be checked.
 	for _, from := range []viewMode{patternView, songView} {
 		if from == songView {
+			// The view switch itself is one of the two switches that still
+			// end a set, so each leg's stub is installed after it.
 			pressButton(t, bank, NotePatternSong)
 		}
+		stopped := 0
+		stubRunning(controller, nil, func() error {
+			stopped++
+			return nil
+		})
 		pressButton(t, bank, NoteBrowser)
 		require.Equal(t, pageView, controller.mode, "Browser should enter page mode")
-		require.Positive(t, stopped, "entering page mode left the set playing")
+		require.Zero(t, stopped, "entering page mode stopped the set")
 		pressButton(t, bank, NoteBrowser)
 		require.Equal(t, from, controller.mode, "Browser should return to the view it entered from")
+		require.Zero(t, stopped, "leaving page mode stopped the set")
 		if from == patternView {
 			require.True(t, bank.noteEditActive(), "the round trip kept the edit mode")
 		}
@@ -232,7 +420,7 @@ func TestPageDoubleTapJumps(t *testing.T) {
 	require.NoError(t, bank.ToggleNoteMode())
 	pressButton(t, bank, NoteRecord)
 	require.NotNil(t, controller.clipboard)
-	controller.mode = songView // page 1 is left on the arrangement
+	controller.setView(songView) // page 1 is left on the arrangement
 
 	// Double-tap page 2's pad: the first press creates it, the second jumps.
 	doubleTapPage(t, controller, 2)
@@ -365,22 +553,20 @@ func TestSeekAppliesToAllPages(t *testing.T) {
 	writer := &captureMidiWriter{}
 	require.NoError(t, controller.Handle(writer, padMessage(NotePlay, 100)))
 	require.True(t, controller.playing())
-	require.Len(t, controller.extra, 2, "pages 2 and 3 should play beside page 1")
+	require.Len(t, controller.running.sessions, 3, "pages 1, 2 and 3 should play")
 
 	// Shift plus a measure pad seeks to that measure: measure 1 starts at beat 4.
 	pressButton(t, bank, NoteShift)
 	pressButton(t, bank, pagePadNote(1)) // the measure pad at (1, 0)
 	pressButton(t, bank, NoteShift)
 
-	// extraSessions walks the table in index order, so the extras are page
-	// 2, left on the pattern view, then page 3, left on the arrangement.
-	wantBeats := []float32{0, 4}
+	// The seek lands every session where its own page's source sends it:
+	// the shown arrangement to measure 1, the pattern-view page back to
+	// its own start, the other arrangement to its measure 1.
+	wantBeats := map[int]float32{1: 4, 2: 0, 3: 4}
 	waitFor(t, "every session to seek", func() bool {
-		if beat, _, _ := controller.playback.playback.position(); beat != 4 {
-			return false
-		}
-		for i, session := range controller.extra {
-			if beat, _, _ := session.playback.position(); beat != wantBeats[i] {
+		for page, want := range wantBeats {
+			if beat, _, _ := controller.running.sessions[page].playback.position(); beat != want {
 				return false
 			}
 		}
@@ -448,7 +634,7 @@ func TestSongModePlaysEnabledPages(t *testing.T) {
 	fanout := &fanoutWriter{writers: []sequencerWriter{capture, instrument}}
 	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
 	require.True(t, controller.playing())
-	require.Len(t, controller.extra, 2, "pages 2 and 3 should play beside page 1")
+	require.Len(t, controller.running.sessions, 3, "pages 1, 2 and 3 should play")
 
 	events := capture.waitForEvents(t, 5)
 	require.True(t, carriesNoteOn(events, 60), "page 1's note should sound")
@@ -514,7 +700,7 @@ func TestSetPlaybackPlaysEveryPage(t *testing.T) {
 	fanout := &fanoutWriter{writers: []sequencerWriter{capture, instrument}}
 	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
 	require.True(t, controller.playing())
-	require.Len(t, controller.extra, 1, "page 2 should play beside page 1")
+	require.Len(t, controller.running.sessions, 2, "pages 1 and 2 should play")
 
 	// Two sessions, each writing a MIDI Start before its note.
 	events := capture.waitForEvents(t, 4)
@@ -523,11 +709,10 @@ func TestSetPlaybackPlaysEveryPage(t *testing.T) {
 
 	// A Play press while a set runs is a no-op: the same sessions
 	// stay installed and the wire stays quiet.
-	primary, extras := controller.playback, controller.extra
+	sessions := maps.Clone(controller.running.sessions)
 	before := len(capture.snapshot())
 	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
-	require.Same(t, primary, controller.playback)
-	require.Equal(t, extras, controller.extra)
+	require.Equal(t, sessions, controller.running.sessions)
 	require.Len(t, capture.snapshot(), before)
 
 	require.NoError(t, controller.stopPlayback())
@@ -573,7 +758,7 @@ func TestSetPlaybackUsesEachPagesOwnSelection(t *testing.T) {
 	fanout := &fanoutWriter{writers: []sequencerWriter{capture, instrument}}
 	require.NoError(t, controller.Handle(fanout, padMessage(NotePlay, 100)))
 	require.True(t, controller.playing())
-	require.Len(t, controller.extra, 1, "page 2 should play beside page 1")
+	require.Len(t, controller.running.sessions, 2, "pages 1 and 2 should play")
 
 	events := capture.waitForEvents(t, 4)
 	require.True(t, carriesNoteOn(events, 60), "page 1's song should sound")

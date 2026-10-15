@@ -135,58 +135,70 @@ func (c *Controller) loadPage(page *Page) {
 // objects. Jumping to the page already current is the same
 // path with a self-referential save and load, which is
 // idempotent.
+//
+// The set keeps playing across a jump: every session goes on playing the
+// page it was built for, and the page the jump lands on was already
+// sounding if it was enabled when the set started. What moves is the view
+// — the playhead hands over to the landed page's session, because each
+// session draws only while its own page is shown — and the banks. The
+// beat lock waits out whatever beat is in flight and keeps the next ones
+// out while the screen and the banks move together, so no session reads a
+// bank half-moved or draws for a screen that has already moved. A page
+// the set has no session for — one that was disabled when Play was
+// pressed — stays silent until the next set includes it.
+// The beat lock waits out whatever beat is in flight and keeps the next
+// ones out while the screen and the banks move together, so no session
+// reads a bank half-moved or draws for a screen that has already moved. A
+// page the set has no session for — one that was disabled when Play was
+// pressed — stays silent until the next set includes it.
 func (c *Controller) jumpToPage(idx int) error {
-	// The playback worker reads the banks this jump is about
-	// to rewrite, so it ends first, the way every
-	// map-rewriting gesture in the package ends it.
-	if err := c.stopPlayback(); err != nil {
-		return err
-	}
-	c.saveCurrentPage()
-	// Modifiers, held pads and the note-edit playhead belong
-	// to the view being left. The edit modes are not exited
-	// here: their fields are overwritten by the load below,
-	// and the indicators and redraw that follow put every
-	// mode light back from the restored bank, which is the
-	// same answer an exit would have computed.
-	if err := c.releaseModifiers(); err != nil {
-		return err
-	}
-	c.patbank.clearPadState()
-	if err := c.patbank.clearStepPlayhead(); err != nil {
-		return err
-	}
-	page := c.pages[idx]
-	c.pageIdx = idx
-	// The page you land on always plays.
-	page.on = true
-	c.loadPage(page)
-	// A jump lands on the page's own view, never on page mode:
-	// page mode is a mode of the controller, and every jump runs
-	// from it, so the view restored above is where the UI goes.
-	c.mode = page.view
-	c.updatePageIndicator()
-	return c.redrawMode()
+	return c.holdBeatsWhile(func() error {
+		c.saveCurrentPage()
+		// Modifiers, held pads and the note-edit playhead belong
+		// to the view being left. The edit modes are not exited
+		// here: their fields are overwritten by the load below,
+		// and the indicators and redraw that follow put every
+		// mode light back from the restored bank, which is the
+		// same answer an exit would have computed.
+		if err := c.releaseModifiers(); err != nil {
+			return err
+		}
+		c.patbank.clearPadState()
+		if err := c.patbank.clearStepPlayhead(); err != nil {
+			return err
+		}
+		page := c.pages[idx]
+		// The page you land on always plays.
+		page.on = true
+		// The screen and the banks move as one step: a beat that starts
+		// after this reads the landed page's banks and draws for the landed
+		// page's screen. A jump lands on the page's own view, never on page
+		// mode: page mode is a mode of the controller, and every jump runs
+		// from it, so the view restored above is where the UI goes.
+		c.setScreen(idx, page.view)
+		c.loadPage(page)
+		c.updatePageIndicator()
+		return c.redrawMode()
+	})
 }
 
-// enterPageMode moves the controls onto the page grid.
-// Playback stops because the grid owns the pads, the
-// modifiers are released and the held pads cleared, and the
-// edit mode is left set: it is page state, and page mode
-// takes over the grid the mode owned, so leaving page mode
-// redraws the view with the mode intact.
+// enterPageMode moves the controls onto the page grid. The set keeps
+// playing: the grid borrows the pads from the view, so the playhead yields
+// to it rather than the set ending for a view change, and the modifiers are
+// released and the held pads cleared. The edit mode is left set: it is page
+// state, and page mode takes over the grid the mode owned, so leaving page
+// mode redraws the view with the mode intact.
 func (c *Controller) enterPageMode() error {
-	if err := c.stopPlayback(); err != nil {
-		return err
-	}
 	if err := c.releaseModifiers(); err != nil {
 		return err
 	}
 	c.patbank.clearPadState()
 	c.prevMode = c.mode
-	c.mode = pageView
+	c.setView(pageView)
 	c.pagePad = -1
-	return c.drawPageMode()
+	// The grid repaint holds the beats, so the playhead it takes the pads
+	// from cannot be mid-draw underneath it.
+	return c.holdBeatsWhile(c.drawPageMode)
 }
 
 // leavePageMode returns to the view page mode was entered
@@ -194,20 +206,18 @@ func (c *Controller) enterPageMode() error {
 // a press just before leaving cannot jump a page on the way
 // back in.
 func (c *Controller) leavePageMode() error {
-	c.mode = c.prevMode
+	c.setView(c.prevMode)
 	c.pagePad = -1
-	return c.redrawMode()
+	return c.holdBeatsWhile(c.redrawMode)
 }
 
 // togglePageMode is the Pattern/Song button while page mode
 // is showing: the button means "switch views" in every mode,
 // so it leaves page mode and toggles the underlying view.
-// The edit mode survives the toggle the way it survives a
-// jump, because the page did not change.
+// The set keeps playing, for the same reason entering page
+// mode leaves it playing. The edit mode survives the toggle
+// the way it survives a jump, because the page did not change.
 func (c *Controller) togglePageMode() error {
-	if err := c.stopPlayback(); err != nil {
-		return err
-	}
 	if err := c.releaseModifiers(); err != nil {
 		return err
 	}
@@ -217,9 +227,9 @@ func (c *Controller) togglePageMode() error {
 		view = songView
 	}
 	c.prevMode = view
-	c.mode = view
+	c.setView(view)
 	c.pagePad = -1
-	return c.redrawMode()
+	return c.holdBeatsWhile(c.redrawMode)
 }
 
 // createPage adds an enabled page at the pad's index. The
@@ -420,54 +430,24 @@ func (c *Controller) processPageEvent(aseq sequencerWriter, ev alsa.SeqEvent) er
 	return nil
 }
 
-// playbackFor builds the playback a Play press starts for a page: the
-// pattern its view points at on the pattern view, the song its view
-// points at on the arrangement. draw is set only for the page on screen,
-// whose playhead and measure the visible view draws.
-func (c *Controller) playbackFor(page *Page, draw bool) *Playback {
-	if page.view == songView {
-		return c.songbank.newPlaybackOf(page.song.Songs, page.song.SelSongIdx, draw)
-	}
-	return c.patbank.newPlaybackOf(page.pattern.Patterns, page.pattern.SelPatIdx, draw)
-}
-
 // startSetPlayback starts a set over every enabled page, each playing
 // what its own view points at. The Play press first enables the current
 // page, because it is a claim that the page on screen belongs in the
 // mix. The commit that opens it points the current page's memento at
-// the live banks and the live view, so the primary reads the live state
-// through the memento as the same objects; the other enabled pages play
-// from their own mementos through extraSessions. All the workers launch
+// the live banks and the live view, so the shown page's session reads
+// the live state through the memento as the same objects; the other
+// enabled pages play from their own mementos. All the workers launch
 // together, so every page starts on the same beat.
 func (c *Controller) startSetPlayback(aseq sequencerWriter) error {
 	page := c.currentPage()
 	page.on = true
 	c.updatePageIndicator()
 	c.saveCurrentPage()
-	c.playback = newPlaybackSession(c.playbackFor(page, true))
-	c.playback.Start(aseq)
-	c.extra = c.extraSessions(aseq)
+	c.running = newRunningSet(c, aseq)
 	// The flag flip shows at once, but only on the arrangement: row 0
 	// belongs to the pattern header on the pattern view.
 	if c.mode == songView {
 		return c.songbank.PrintSong()
 	}
 	return nil
-}
-
-// extraSessions builds a session for every enabled page but the current
-// one, in index order. Each plays what its own view points at with
-// nothing to draw, because that page is not on screen.
-func (c *Controller) extraSessions(aseq sequencerWriter) []*PlaybackSession {
-	var sessions []*PlaybackSession
-	for _, idx := range slices.Sorted(maps.Keys(c.pages)) {
-		other := c.pages[idx]
-		if idx == c.pageIdx || !other.on {
-			continue
-		}
-		session := newPlaybackSession(c.playbackFor(other, false))
-		session.Start(aseq)
-		sessions = append(sessions, session)
-	}
-	return sessions
 }

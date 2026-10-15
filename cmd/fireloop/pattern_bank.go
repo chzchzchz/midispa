@@ -350,14 +350,15 @@ func (p *PatternBank) ScrollTracks(delta int) error {
 	return p.redraw()
 }
 
-// CurrentPattern is the pattern the bank is showing. The map is guarded by trackMu for a
-// save, which reads it by reference; the read here does not take that lock, because the
-// playback worker reaches this on every drawn column. What makes that safe is that every
-// write goes through claimPattern under the window lock, and the only writes that land
-// while a set plays are song-mode selections, which belong to the other view where this
-// worker is not running. A new path that writes the map has to stop playback first or
-// claim that lock.
+// CurrentPattern is the pattern the bank is showing. The read takes the window lock
+// because a selection and a fresh slot can now be claimed while a set plays: the worker
+// reaches this on every drawn column and at every boundary from its own goroutine, while
+// a pattern chosen from either view claims under this lock from the event loop. A map
+// read that meets the write that claims a fresh slot is a fatal race rather than a stale
+// answer, which is what the unlocked read this lock replaces used to risk.
 func (p *PatternBank) CurrentPattern() *Pattern {
+	p.trackMu.RLock()
+	defer p.trackMu.RUnlock()
 	return p.Patterns[p.selPatIdx]
 }
 
@@ -433,17 +434,15 @@ func (p *PatternBank) SetPattern(pat *Pattern) error {
 	return p.redraw()
 }
 
+// Jump moves the selection one slot. The set keeps playing: the running playback answers
+// the live selection, so the pattern chosen here takes over at the next pattern boundary,
+// and a jump with nowhere to go changes nothing at all.
 func (p *PatternBank) Jump(n int) error {
 	newIdx := p.selPatIdx + n
 	if newIdx <= 0 || newIdx > 999 {
 		return nil
 	}
 	changed := newIdx != p.selPatIdx
-	if changed {
-		if err := p.askStop(); err != nil {
-			return err
-		}
-	}
 	p.claimPattern(newIdx)
 	if changed {
 		if err := p.resetEditState(); err != nil {

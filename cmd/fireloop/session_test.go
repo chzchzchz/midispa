@@ -13,9 +13,9 @@ import (
 func TestASetThatEndedOnItsOwnIsNoLongerPlaying(t *testing.T) {
 	bank, _ := chromaBank(t)
 	controller := bank.controller
-	controller.playback = stubSession(bank.newPlayback(), nil)
+	stubRunning(controller, bank.newPlayback(), nil)
 
-	require.NotNil(t, controller.playback, "the session was replaced without being asked to be")
+	require.NotNil(t, controller.running, "the session was replaced without being asked to be")
 	require.False(t, controller.playing(), "a set that has ended still reads as playing")
 
 	// So pressing Play starts a new one instead of deciding there was already one there.
@@ -33,7 +33,7 @@ func TestAnEndedSetDoesNotSilenceTheAudition(t *testing.T) {
 	controller := useController(t, NewFire(func([]byte) error { return nil }), trackWindowKit(8, -1))
 	bank := controller.patbank
 	require.NoError(t, bank.SelectTrackRow(1))
-	controller.playback = stubSession(bank.newPlayback(), nil)
+	stubRunning(controller, bank.newPlayback(), nil)
 
 	writer := &captureMidiWriter{}
 	require.NoError(t, controller.handlePatternGrid(writer, 3, 0, 100))
@@ -49,10 +49,10 @@ func TestAMeasureSeekWithNothingPlayingSchedulesNothing(t *testing.T) {
 	arrangement := &Song{}
 	arrangement.SetPattern(bank.CurrentPattern(), 0)
 	songs.Songs = map[int]*Song{1: arrangement}
-	require.Nil(t, bank.controller.playback)
+	require.Nil(t, bank.controller.running)
 
 	require.NoError(t, songs.JumpMeasure(0, 0))
-	require.Nil(t, bank.controller.playback, "a seek started a set")
+	require.Nil(t, bank.controller.running, "a seek started a set")
 }
 
 // Stopping is asked from both ends of an edit: a handler stops before it changes anything
@@ -69,7 +69,7 @@ func TestStoppingTwiceIsHarmless(t *testing.T) {
 	require.Equal(t, 1, playback.activeNoteCount(), "the test needs a note sounding")
 
 	stops := 0
-	controller.playback = stubSession(playback, func() error {
+	stubRunning(controller, playback, func() error {
 		stops++
 		return nil
 	})

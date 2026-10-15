@@ -775,8 +775,9 @@ func (c *Controller) handleEditing(note int) error {
 
 // handleNavigation answers everything that moves the view without changing a note: the
 // pattern buttons, the step cursor, the two edit modes, and the way into the arrangement.
-// These are the controls that stay live while a set plays, because none of them writes
-// state the playback worker reads.
+// These are the controls that stay live while a set plays: nothing here rewrites a
+// pattern the worker is sounding, and the selection the pattern buttons move is claimed
+// under the lock the worker reads through.
 func (c *Controller) handleNavigation(aseq sequencerWriter, note int) error {
 	switch note {
 	// Overview exposes the per-pattern length while the encoder changes steps. It stops
@@ -808,8 +809,8 @@ func (c *Controller) handleNavigation(aseq sequencerWriter, note int) error {
 		if c.alt {
 			return c.patbank.ScrollTracks(1)
 		}
-		// Jump stops the set for a selection that moves, and not for one that is
-		// already at the end of the list. Going nowhere changes nothing playing.
+		// A jump keeps the set running: the selection takes over at the
+		// next pattern boundary. Going nowhere changes nothing playing.
 		return c.patbank.Jump(1)
 	case NotePatternDown:
 		if c.alt {

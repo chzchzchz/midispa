@@ -856,9 +856,9 @@ func TestStateGesturesSaveAndLoad(t *testing.T) {
 			recorder := useScreenRecorder(t, &bank.screen)
 			readout := func() string { return recorder.row(readoutRow) }
 			if tt.song {
-				controller.mode = songView
+				controller.setView(songView)
 			}
-			t.Cleanup(func() { controller.mode = patternView })
+			t.Cleanup(func() { controller.setView(patternView) })
 
 			for _, note := range []int{NoteBrowser, NoteAccent} {
 				pressButton(t, bank, note)
@@ -970,9 +970,9 @@ func TestStateLoadRepaintsTheCurrentView(t *testing.T) {
 		{name: "pattern mode", song: false, want: "Pattern 001"},
 		{name: "song mode", song: true, want: "Song 001", other: "M 001-048"},
 	} {
-		controller.mode = patternView
+		controller.setView(patternView)
 		if tt.song {
-			controller.mode = songView
+			controller.setView(songView)
 		}
 		require.NoErrorf(t, controller.loadSession(), "%s", tt.name)
 		assert.Containsf(t, recorder.row(0), tt.want, "%s header", tt.name)

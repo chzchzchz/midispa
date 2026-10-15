@@ -539,7 +539,7 @@ func TestUnreadablePatchDoesNotStopPlayback(t *testing.T) {
 
 	writer := &captureMidiWriter{}
 	bank.controller.startPlayback(writer, bank.newPlayback())
-	require.NotNil(t, bank.controller.playback, "playback did not start")
+	require.NotNil(t, bank.controller.running, "playback did not start")
 	require.NoError(t, bank.controller.stopPlayback(),
 		"an unreadable patch must not be reported as a failure to stop")
 }

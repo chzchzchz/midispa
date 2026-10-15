@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -21,38 +22,59 @@ const (
 	pageView
 )
 
+// screenWord carries the page and the view in one word, so a playback worker asks one
+// atomic load what the unit is showing and can never see a page and a view that were never
+// on screen together. The page travels in the high bits and the view in the low two.
+func packScreen(page int, view viewMode) uint32 {
+	return uint32(page)<<2 | uint32(view)
+}
+
+// screenPage unpacks the page a screen word carries.
+func screenPage(word uint32) int {
+	return int(word >> 2)
+}
+
+// screenView unpacks the view a screen word carries.
+func screenView(word uint32) viewMode {
+	return viewMode(word & 3)
+}
+
 // Controller owns everything a Fire event can change: the banks, the clipboard, the view
 // the controls address, the modifiers under a held button, a tempo being typed, the session
 // file, and the running playback.
 //
 // One goroutine calls Handle and nothing else touches these fields, so the controller needs
-// no locking of its own. The exception is the tempo, which is left as a package-level atomic
-// because the playback worker samples it from its own goroutine and a controller field would
-// have to be guarded to stay honest.
+// no locking of its own. The exceptions are the tempo, which is left as a package-level
+// atomic, and the screen the workers sample through screen, because the playback workers
+// read both from their own goroutines and a controller field would have to be guarded to
+// stay honest.
 type Controller struct {
 	patbank   *PatternBank
 	songbank  *SongBank
 	clipboard *Pattern
 
-	mode     viewMode
+	// mode is which view the controls address, and pageIdx is the page
+	// the controller is sitting on. The event loop is their one writer.
+	// screen mirrors the pair for the playback workers, whose playheads
+	// and pattern sources ask what is showing; a read of the fields from
+	// those goroutines would race every view switch and page jump.
+	mode viewMode
+	// screen is mode and pageIdx as the workers see them. setScreen is its
+	// only writer, the same arrangement the tempo's atomic serves.
+	screen atomic.Uint32
+
 	shift    bool
 	alt      bool
 	pending  int
 	tapTimes []time.Time
 
-	// playback is the running set, or nil when nothing has been started. It stays
-	// installed after its worker ends, so the question is whether the session is running
-	// and not whether this field is nil.
-	playback *PlaybackSession
-
-	// extra holds the sessions of the other enabled pages while a
-	// song-mode set plays more than one page: the primary in
-	// playback draws the visible arrangement, and these play the
-	// same song index from their own pages with nothing to draw.
-	// They are stopped by the same stopPlayback that ends the
-	// primary, so a set has one place to ask about and one place
-	// to end.
-	extra []*PlaybackSession
+	// running is the running set, or nil when nothing has been started. It
+	// stays installed after its workers end, so the question is whether a
+	// session is running and not whether this field is nil. One entry per
+	// page the set plays, the page on screen included, is the whole of it:
+	// there is no primary and no extras, only the page that is shown and
+	// the pages that are not.
+	running *RunningSet
 
 	// pages is the page table, one entry per pad, and pageIdx is
 	// the page the controller is sitting on. The current page's
@@ -104,49 +126,20 @@ func newController(f *Fire, vb *VoiceBank, sessionPath string) *Controller {
 	bank := NewPatternBank(f, vb)
 	controller := &Controller{
 		patbank:     bank,
-		mode:        patternView,
 		pages:       map[int]*Page{1: newPage(vb)},
-		pageIdx:     1,
 		pagePad:     -1,
 		sessionPath: sessionPath,
 	}
+	controller.setScreen(1, patternView)
 	controller.songbank = NewSongBank(f, bank)
 	bank.controller = controller
 	controller.updatePageIndicator()
 	return controller
 }
 
-// startPlayback installs and starts a set the bank built. The bank says what to play and
-// how to draw it; the controller owns the fact that something is, which is what lets every
-// guard and every stop read one answer rather than three that could disagree.
-//
-// Its callers ask first that nothing is playing, so there is nothing to stop here. That is
-// also what makes replacing the field rather than stopping it safe: whatever was installed
-// either never started or has already ended, and an ended session has no worker left to
-// join.
-func (c *Controller) startPlayback(aseq sequencerWriter, playback *Playback) {
-	session := newPlaybackSession(playback)
-	c.playback = session
-	session.Start(aseq)
-}
-
-// playing reports whether a set is running, on the primary
-// or on any extra session. A worker only ends when it is
-// stopped or its write fails, and a failed write can end one
-// session's worker while another's keeps running, so the
-// guards have to ask about all of them: starting a new set
-// replaces the extras, which would orphan a still-running one
-// with nothing left that can stop it.
+// playing reports whether a set is running, on any of its sessions.
 func (c *Controller) playing() bool {
-	if c.playback != nil && c.playback.Running() {
-		return true
-	}
-	for _, session := range c.extra {
-		if session.Running() {
-			return true
-		}
-	}
-	return false
+	return c.running != nil && c.running.playing()
 }
 
 // stopPlayback ends the running set, if there is one, and puts the pattern view back the
@@ -154,18 +147,10 @@ func (c *Controller) playing() bool {
 // edit and the ones that edit before they stop cannot fight over it.
 func (c *Controller) stopPlayback() error {
 	var firstErr error
-	if session := c.playback; session != nil {
-		c.playback = nil
-		if err := session.Stop(); err != nil {
-			firstErr = err
-		}
+	if c.running != nil {
+		firstErr = c.running.stop()
+		c.running = nil
 	}
-	for _, session := range c.extra {
-		if err := session.Stop(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	c.extra = nil
 	if c.patbank == nil {
 		return firstErr
 	}
@@ -179,22 +164,18 @@ func (c *Controller) stopPlayback() error {
 }
 
 // seekSongBeat schedules a seek on the running set and reports the beat it seeks away
-// from, which is the arrangement readout's before-and-after. Every installed session is
-// sought, so all the pages a set plays stay in sync. It is the one thing a bank needs
+// from, which is the arrangement readout's before-and-after. Every session is sought, so
+// all the pages a set plays stay in sync. It is the one thing a bank needs
 // the running set for that is not stopping it, and it is why a bank can reach its
 // owner for a seek without holding a handle of its own.
 //
 // Nothing is scheduled when nothing is playing, which the caller checks first; -1 is what
 // that reports, since a live playhead is never behind zero.
 func (c *Controller) seekSongBeat(beat float32) float32 {
-	if c.playback == nil {
+	if c.running == nil {
 		return -1
 	}
-	oldSongBeat := c.playback.SeekSongBeat(beat)
-	for _, session := range c.extra {
-		session.SeekSongBeat(beat)
-	}
-	return oldSongBeat
+	return c.running.seek(beat)
 }
 
 // Handle applies one Fire event to whichever view is showing. This is the whole dispatch:
@@ -211,10 +192,38 @@ func (c *Controller) Handle(aseq sequencerWriter, ev alsa.SeqEvent) error {
 	}
 }
 
-// setMode moves between the pattern view and the arrangement. Playback stops because the
-// other view has no sequencer for it, the edit modes are closed because each belongs to the
-// view being left, and the modifiers are released because they act on whatever the view under
-// them is.
+// setScreen records where the unit is looking. It is the one writer of the pair: the event
+// loop asks c.mode and c.pageIdx, which it alone writes, and the playback workers ask
+// showing(), which one atomic load answers for both.
+func (c *Controller) setScreen(page int, view viewMode) {
+	c.pageIdx = page
+	c.mode = view
+	c.screen.Store(packScreen(page, view))
+}
+
+// setPage moves to a page and keeps the view.
+func (c *Controller) setPage(page int) {
+	c.setScreen(page, c.mode)
+}
+
+// setView switches the view and keeps the page.
+func (c *Controller) setView(view viewMode) {
+	c.setScreen(c.pageIdx, view)
+}
+
+// showing is the screen as the playback workers see it, in one load: the
+// page and the view that their playheads and pattern sources both ask
+// about. The event loop asks c.mode and c.pageIdx, which it alone writes.
+func (c *Controller) showing() (int, viewMode) {
+	word := c.screen.Load()
+	return screenPage(word), screenView(word)
+}
+
+// setMode moves between the pattern view and the arrangement. Playback stops because a
+// set is built for the view it started on: each view plays its own selection, and a set
+// that kept running across the switch would sound a selection the screen no longer shows.
+// The edit modes are closed because each belongs to the view being left, and the
+// modifiers are released because they act on whatever the view under them is.
 func (c *Controller) setMode(mode viewMode, songLight int) error {
 	if err := c.stopPlayback(); err != nil {
 		return err
@@ -225,7 +234,7 @@ func (c *Controller) setMode(mode viewMode, songLight int) error {
 	if err := c.releaseModifiers(); err != nil {
 		return err
 	}
-	c.mode = mode
+	c.setView(mode)
 	return c.patbank.pads.SetLed(NotePatternSong, songLight)
 }
 

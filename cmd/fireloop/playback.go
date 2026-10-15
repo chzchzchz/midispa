@@ -56,6 +56,13 @@ type Playback struct {
 	// anything, which is only a wait when a vendor dump was among them.
 	settle time.Duration
 
+	// beatMu serializes one beat of the worker against the gestures that
+	// move the screen and the banks together: a page jump holds it while it
+	// rewrites both, so no beat reads a bank half-moved or draws for a
+	// screen that has already moved. The worker holds it for the length of
+	// a beat and of the boundary that follows it.
+	beatMu sync.Mutex
+
 	positionMu sync.Mutex
 	activeMu   sync.Mutex
 	active     map[*Voice]activeChromaticNote
@@ -471,7 +478,9 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter, clock stepCloc
 		logger.Info("playback end", "error", runErr)
 	}()
 	curBpm := currentBPM()
+	p.beatMu.Lock()
 	curPattern := p.patternForBeat(0)
+	p.beatMu.Unlock()
 	defer clock.Stop()
 	// The settle wait belongs here rather than in the button handler, so a press while
 	// an instrument is loading is still read, and the anchor is taken after it so
@@ -501,7 +510,12 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter, clock stepCloc
 			p.setPosition(songBeat-patBeat, 0)
 			_, patBeat, _ = p.position()
 		}
+		// The beat lock covers the beat and the boundary that follows it, which
+		// are the two sections that read the banks and the screen: a gesture
+		// that moves them together waits here rather than interleaving.
+		p.beatMu.Lock()
 		nextBeat, err := p.playBeat(aseq, curPattern)
+		p.beatMu.Unlock()
 		if err != nil {
 			return err
 		}
@@ -519,7 +533,9 @@ func (p *Playback) run(ctx context.Context, aseq sequencerWriter, clock stepCloc
 			songBeat, _, _ = p.position()
 			p.setPosition(songBeat+nextBeat-patBeat, nextBeat)
 		} else {
+			p.beatMu.Lock()
 			advance := p.crossMeasure(aseq, curPattern, curBpm, patBeat, anchor)
+			p.beatMu.Unlock()
 			curPattern, curBpm, anchor = advance.pattern, advance.bpm, advance.anchor
 			waitUntil = anchor.Sub(clock.Now())
 		}
@@ -591,35 +607,33 @@ func (p *Playback) patternForBeat(songBeat float32) *Pattern {
 }
 
 // newPlayback is the pattern bank's own playback: the pattern it is
-// showing, with the playhead drawn as it moves.
+// showing, with the playhead drawn as it moves. It answers the live
+// selection, so a pattern chosen while the set runs takes over at the next
+// pattern boundary instead of the set ending for the choice.
 func (pb *PatternBank) newPlayback() *Playback {
-	return pb.newPlaybackOf(pb.Patterns, pb.selPatIdx, true)
+	return pb.newPlaybackOf(pb.CurrentPattern)
 }
 
-// newPlaybackOf builds a playback over any page's patterns, at any pattern
-// index. It starts nothing and claims nothing, because a bank says what it
-// would play and the controller decides that something is. The next closure
-// answers beat zero with the given map's selected pattern and nil elsewhere,
-// which is pattern mode's one-pattern playback, and the drawing closures
-// exist only for the page on screen: every other enabled page plays its own
-// pattern with nothing to draw, because that page is not on screen. A map
-// with no pattern at the index yields a session with no pattern source,
-// which the playback loop plays as silence. The map and the selection are
-// captured rather than read live, which is safe because a selection cannot
-// change while a set runs: a jump or a load stops playback before the
-// selection or the map moves.
-func (pb *PatternBank) newPlaybackOf(patterns map[int]*Pattern, selPatIdx int, draw bool) *Playback {
+// newPlaybackOf builds a playback over a page's patterns. selected answers
+// which pattern a boundary plays; the running set hands one that follows
+// the bank while the page is shown and replays the pattern it was playing
+// once it is not. It starts nothing and claims nothing, because a bank says
+// what it would play and the controller decides that something is. The next
+// closure answers beat zero with the selected pattern and nil elsewhere,
+// which is pattern mode's one-pattern playback, and the playhead closure
+// draws the bank's grid for whatever beat it is handed: the running set
+// decides when that drawing is wanted, which is what keeps the "when does a
+// playhead draw" rule in one place. A selection with no pattern yields a
+// session with no pattern source, which the playback loop plays as silence.
+func (pb *PatternBank) newPlaybackOf(selected func() *Pattern) *Playback {
 	var lastColumn int
 	// Reset to start of pattern.
 	next := func(beat float32) *Pattern {
 		lastColumn = 15
 		if beat == 0 {
-			return patterns[selPatIdx]
+			return selected()
 		}
 		return nil
-	}
-	if !draw {
-		return &Playback{nextPattern: next, vb: pb.vb}
 	}
 	// Light up column if new position.
 	update := func(beat float32) error {
@@ -648,16 +662,16 @@ func (pb *PatternBank) newPlaybackOf(patterns map[int]*Pattern, selPatIdx int, d
 // is showing rather than against a pattern, and it is where the running measure
 // readout comes from.
 func (sb *SongBank) newPlayback() *Playback {
-	return sb.newPlaybackOf(sb.Songs, sb.selSongIdx, true)
+	return sb.newPlaybackOf(sb.Songs, sb.selSongIdx)
 }
 
-// newPlaybackOf builds a playback over any page's songs, at any song index. The
-// drawing closures exist only for the page on screen: every other enabled page
-// plays the same song index from its own map with nothing to draw, because that
-// page is not on screen. A map with no song at the index yields a session with
-// no pattern source, which the playback loop plays as silence, because
-// Song.BeatToPattern does not take a nil receiver.
-func (sb *SongBank) newPlaybackOf(songs map[int]*Song, songIdx int, draw bool) *Playback {
+// newPlaybackOf builds a playback over a page's songs, at a song index. The
+// playhead closure lights the measure it reaches and names it on the rows
+// below the header; the running set decides when that drawing is wanted.
+// A map with no song at the index yields a session with no pattern source,
+// which the playback loop plays as silence, because Song.BeatToPattern does
+// not take a nil receiver.
+func (sb *SongBank) newPlaybackOf(songs map[int]*Song, songIdx int) *Playback {
 	p := &Playback{vb: sb.kit()}
 	// Move to next song pattern.
 	if song := songs[songIdx]; song != nil {
@@ -666,13 +680,13 @@ func (sb *SongBank) newPlaybackOf(songs map[int]*Song, songIdx int, draw bool) *
 			return pat
 		}
 	}
-	if !draw {
-		return p
-	}
 	// Light playing measure.
 	lastSongBeat := float32(-99999)
 	p.updatePads = func(beat float32) error {
 		s := sb.CurrentSong()
+		if s == nil {
+			return nil
+		}
 		_, lastMeasure := s.BeatToPattern(lastSongBeat)
 		pat, givenMeasure := s.BeatToPattern(beat)
 		if givenMeasure < 0 {

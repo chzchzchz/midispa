@@ -237,7 +237,7 @@ func TestNoteAndControlChangeShareANumber(t *testing.T) {
 func TestSoftwareControlsWorkInSongMode(t *testing.T) {
 	_, bank, songs, _ := useTestBanks(t)
 	recorder := useScreenRecorder(t, &songs.screen)
-	bank.controller.mode = songView
+	bank.controller.setView(songView)
 
 	require.NoError(t, sendCC(bank, softwareChannel, CcSwing, 86))
 	assert.InDelta(t, 67.2, currentSwingPct(), 1e-9, "cc 86 should be a swung 67.2")
@@ -538,7 +538,7 @@ func TestLeavingThePatternViewClosesSwingEntry(t *testing.T) {
 func TestSwingEntryLeavesPlaybackRunning(t *testing.T) {
 	_, bank, _, _ := useTestBanks(t)
 	stopped := 0
-	bank.controller.playback = stubSession(&Playback{}, func() error {
+	stubRunning(bank.controller, nil, func() error {
 		stopped++
 		return nil
 	})

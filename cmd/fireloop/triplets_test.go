@@ -521,7 +521,7 @@ func TestAltPadOnAPercussiveRowMakesAGroup(t *testing.T) {
 func TestTripletDoesNotStopPlaybackOrAudition(t *testing.T) {
 	bank, _ := quietBank(t, trackWindowKit(8, -1))
 	writer := &captureMidiWriter{}
-	bank.controller.playback = stubSession(&Playback{writer: writer}, nil)
+	stubRunning(bank.controller, &Playback{writer: writer}, nil)
 	for _, note := range []int{54, 55, 56} {
 		pressPad(t, bank, note)
 	}
@@ -529,7 +529,7 @@ func TestTripletDoesNotStopPlaybackOrAudition(t *testing.T) {
 	pressPad(t, bank, 54)
 	pressButton(t, bank, NoteAlt)
 
-	require.NotNil(t, bank.controller.playback, "the gesture stopped the set")
+	require.NotNil(t, bank.controller.running, "the gesture stopped the set")
 	assert.Empty(t, writer.snapshot(), "the gesture auditioned a note")
 }
 

@@ -214,7 +214,7 @@ func TestChromaticPlaybackCleanupOnStop(t *testing.T) {
 	playback := &Playback{active: make(map[*Voice]activeChromaticNote), writer: writer}
 	require.NoError(t, playback.playChromaticEvent(writer, Event{Voice: voice, ChromaticNote: 72, Velocity: 88}))
 	controller := useController(t, NewFire(func([]byte) error { return nil }), stateKit())
-	controller.playback = stubSession(playback, nil)
+	stubRunning(controller, playback, nil)
 	controller.stopPlayback()
 	require.Zero(t, playback.activeNoteCount(), "stop left an active chromatic note")
 	require.Len(t, writer.events, 2, "stop writes a note-on and a note-off")
@@ -366,4 +366,43 @@ func TestNextEventBeat(t *testing.T) {
 				"nextEventBeat(%v, %v, %v)", tt.patBeat, tt.nextBeat, tt.patternBeats)
 		})
 	}
+}
+
+// Switching patterns while a set runs keeps the set running, and the pattern
+// chosen takes over at the next pattern boundary, which is where the running
+// playback asks its source what plays next. The two patterns sound different
+// voices' notes, so the wire tells the takeover apart from the pattern that
+// was playing when the switch happened.
+func TestPatternChoiceTakesOverAtTheBoundary(t *testing.T) {
+	controller := useController(t, NewFire(func([]byte) error { return nil }), trackWindowKit(2, -1))
+	bank := controller.patbank
+	first := bank.CurrentPattern()
+	first.ToggleEvent(Event{Voice: bank.vb.voices[0], Beat: 0, Velocity: 100})
+	require.NoError(t, bank.Jump(1))
+	second := bank.CurrentPattern()
+	second.ToggleEvent(Event{Voice: bank.vb.voices[1], Beat: 0, Velocity: 100})
+	require.NoError(t, bank.Jump(-1))
+	require.Equal(t, 1, bank.selPatIdx, "the setup needs pattern 1 selected to play")
+
+	// A fast tempo keeps the boundary the switch waits for well inside the
+	// wait the test allows itself.
+	setBPM(300)
+	capture := &captureMidiWriter{}
+	controller.startPlayback(capture, bank.newPlayback())
+	t.Cleanup(func() { _ = controller.stopPlayback() })
+	capture.waitForEvents(t, 1)
+
+	require.NoError(t, bank.Jump(1))
+	require.Equal(t, 2, bank.selPatIdx, "the pattern did not move")
+	require.True(t, controller.playing(), "switching patterns stopped the set")
+
+	waitFor(t, "pattern 2's note to sound", func() bool {
+		for _, event := range capture.snapshot() {
+			if len(event.Data) == 3 && midi.IsNoteOn(event.Data[0]) &&
+				event.Data[2] > 0 && int(event.Data[1]) == 37 {
+				return true
+			}
+		}
+		return false
+	})
 }

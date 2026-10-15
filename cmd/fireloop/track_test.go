@@ -95,14 +95,44 @@ func stubSession(playback *Playback, stop playbackStopFunc) *PlaybackSession {
 	return session
 }
 
+// stubRunning installs a running set of one stubbed session on the page on
+// screen, so a test hears whether a gesture ended the set without running a
+// worker. The callback runs on the way out, the way a worker's stop does,
+// and a playback the test brings is the one sounded; nil means an empty one.
+func stubRunning(c *Controller, playback *Playback, onStop func() error) *RunningSet {
+	if playback == nil {
+		playback = &Playback{}
+	}
+	c.running = &RunningSet{
+		controller: c,
+		sessions:   map[int]*PlaybackSession{c.pageIdx: stubSession(playback, onStop)},
+	}
+	return c.running
+}
+
 // installedPlayback is the playback behind whatever set the controller has installed, and
 // it does not insist that a worker is running: a press of Play with no port behind it
 // publishes the painters and starts nothing, which is the state a test wants when it is
 // driving the playhead by hand rather than waiting for a worker to move it.
 func installedPlayback(t *testing.T, controller *Controller) *Playback {
 	t.Helper()
-	require.NotNil(t, controller.playback, "nothing is installed")
-	return controller.playback.playback
+	require.NotNil(t, controller.running, "nothing is installed")
+	session := controller.running.sessions[controller.pageIdx]
+	require.NotNil(t, session, "the page on screen has no session")
+	return session.playback
+}
+
+// startPlayback is the test seam for starting a set the bank built: a bare
+// playback with no page wrapping, whose playhead draws unconditionally.
+// Production starts sets only through startSetPlayback, which builds one
+// session per enabled page under the running set's own rules.
+func (c *Controller) startPlayback(aseq sequencerWriter, playback *Playback) {
+	session := newPlaybackSession(playback)
+	c.running = &RunningSet{
+		controller: c,
+		sessions:   map[int]*PlaybackSession{c.pageIdx: session},
+	}
+	session.Start(aseq)
 }
 
 func assertVisibleTracks(t *testing.T, bank *PatternBank, first int) {
@@ -389,27 +419,27 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 		// Spread over several beats, so the switches interleave with the worker's own reads.
 		time.Sleep(3 * time.Millisecond)
 		require.NoErrorf(t, dispatch(bank, padMessage(NoteMute1+row-1, 100)), "row %d", row)
-		require.NotNilf(t, bank.controller.playback, "selecting track row %d stopped the pattern", row)
+		require.NotNilf(t, bank.controller.running, "selecting track row %d stopped the pattern", row)
 		require.Equalf(t, row, bank.selTrackRow, "the selected row after pressing it")
 	}
 	// The worker must have painted while those switches were happening, or the race this
 	// test exists to catch was never exercised.
 	require.Greater(t, writes.Load(), before, "the sequencer worker did not paint while the selection moved")
 	require.NoError(t, bank.controller.stopPlayback())
-	require.Nil(t, bank.controller.playback, "stopping left the sequencer armed")
+	require.Nil(t, bank.controller.running, "stopping left the sequencer armed")
 }
 
-// A press that cannot change the set must not end it. The pattern buttons stop playback
-// because moving between patterns rewrites what the worker reads, but at the end of the
-// list there is nowhere to move to, and the stop belongs to the bank that knows whether the
-// selection moved rather than to the handler that asked.
-func TestAPressThatChangesNothingDoesNotStopTheSet(t *testing.T) {
+// The pattern buttons keep a running set running: the selection moves, and
+// the running playback answers the live selection, so the pattern chosen
+// takes over at the next pattern boundary. A press with nowhere to go is
+// still nothing at all.
+func TestPatternSwitchKeepsTheSetPlaying(t *testing.T) {
 	bank, _ := quietBank(t, trackWindowKit(8, 0))
 	require.Equal(t, 1, bank.selPatIdx, "the test needs the first pattern selected to start with")
 
 	stopped := 0
 	install := func() {
-		bank.controller.playback = stubSession(&Playback{}, func() error {
+		stubRunning(bank.controller, nil, func() error {
 			stopped++
 			return nil
 		})
@@ -419,21 +449,18 @@ func TestAPressThatChangesNothingDoesNotStopTheSet(t *testing.T) {
 	install()
 	require.NoError(t, dispatch(bank, padMessage(NotePatternUp, 100)))
 	require.Equal(t, 2, bank.selPatIdx, "the pattern did not move")
-	require.Positive(t, stopped, "moving to another pattern left the set playing")
+	require.Zero(t, stopped, "moving to another pattern stopped the set")
 
 	// Down moves back, which changes what would be played just as much.
-	stopped = 0
-	install()
 	require.NoError(t, dispatch(bank, padMessage(NotePatternDown, 100)))
 	require.Equal(t, 1, bank.selPatIdx, "the pattern did not move back")
-	require.Positive(t, stopped, "moving back to the first pattern left the set playing")
+	require.Zero(t, stopped, "moving back to the first pattern stopped the set")
 
 	// And now there is nothing before the first one.
-	stopped = 0
-	install()
 	require.NoError(t, dispatch(bank, padMessage(NotePatternDown, 100)))
 	require.Equal(t, 1, bank.selPatIdx, "the selection moved past the first pattern")
 	require.Zero(t, stopped, "pressing down at the end of the pattern list stopped the set")
+	require.NotNil(t, bank.controller.running, "the set was uninstalled")
 }
 
 // Alt plus a solo button clears the row's notes, which changes what is being played, so
@@ -443,7 +470,7 @@ func TestAltSoloStillStopsPlayback(t *testing.T) {
 	voice := kit.voices[0]
 	bank.CurrentPattern().ToggleEvent(Event{Voice: voice, Beat: stepBeat(0), Velocity: 100})
 	stopped := 0
-	bank.controller.playback = stubSession(&Playback{}, func() error {
+	stubRunning(bank.controller, nil, func() error {
 		stopped++
 		return nil
 	})
@@ -454,7 +481,7 @@ func TestAltSoloStillStopsPlayback(t *testing.T) {
 	require.False(t, cleared, "Alt plus the solo button did not clear the row")
 
 	// The same button without Alt is a selection, and it leaves the sequencer alone.
-	bank.controller.playback = stubSession(&Playback{}, func() error {
+	stubRunning(bank.controller, nil, func() error {
 		stopped++
 		return nil
 	})

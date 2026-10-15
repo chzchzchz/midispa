@@ -143,13 +143,13 @@ func TestModeDoesNotStopPlayback(t *testing.T) {
 	bank, _ := chromaBank(t)
 	require.NoError(t, bank.SelectTrackRow(1))
 	stopCalled := false
-	bank.controller.playback = stubSession(&Playback{}, func() error {
+	stubRunning(bank.controller, nil, func() error {
 		stopCalled = true
 		return nil
 	})
 	require.NoError(t, dispatch(bank, padMessage(NoteMode, 100)))
 	require.False(t, stopCalled, "Mode stopped active playback")
-	require.NotNil(t, bank.controller.playback, "Mode cleared active playback")
+	require.NotNil(t, bank.controller.running, "Mode cleared active playback")
 }
 
 func TestChromaticPadSetsEditingStep(t *testing.T) {
