@@ -424,7 +424,7 @@ func TestNoteEditPlayheadLeavesThePaletteAlone(t *testing.T) {
 
 	before := paletteRegion(sim)
 	for step := 0; step < maxPatternSteps; step++ {
-		require.NoError(t, installedPlayback(t, bank.controller).updatePads(stepBeat(step)))
+		playheadBeat(t, bank.controller, stepBeat(step))
 	}
 	for i, want := range before {
 		row, col := i/chromaticPaletteColumns, i%chromaticPaletteColumns
@@ -444,12 +444,12 @@ func TestNoteEditPlayheadLightsTheStepStrip(t *testing.T) {
 	require.NoError(t, dispatch(bank, padMessage(NotePlay, 100)))
 
 	require.NotEqual(t, oledWhite, stripCell(sim, 5), "step 5 was lit before the playhead arrived")
-	require.NoError(t, installedPlayback(t, bank.controller).updatePads(stepBeat(5)))
+	playheadBeat(t, bank.controller, stepBeat(5))
 	require.Equal(t, oledWhite, stripCell(sim, 5), "step 5 while the playhead is there")
 
 	// The step the note is on keeps its colour apart from the playhead.
 	noteColor := chromaticPaletteColor(40)
-	require.NoError(t, installedPlayback(t, bank.controller).updatePads(stepBeat(6)))
+	playheadBeat(t, bank.controller, stepBeat(6))
 	require.Equal(t, oledWhite, stripCell(sim, 6), "step 6 while the playhead is there")
 	require.NotEqual(t, oledWhite, stripCell(sim, 5), "the cell the playhead left is still lit")
 	require.Equal(t, noteColor, stripCell(sim, 5), "step 5 after the playhead left")
@@ -463,7 +463,7 @@ func TestNoteEditPlayheadClearsOnStop(t *testing.T) {
 	require.NoError(t, bank.SelectTrackRow(1))
 	require.NoError(t, bank.ToggleNoteMode())
 	require.NoError(t, dispatch(bank, padMessage(NotePlay, 100)))
-	require.NoError(t, installedPlayback(t, bank.controller).updatePads(stepBeat(5)))
+	playheadBeat(t, bank.controller, stepBeat(5))
 	require.Equal(t, oledWhite, stripCell(sim, 5), "step 5 while playing")
 
 	require.NoError(t, bank.controller.stopPlayback())

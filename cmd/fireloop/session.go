@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 )
 
 // PlaybackSession is one running set: the worker sounding it, the handle that ends it,
@@ -32,32 +33,25 @@ func newPlaybackSession(playback *Playback) *PlaybackSession {
 	return &PlaybackSession{playback: playback, done: make(chan struct{})}
 }
 
-// Start sends the kit's patches and launches the worker. A missing writer still makes a
-// session: the painters are built and published either way, and something has to be there
-// to answer Stop.
-func (s *PlaybackSession) Start(aseq sequencerWriter) {
-	if isNilMidiWriter(aseq) {
-		s.playback.reset()
-		close(s.done)
-		return
-	}
-	s.start(aseq)
+// startWithSettle launches a session whose kit has already been sent, with
+// the settle that one send asked for. A missing writer still makes a
+// session, the way the test seam's Start does, and nothing is sent again.
+func (s *PlaybackSession) startWithSettle(aseq sequencerWriter, settle time.Duration) {
+	s.launch(aseq, settle)
 }
 
-func (s *PlaybackSession) start(aseq sequencerWriter) {
+// launch runs the worker. A missing writer still makes a session: reset and
+// closed, with nothing running behind it but something there to answer
+// Stop. A dump is not a channel message, so the worker waits out the settle
+// the kit's send asked for before it plays anything.
+func (s *PlaybackSession) launch(aseq sequencerWriter, settle time.Duration) {
 	playback := s.playback
 	playback.reset()
 	playback.writer = aseq
-	// An instrument has to be set up before its first note, so the kit's patches go out
-	// here, ahead of the worker that plays the pattern. A patch that cannot be sent is
-	// logged rather than returned: playback that starts with the wrong settings is
-	// still playback, and an error escaping to the button handler would stop the
-	// process outright. A dump is not a channel message, so the worker waits out the
-	// settle the send asked for before it plays anything.
-	settle, err := sendKitPatches(aseq, playback.vb)
 	playback.settle = settle
-	if err != nil {
-		logger.Error("kit patches", "error", err)
+	if isNilMidiWriter(aseq) {
+		close(s.done)
+		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	// The clock is handed to the loop rather than left on the playback, so where the time

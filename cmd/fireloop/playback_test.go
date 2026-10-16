@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -66,6 +67,42 @@ func TestWriteSequencerPort(t *testing.T) {
 	require.Len(t, writer.events, 1, "wrote the wrong number of transport messages")
 	assertMidiData(t, writer.events[0], []byte{midi.Start})
 	require.Equal(t, alsa.SubsSeqAddr, writer.events[0].SeqAddr, "transport did not go to subscribers")
+}
+
+// publishBeat is the worker's whole display contract, so its shape is pinned
+// directly: the newest beat wins, one wake is pending however many beats
+// were published, a full wake is never waited on, and a playback built
+// without a wake — the test seam — records the beat and publishes nowhere.
+func TestPublishBeat(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		publish  []float32
+		wantBeat float32
+	}{
+		{name: "one beat", publish: []float32{1}, wantBeat: 1},
+		{name: "a burst collapses to the newest", publish: []float32{1, 2, 3}, wantBeat: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Playback{wake: make(chan struct{}, 1)}
+			for _, beat := range tt.publish {
+				p.publishBeat(beat)
+			}
+			require.Equal(t, math.Float32bits(tt.wantBeat), p.latestBeat.Load(), "the newest beat")
+			require.Equal(t, 1, len(p.wake), "one wake pending, however many beats were published")
+		})
+	}
+
+	// A drained wake serves the next beat.
+	p := &Playback{wake: make(chan struct{}, 1)}
+	p.publishBeat(1)
+	<-p.wake
+	p.publishBeat(2)
+	require.Equal(t, 1, len(p.wake), "the wake serves the next beat")
+
+	// The seam's playback has nowhere to publish and nothing to block on.
+	var bare Playback
+	bare.publishBeat(9)
+	require.Equal(t, math.Float32bits(float32(9)), bare.latestBeat.Load(), "the seam still records the beat")
 }
 
 func TestPlaybackStopReturnsRunError(t *testing.T) {

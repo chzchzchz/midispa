@@ -406,7 +406,10 @@ func openSequencer(firePort string, devs []Device) (*alsa.Seq, alsa.SeqAddr, err
 }
 
 // processIncomingEvents applies the Fire's events one at a time, which is the only place the
-// banks are changed, and saves the session when it is asked to leave.
+// banks are changed, and saves the session when it is asked to leave. Between events it
+// renders the running set's playheads off the wake the workers signal, so the display has
+// one writer and a beat published before a gesture is drawn against the screen that shows
+// when the render runs, not the one that showed when it published.
 //
 // The save is here rather than wherever the request came from because this goroutine is the
 // only reader of the banks. Saving from a signal handler would walk the pattern map while
@@ -424,15 +427,26 @@ func (c *Controller) processIncomingEvents(events sequencerWriter, inc <-chan al
 			panic(problem)
 		}
 	}()
-	for ev := range inc {
-		// An event carrying no data is the leave request rather than MIDI. Both handlers
-		// already ignore anything that is not three bytes, so an empty event cannot
-		// collide with real traffic.
-		if len(ev.Data) == 0 {
-			c.saveSessionOnExit()
-			return
+	for {
+		select {
+		case ev, ok := <-inc:
+			if !ok {
+				return
+			}
+			// An event carrying no data is the leave request rather than MIDI. Both handlers
+			// already ignore anything that is not three bytes, so an empty event cannot
+			// collide with real traffic.
+			if len(ev.Data) == 0 {
+				c.saveSessionOnExit()
+				return
+			}
+			c.handleIncomingEvent(events, ev)
+		case <-c.wake:
+			// A wake that queued behind a stopping worker is rendered
+			// against the live set or dropped here, both safe; a wake
+			// pending at the leave sentinel is simply not taken.
+			c.renderPlayheads()
 		}
-		c.handleIncomingEvent(events, ev)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -393,6 +394,38 @@ func TestSongPlaybackStartsWithTheKitPatch(t *testing.T) {
 	require.GreaterOrEqualf(t, len(events), 2, "song playback wrote too few messages to hold the kit patch")
 	assertMidiData(t, events[0], []byte{midi.MakeCC(1), 74, 90})
 	assertMidiData(t, events[1], []byte{midi.MakePgm(1), 42})
+}
+
+// The kit is one rig however many pages a set plays, so its patches go out
+// once for the set rather than once per session: a page count's worth of
+// identical dumps sat between the Play press and the first note. The one
+// send's settle is what every session waits, so no session pays for the
+// dump again in its own time.
+func TestASetSendsTheKitOnceForAllItsPages(t *testing.T) {
+	dir := t.TempDir()
+	device := patchedDevice(dir, patchFile(t, dir, "dump.mid", patchDump), patchVoices(1)...)
+	device.Settle = Settle(100 * time.Millisecond)
+	bank, _ := quietBank(t, NewVoiceBank([]Device{device}))
+	controller := bank.controller
+
+	// A second page, so the set plays two sessions on one kit.
+	doubleTapPage(t, controller, 2)
+	writer := &captureMidiWriter{}
+	require.NoError(t, controller.startSetPlayback(writer))
+	defer controller.stopPlayback()
+
+	require.Len(t, controller.running.sessions, 2, "both pages should play")
+	dumps := 0
+	for _, event := range writer.snapshot() {
+		if bytes.Equal(event.Data, patchDump.Raw()) {
+			dumps++
+		}
+	}
+	require.Equal(t, 1, dumps, "the kit's dump went out once for a two-page set")
+	for _, session := range controller.running.sessions {
+		require.Equal(t, time.Duration(device.Settle), session.playback.settle,
+			"a session is waiting out a settle of its own")
+	}
 }
 
 // A dump has to be absorbed before a note can sound the new patch, so a device can ask

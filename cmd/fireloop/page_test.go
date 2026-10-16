@@ -55,9 +55,11 @@ func TestPageModeKeepsASongSetPlaying(t *testing.T) {
 	require.Equal(t, pageView, controller.mode)
 	require.True(t, controller.playing(), "entering page mode stopped the set")
 
-	// The page grid owns the pads while it shows, so give the playhead the
-	// time to cross its boundary and try: not one pad may move, and the
-	// measure readout may not come back over the grid's rows.
+	// The page grid owns the pads while it shows, so give the set the time
+	// to cross its boundary and publish: not one pad may move, and the
+	// measure readout may not come back over the grid's rows. The renderer
+	// is what a worker's beat reaches now, so it is driven here directly —
+	// the loop tests never run it, and a worker never paints again.
 	grid := songPads.pads
 	waitFor(t, "the set to cross a measure boundary", func() bool {
 		ons := 0
@@ -69,6 +71,7 @@ func TestPageModeKeepsASongSetPlaying(t *testing.T) {
 		}
 		return ons >= 2
 	})
+	controller.renderPlayheads()
 	require.Equal(t, grid, songPads.pads, "the playhead painted over the page grid")
 	require.NotContains(t, recorder.row(4), "Measure", "the playhead wrote over the page grid's rows")
 

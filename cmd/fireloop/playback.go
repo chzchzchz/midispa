@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
@@ -45,8 +45,17 @@ type Playback struct {
 	// < 0 if no skip, >= 0 in case of a skip.
 	nextSongBeat float32
 
-	updatePads  func(curBeat float32) error
 	nextPattern func(curBeat float32) *Pattern
+
+	// latestBeat is the song position the worker last played, as float32
+	// bits, for the event loop's renderer. The store is the whole message;
+	// the wake only says "look". Go has no atomic float32, so the bits
+	// travel over an atomic.Uint32.
+	latestBeat atomic.Uint32
+	// wake is the controller's render wake. It is nil for a playback built
+	// without the running set — the test seam — which then publishes
+	// nowhere, because a send on a nil channel would block the beat forever.
+	wake chan struct{}
 
 	// vb is the kit whose patches are sent before the first note. It is nil when a
 	// playback is started without one, which is what tests and the pattern painters
@@ -170,13 +179,25 @@ func (p *Playback) playBeat(aseq alsa.EventWriter, pat *Pattern) (float32, error
 			return 0, err
 		}
 	}
-	if p.updatePads != nil {
-		songBeat, _, _ := p.position()
-		if err := p.updatePads(songBeat); err != nil {
-			return 0, err
-		}
-	}
+	songBeat, _, _ := p.position()
+	p.publishBeat(songBeat)
 	return nextBeat, nil
+}
+
+// publishBeat records where the worker just played and asks the event loop
+// to render it. The wake is a capacity-one channel sent to without blocking,
+// so publishing never holds a beat, a pending render is not duplicated, and
+// nothing queues but the wake: the newest beat overwrites the last, and the
+// render reads each session's atomic rather than the channel.
+func (p *Playback) publishBeat(beat float32) {
+	p.latestBeat.Store(math.Float32bits(beat))
+	if p.wake == nil {
+		return
+	}
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
 }
 
 func chromaticMidiOn(channel, note, velocity int) []byte {
@@ -606,71 +627,31 @@ func (p *Playback) patternForBeat(songBeat float32) *Pattern {
 	return p.nextPattern(songBeat)
 }
 
-// newPlayback is the pattern bank's own playback: the pattern it is
-// showing, with the playhead drawn as it moves. It answers the live
-// selection, so a pattern chosen while the set runs takes over at the next
-// pattern boundary instead of the set ending for the choice.
-func (pb *PatternBank) newPlayback() *Playback {
-	return pb.newPlaybackOf(pb.CurrentPattern)
-}
-
 // newPlaybackOf builds a playback over a page's patterns. selected answers
 // which pattern a boundary plays; the running set hands one that follows
 // the bank while the page is shown and replays the pattern it was playing
 // once it is not. It starts nothing and claims nothing, because a bank says
-// what it would play and the controller decides that something is. The next
+// what it would play and the controller decides that something is. The
 // closure answers beat zero with the selected pattern and nil elsewhere,
-// which is pattern mode's one-pattern playback, and the playhead closure
-// draws the bank's grid for whatever beat it is handed: the running set
-// decides when that drawing is wanted, which is what keeps the "when does a
-// playhead draw" rule in one place. A selection with no pattern yields a
-// session with no pattern source, which the playback loop plays as silence.
+// which is pattern mode's one-pattern playback; where the playhead is
+// drawn is the event loop renderer's, not a playback's. A selection with no
+// pattern yields a session with no pattern source, which the playback loop
+// plays as silence.
 func (pb *PatternBank) newPlaybackOf(selected func() *Pattern) *Playback {
-	var lastColumn int
-	// Reset to start of pattern.
 	next := func(beat float32) *Pattern {
-		lastColumn = 15
 		if beat == 0 {
 			return selected()
 		}
 		return nil
 	}
-	// Light up column if new position.
-	update := func(beat float32) error {
-		if pb.noteEditActive() {
-			// Note editing owns the grid with the pitch palette, so the playhead moves
-			// along the step strip rather than over the palette.
-			return pb.drawStepPlayhead(eventStep(Event{Beat: beat}))
-		}
-		thisColumn := int(math.Floor(float64(beat*patternStepsPerBeat))) % 16
-		if thisColumn == lastColumn {
-			// No update.
-			return nil
-		}
-		// Reset last column.
-		if err := pb.drawPadColumn(lastColumn); err != nil {
-			return err
-		}
-		// Set new column.
-		lastColumn = thisColumn
-		return pb.drawPadColumnInvert(thisColumn)
-	}
-	return &Playback{updatePads: update, nextPattern: next, vb: pb.vb}
+	return &Playback{nextPattern: next, vb: pb.vb}
 }
 
-// newPlayback is the song bank's counterpart. It measures against the song it
-// is showing rather than against a pattern, and it is where the running measure
-// readout comes from.
-func (sb *SongBank) newPlayback() *Playback {
-	return sb.newPlaybackOf(sb.Songs, sb.selSongIdx)
-}
-
-// newPlaybackOf builds a playback over a page's songs, at a song index. The
-// playhead closure lights the measure it reaches and names it on the rows
-// below the header; the running set decides when that drawing is wanted.
-// A map with no song at the index yields a session with no pattern source,
-// which the playback loop plays as silence, because Song.BeatToPattern does
-// not take a nil receiver.
+// newPlaybackOf builds a playback over a page's songs, at a song index.
+// Where the measure playhead is drawn is the event loop renderer's, not a
+// playback's. A map with no song at the index yields a session with no
+// pattern source, which the playback loop plays as silence, because
+// Song.BeatToPattern does not take a nil receiver.
 func (sb *SongBank) newPlaybackOf(songs map[int]*Song, songIdx int) *Playback {
 	p := &Playback{vb: sb.kit()}
 	// Move to next song pattern.
@@ -679,31 +660,6 @@ func (sb *SongBank) newPlaybackOf(songs map[int]*Song, songIdx int) *Playback {
 			pat, _ := song.BeatToPattern(beat)
 			return pat
 		}
-	}
-	// Light playing measure.
-	lastSongBeat := float32(-99999)
-	p.updatePads = func(beat float32) error {
-		s := sb.CurrentSong()
-		if s == nil {
-			return nil
-		}
-		_, lastMeasure := s.BeatToPattern(lastSongBeat)
-		pat, givenMeasure := s.BeatToPattern(beat)
-		if givenMeasure < 0 {
-			return nil
-		}
-		lastSongBeat = beat
-		if lastMeasure == givenMeasure {
-			return nil
-		}
-		if err := sb.ToggleMeasureBrightness(lastMeasure, givenMeasure); err != nil {
-			return err
-		}
-		if err := sb.printRow(4, fmt.Sprintf("Measure %03d", givenMeasure+1)); err != nil {
-			return err
-		}
-		pidx := sb.pb.PatternIdxMap()[pat]
-		return sb.printRow(5, fmt.Sprintf("Pat-bar %03d", pidx))
 	}
 	return p
 }

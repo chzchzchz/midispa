@@ -26,7 +26,7 @@ type Pattern struct {
 
 var emptyPattern Pattern
 
-// eventStep converts the stored beat position to the integer grid position used by editing, ties and
+// beatStep converts a beat position to the integer grid position used by editing, ties and
 // playback. It floors rather than rounds because the question every caller asks is which cell a note
 // starts in: a note belongs to the cell its beat falls in, not to the nearest one. Every beat the
 // setters write is an exact multiple of a sixteenth, where floor and round agree, so only the off-grid
@@ -35,12 +35,17 @@ var emptyPattern Pattern
 // which is one instruction, for the beats that can occur, all at or after the pattern's start; only
 // a hand-edited session file can name a beat before it, and that one keeps the true floor so its
 // step stays negative and the repairs that skip negative steps keep skipping it.
-func eventStep(event Event) int {
-	steps := event.Beat * patternStepsPerBeat
+func beatStep(beat float32) int {
+	steps := beat * patternStepsPerBeat
 	if steps < 0 {
 		return int(math.Floor(float64(steps)))
 	}
 	return int(steps)
+}
+
+// eventStep is beatStep for a stored event's own beat position.
+func eventStep(event Event) int {
+	return beatStep(event.Beat)
 }
 
 func stepBeat(step int) float32 {

@@ -139,18 +139,13 @@ func (c *Controller) loadPage(page *Page) {
 // The set keeps playing across a jump: every session goes on playing the
 // page it was built for, and the page the jump lands on was already
 // sounding if it was enabled when the set started. What moves is the view
-// — the playhead hands over to the landed page's session, because each
-// session draws only while its own page is shown — and the banks. The
-// beat lock waits out whatever beat is in flight and keeps the next ones
-// out while the screen and the banks move together, so no session reads a
-// bank half-moved or draws for a screen that has already moved. A page
-// the set has no session for — one that was disabled when Play was
-// pressed — stays silent until the next set includes it.
-// The beat lock waits out whatever beat is in flight and keeps the next
-// ones out while the screen and the banks move together, so no session
-// reads a bank half-moved or draws for a screen that has already moved. A
-// page the set has no session for — one that was disabled when Play was
-// pressed — stays silent until the next set includes it.
+// — the playhead hands over to the landed page's session, because the
+// renderer draws only the shown page's playhead — and the banks. The beat
+// lock waits out whatever beat is in flight and keeps the next ones out
+// while the screen and the banks move together, so no session reads a
+// bank half-moved. A page the set has no session for — one that was
+// disabled when Play was pressed — stays silent until the next set
+// includes it.
 func (c *Controller) jumpToPage(idx int) error {
 	return c.holdBeatsWhile(func() error {
 		c.saveCurrentPage()
@@ -196,9 +191,9 @@ func (c *Controller) enterPageMode() error {
 	c.prevMode = c.mode
 	c.setView(pageView)
 	c.pagePad = -1
-	// The grid repaint holds the beats, so the playhead it takes the pads
-	// from cannot be mid-draw underneath it.
-	return c.holdBeatsWhile(c.drawPageMode)
+	// The playhead no longer draws from the worker, so the grid repaint
+	// needs no playback coordination: both writers are this goroutine.
+	return c.drawPageMode()
 }
 
 // leavePageMode returns to the view page mode was entered
@@ -208,7 +203,7 @@ func (c *Controller) enterPageMode() error {
 func (c *Controller) leavePageMode() error {
 	c.setView(c.prevMode)
 	c.pagePad = -1
-	return c.holdBeatsWhile(c.redrawMode)
+	return c.redrawMode()
 }
 
 // togglePageMode is the Pattern/Song button while page mode
@@ -229,7 +224,7 @@ func (c *Controller) togglePageMode() error {
 	c.prevMode = view
 	c.setView(view)
 	c.pagePad = -1
-	return c.holdBeatsWhile(c.redrawMode)
+	return c.redrawMode()
 }
 
 // createPage adds an enabled page at the pad's index. The

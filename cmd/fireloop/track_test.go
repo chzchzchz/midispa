@@ -2,13 +2,11 @@ package main
 
 import (
 	"fmt"
-	"sync"
-	"sync/atomic"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -122,10 +120,19 @@ func installedPlayback(t *testing.T, controller *Controller) *Playback {
 	return session.playback
 }
 
+// playheadBeat publishes a beat to the page on screen and asks the renderer
+// to draw it, the way a worker's beat reaches it. This is the seam the
+// worker no longer fills: the pads it would have painted are painted here.
+func playheadBeat(t *testing.T, controller *Controller, beat float32) {
+	t.Helper()
+	installedPlayback(t, controller).latestBeat.Store(math.Float32bits(beat))
+	controller.renderPlayheads()
+}
+
 // startPlayback is the test seam for starting a set the bank built: a bare
-// playback with no page wrapping, whose playhead draws unconditionally.
-// Production starts sets only through startSetPlayback, which builds one
-// session per enabled page under the running set's own rules.
+// playback with no page wrapping, whose wake is nil, so it publishes
+// nowhere. Production starts sets only through startSetPlayback, which
+// builds one session per enabled page under the running set's own rules.
 func (c *Controller) startPlayback(aseq sequencerWriter, playback *Playback) {
 	session := newPlaybackSession(playback)
 	c.running = &RunningSet{
@@ -133,6 +140,44 @@ func (c *Controller) startPlayback(aseq sequencerWriter, playback *Playback) {
 		sessions:   map[int]*PlaybackSession{c.pageIdx: session},
 	}
 	session.Start(aseq)
+}
+
+// Start is the test seam's session start: it sends the kit's patches and
+// launches the worker, because a session started on its own is on its own
+// for the kit. A set starts through startWithSettle instead: its kit went
+// out once for every session it starts, because N pages pressing Play would
+// otherwise put N identical dumps on the wire before the first note. A
+// missing writer still makes a session: the painters are built and
+// published either way, and something has to be there to answer Stop.
+func (s *PlaybackSession) Start(aseq sequencerWriter) {
+	if isNilMidiWriter(aseq) {
+		s.launch(aseq, 0)
+		return
+	}
+	// An instrument has to be set up before its first note, so the kit's patches go out
+	// here, ahead of the worker that plays the pattern. A patch that cannot be sent is
+	// logged rather than returned: playback that starts with the wrong settings is
+	// still playback, and an error escaping to the button handler would stop the
+	// process outright.
+	settle, err := sendKitPatches(aseq, s.playback.vb)
+	if err != nil {
+		logger.Error("kit patches", "error", err)
+	}
+	s.launch(aseq, settle)
+}
+
+// newPlayback is the test seam's playback over the pattern bank's own
+// selection, which is what the page on screen plays. Production builds
+// playbacks through the running set's playbackFor, which hands each page
+// its own source; the playhead is no part of a playback any more.
+func (pb *PatternBank) newPlayback() *Playback {
+	return pb.newPlaybackOf(pb.CurrentPattern)
+}
+
+// newPlayback is the song bank's counterpart for the test seam: a playback
+// over the arrangement the bank is showing.
+func (sb *SongBank) newPlayback() *Playback {
+	return sb.newPlaybackOf(sb.Songs, sb.selSongIdx)
 }
 
 func assertVisibleTracks(t *testing.T, bank *PatternBank, first int) {
@@ -249,44 +294,6 @@ func TestTrackWindowHeaderStaysReadable(t *testing.T) {
 // The playback worker draws the visible tracks from its own goroutine while the event
 // loop scrolls the window and blacks the display out, so both sides have to be guarded.
 // Run under -race to catch a regression.
-func TestTrackWindowIsSafeDuringPlaybackDraws(t *testing.T) {
-	fire := NewFire(func([]byte) error { return nil })
-	voiceBank := trackWindowKit(8, -1)
-	bank := useController(t, fire, voiceBank).patbank
-	pattern := bank.CurrentPattern()
-	for i, voice := range voiceBank.voices {
-		pattern.ToggleEvent(Event{Voice: voice, Beat: stepBeat(i), Velocity: 100})
-	}
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for col := 0; col < maxPatternSteps; col++ {
-			if err := bank.drawPadColumn(col); err != nil {
-				return
-			}
-			if err := bank.drawPadColumnInvert(col); err != nil {
-				return
-			}
-			if err := fire.SetLed(NoteAlt, LEDYellow); err != nil {
-				return
-			}
-		}
-	}()
-	// These keep going on failure so the overlap is not cut short by the first problem.
-	for range 200 {
-		assert.NoError(t, bank.ScrollTracks(1))
-		assert.NoError(t, bank.ScrollTracks(-1))
-		assert.NoError(t, fire.Blackout())
-		// Waking up is a read-only redraw, so it must not touch the selected pattern
-		// index the worker reads while a pattern plays.
-		if fire.Wake() {
-			assert.NoError(t, bank.redraw())
-		}
-	}
-	wg.Wait()
-	require.Equal(t, 0, bank.TrackOffset(), "offset after an even number of scrolls")
-}
 
 // Every writer wraps or clamps the voice index, so a track never points outside the
 // kit. The track lookup relies on that rather than re-checking each time.
@@ -379,25 +386,15 @@ func TestScrollTracksClosesNoteEditOnScrolledRow(t *testing.T) {
 	require.Zero(t, bank.pressedPads, "scrolling kept a pad held from the previous window")
 }
 
-// stepPaints is how many pad writes the worker must make before a test starts switching
-// tracks, so the switch overlaps a running playhead.
-const stepPaints = 12
-
 // switchRounds is how many times the test moves the selection while the worker runs.
 const switchRounds = 60
 
 // Pressing a solo button selects a track, which is a view change rather than an edit, so it
-// must not cut a running pattern short. The sequencer is started for real here: its worker
-// is the reader that makes the switch a shared state question, and the race detector is the
-// point of the test.
+// must not cut a running pattern short. The sequencer is started for real here, so the
+// switches land on top of a running worker rather than on a stopped set.
 func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
-	var writes atomic.Int32
-	fire := NewFire(func([]byte) error {
-		writes.Add(1)
-		return nil
-	})
 	kit := trackWindowKit(8, 0)
-	controller := useController(t, fire, kit)
+	controller := useController(t, NewFire(func([]byte) error { return nil }), kit)
 	bank := controller.patbank
 	bank.CurrentPattern().SetChromaticNote(0, kit.voices[0], 40, 100)
 	require.NoError(t, bank.SelectTrackRow(1))
@@ -405,13 +402,6 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 	setBPM(300)
 	t.Cleanup(func() { setBPM(previousBPM) })
 	bank.controller.startPlayback(&captureMidiWriter{}, bank.newPlayback())
-	// Wait for the worker to move the playhead a few steps, so the switches below land on
-	// top of it rather than in the first moments of playback.
-	waitFor(t, "the playhead to move", func() bool { return writes.Load() > stepPaints })
-
-	before := writes.Load()
-	// Keep switching for long enough that the worker is certainly running against it: one
-	// pass can finish between two of the worker's steps and prove nothing.
 	for i := range switchRounds {
 		// Alternate two rows: pressing the row that is already selected toggles it off,
 		// which is a different behaviour from moving the selection.
@@ -422,9 +412,6 @@ func TestTrackSwitchKeepsPatternPlaying(t *testing.T) {
 		require.NotNilf(t, bank.controller.running, "selecting track row %d stopped the pattern", row)
 		require.Equalf(t, row, bank.selTrackRow, "the selected row after pressing it")
 	}
-	// The worker must have painted while those switches were happening, or the race this
-	// test exists to catch was never exercised.
-	require.Greater(t, writes.Load(), before, "the sequencer worker did not paint while the selection moved")
 	require.NoError(t, bank.controller.stopPlayback())
 	require.Nil(t, bank.controller.running, "stopping left the sequencer armed")
 }

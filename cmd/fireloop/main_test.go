@@ -2,9 +2,11 @@ package main
 
 import (
 	"flag"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/chzchzchz/midispa/alsa"
 	"github.com/chzchzchz/midispa/alsa/fake"
@@ -691,4 +693,40 @@ func TestValidateDevicesVelocityRanges(t *testing.T) {
 			require.ErrorContains(t, validateDevices(devices), tt.wantErr)
 		})
 	}
+}
+
+// The converted loop is the riskiest new wiring in the change, so it gets
+// its own test: a pending wake plus the leave sentinel must exit cleanly,
+// having applied the events that came before. The select may take the wake
+// and the sentinel in either order, and both orders must end the same way.
+func TestLoopExitsCleanlyWithAPendingWake(t *testing.T) {
+	bank, kit, _ := recordedBank(t, trackWindowKit(8, 0))
+	controller := bank.controller
+	bank.CurrentPattern().SetChromaticNote(3, kit.voices[0], 40, 100)
+	require.NoError(t, controller.startSetPlayback(nil))
+
+	inc := make(chan alsa.SeqEvent, 4)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		controller.processIncomingEvents(nil, inc)
+	}()
+
+	// One real event ahead of the wake, so the exit knows the events before
+	// the leave were applied.
+	inc <- padMessage(NotePatternUp, 100)
+	// A beat published and a wake queued, then the leave sentinel. A wake
+	// still pending at the leave is dropped, never rendered.
+	installedPlayback(t, controller).latestBeat.Store(math.Float32bits(stepBeat(3)))
+	controller.wake <- struct{}{}
+	inc <- alsa.SeqEvent{}
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		require.FailNow(t, "the loop did not exit with a wake pending")
+	}
+
+	// The event landed before the exit, on the loop's own goroutine.
+	require.Equal(t, 2, bank.selPatIdx, "the event before the leave was not applied")
+	require.NoError(t, controller.stopPlayback())
 }

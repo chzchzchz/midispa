@@ -45,9 +45,9 @@ func screenView(word uint32) viewMode {
 //
 // One goroutine calls Handle and nothing else touches these fields, so the controller needs
 // no locking of its own. The exceptions are the tempo, which is left as a package-level
-// atomic, and the screen the workers sample through screen, because the playback workers
-// read both from their own goroutines and a controller field would have to be guarded to
-// stay honest.
+// atomic, the screen the workers sample through screen, and the wake the workers signal
+// through wake, because the playback workers reach all three from their own goroutines and
+// a controller field would have to be guarded to stay honest.
 type Controller struct {
 	patbank   *PatternBank
 	songbank  *SongBank
@@ -62,6 +62,14 @@ type Controller struct {
 	// screen is mode and pageIdx as the workers see them. setScreen is its
 	// only writer, the same arrangement the tempo's atomic serves.
 	screen atomic.Uint32
+
+	// wake is the render wake the playback workers signal and the event
+	// loop's select drains. It is owned by the controller rather than the
+	// running set so it survives set changes; a stopped set simply
+	// publishes nothing. Capacity one, because the message is "look at the
+	// latest beats" and the render reads each session's atomic rather than
+	// the channel.
+	wake chan struct{}
 
 	shift    bool
 	alt      bool
@@ -129,6 +137,7 @@ func newController(f *Fire, vb *VoiceBank, sessionPath string) *Controller {
 		pages:       map[int]*Page{1: newPage(vb)},
 		pagePad:     -1,
 		sessionPath: sessionPath,
+		wake:        make(chan struct{}, 1),
 	}
 	controller.setScreen(1, patternView)
 	controller.songbank = NewSongBank(f, bank)
@@ -151,6 +160,10 @@ func (c *Controller) stopPlayback() error {
 		firstErr = c.running.stop()
 		c.running = nil
 	}
+	// Stop waits on every worker, so nothing can publish after this drain;
+	// it runs before the grid restore so a wake that queued behind a
+	// stopping worker cannot render over the cleared pads.
+	c.drainWake()
 	if c.patbank == nil {
 		return firstErr
 	}
@@ -161,6 +174,27 @@ func (c *Controller) stopPlayback() error {
 		firstErr = err
 	}
 	return firstErr
+}
+
+// drainWake empties the render wake. One non-blocking receive is complete:
+// the capacity is one, and the workers are already joined when this runs on
+// the stop path, so nothing can queue behind the receive.
+func (c *Controller) drainWake() {
+	select {
+	case <-c.wake:
+	default:
+	}
+}
+
+// renderPlayheads draws the running set's playheads. It runs on the event
+// loop, which is what makes it safe to reach the banks and the display: the
+// workers no longer touch either. With no set there is nothing to draw, so
+// a wake that outlived its set is dropped here.
+func (c *Controller) renderPlayheads() {
+	if c.running == nil {
+		return
+	}
+	c.running.renderPlayheads()
 }
 
 // seekSongBeat schedules a seek on the running set and reports the beat it seeks away
