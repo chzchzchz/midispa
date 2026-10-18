@@ -428,10 +428,11 @@ func TestASetSendsTheKitOnceForAllItsPages(t *testing.T) {
 	}
 }
 
-// A dump has to be absorbed before a note can sound the new patch, so a device can ask
-// playback to wait for it. A kit that does not ask waits for nothing, and a patch with
-// no dump in it needs no wait however long a device asked for.
-func TestSettleComesFromTheDeviceAndOnlyAfterADump(t *testing.T) {
+// A patch has to be absorbed before a note can sound the settings it just wrote, so a
+// device can ask playback to wait for it, whatever the patch is made of: an instrument
+// that drops a note while it is still ingesting channel messages needs the wait as much
+// as one loading a vendor dump. A kit that does not ask waits for nothing.
+func TestSettleComesFromTheDeviceAfterAPatch(t *testing.T) {
 	dir := t.TempDir()
 	channels := patchFile(t, dir, "channels.mid", channel.Channel(0).ControlChange(74, 90))
 	dump := patchFile(t, dir, "dump.mid", channel.Channel(0).ControlChange(74, 90), patchDump)
@@ -443,9 +444,8 @@ func TestSettleComesFromTheDeviceAndOnlyAfterADump(t *testing.T) {
 		want   time.Duration
 	}{
 		{"a device that asks and a dump that was sent", dump, Settle(150 * time.Millisecond), 150 * time.Millisecond},
-		{"a device that asks but sends no dump", channels, Settle(150 * time.Millisecond), 0},
-		{"a dump with no device settle", dump, 0, 0},
-		{"controllers with a device settle", channels, Settle(150 * time.Millisecond), 0},
+		{"a device that asks after a patch of channel messages", channels, Settle(150 * time.Millisecond), 150 * time.Millisecond},
+		{"a patch with no device settle", dump, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			device := patchedDevice(dir, tc.patch)

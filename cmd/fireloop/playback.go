@@ -62,7 +62,7 @@ type Playback struct {
 	// that run no worker do.
 	vb *VoiceBank
 	// settle is how long the worker waits after sending those patches before playing
-	// anything, which is only a wait when a vendor dump was among them.
+	// anything, which is only a wait when a device asked for one.
 	settle time.Duration
 
 	// beatMu serializes one beat of the worker against the gestures that

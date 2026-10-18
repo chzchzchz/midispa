@@ -13,9 +13,9 @@ type Device struct {
 	// stream when it is not one. A voice's Patch overrides it, the same way
 	// a voice's Channel overrides.
 	Patch string
-	// Settle is how long this device is given to absorb a vendor dump from Patch
-	// before the first note, written as text such as "100ms". It is left out of a
-	// kit unless it is wanted, and means no wait when it is absent.
+	// Settle is how long this device is given to absorb its Patch before the first
+	// note, written as text such as "100ms". It is left out of a kit unless it is
+	// wanted, and means no wait when it is absent.
 	Settle Settle `json:",omitempty"`
 	Voices []Voice
 

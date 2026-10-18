@@ -40,7 +40,7 @@ const (
 // Settle is a duration a kit writes as text, e.g. "100ms", so a kit says how long an
 // instrument needs rather than how many nanoseconds that is. An absent or empty value
 // means no wait, which is the default: most instruments have the patch the moment the
-// bytes are written, and only some need settling after a vendor dump.
+// bytes are written, and only some need settling after one goes out.
 type Settle time.Duration
 
 // MarshalJSON writes the duration back as text, so a kit that is read and written keeps
@@ -268,23 +268,15 @@ func patchChannel(voiceChannel int, messages []gomidi.Message) int {
 	return patchChannelNone
 }
 
-// patchHasSysEx reports whether a patch carries a vendor dump, which is the only kind of
-// message an instrument needs settling time for.
-func patchHasSysEx(messages []gomidi.Message) bool {
-	for _, msg := range messages {
-		if _, isSysEx := msg.(sysex.Message); isSysEx {
-			return true
-		}
-	}
-	return false
-}
-
-// patchSettle is how long the device needs after one of its patches carried a dump, and
-// zero when it needs nothing: a device that does not ask, or a patch with no dump in it,
-// is state the instrument has as soon as the bytes are written. A negative settle is
-// rejected when the kit is validated, so it never reaches here to be waited out.
-func patchSettle(device *Device, messages []gomidi.Message) time.Duration {
-	if device == nil || !patchHasSysEx(messages) {
+// patchSettle is how long the device needs after one of its patches was written, and
+// zero when it asks for nothing. The wait is not reserved for a vendor dump: an
+// instrument that is still ingesting a patch drops the notes that arrive behind it
+// whatever the patch is made of, so a kit that has watched one lose its first note
+// after a patch of plain channel messages can say so with the same field. A negative
+// settle is rejected when the kit is validated, so it never reaches here to be waited
+// out.
+func patchSettle(device *Device) time.Duration {
+	if device == nil {
 		return 0
 	}
 	return time.Duration(device.Settle)
@@ -304,7 +296,7 @@ type patchTarget struct {
 // channel, in kit order. Each file is read through the kit's cache, so it is parsed on the
 // first send and reused for the channels that share it and for every send after that. The
 // returned duration is the longest settle any device asked for, which is zero unless a kit
-// sets one and a dump went out. Errors are joined and returned; the caller logs them and
+// sets one and a patch went out. Errors are joined and returned; the caller logs them and
 // plays on regardless, because an instrument with the wrong settings is better than a Fire
 // that has stopped.
 func sendKitPatches(aseq alsa.EventWriter, vb *VoiceBank) (time.Duration, error) {
@@ -341,7 +333,7 @@ func sendKitPatches(aseq alsa.EventWriter, vb *VoiceBank) (time.Duration, error)
 			errs = append(errs, fmt.Errorf("patch %q for %s: %w", path, voiceLabel(voice), err))
 			continue
 		}
-		if wait := patchSettle(target.device, messages); wait > settle {
+		if wait := patchSettle(target.device); wait > settle {
 			// The waits overlap rather than add up: every device is loading at the same
 			// time, so the longest is the one the first note has to wait for.
 			settle = wait
