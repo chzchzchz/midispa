@@ -4,7 +4,7 @@
 
 Build basic trackscript:
 ```sh
-go install https://github.com/pointlander/peg
+go install github.com/pointlander/peg
 go generate
 go build
 ```
